@@ -39,7 +39,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
 
     @app.get("/health")
     def health():
-        return {"ok": True, "goblins": sorted(goblins)}
+        return {"ok": True}
 
     @app.api_route("/g/{name}/{path:path}", methods=["GET", "POST"])
     async def proxy(name: str, path: str, request: Request):

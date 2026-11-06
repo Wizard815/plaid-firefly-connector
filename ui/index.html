@@ -1,1 +1,320 @@
-<!doctype html><title>placeholder</title>
+<!doctype html>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Goblin Bank</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: sidebar ledger nav + one working pane. Teal = money you own, brass = movement, red = money owed/out. */
+:root{
+  --bg:#edf1f2; --panel:#f8fafa; --line:#d5dde0; --fg:#14232b; --muted:#5a6b73;
+  --teal:#17766b; --teal-soft:#d6ece8; --brass:#a8741a; --brass-soft:#f3e6c9; --red:#b3372f; --red-soft:#f5dcd9; --ok:#2b7a3d;
+  --display:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif; --body:"IBM Plex Sans","Segoe UI",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0d1a1f; --panel:#13242b; --line:#24383f; --fg:#e4eeef; --muted:#8ea4ab;
+  --teal:#4cc2b0; --teal-soft:#16393a; --brass:#e0b052; --brass-soft:#3a2f17; --red:#f07f73; --red-soft:#40201e; --ok:#6fcf86; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0d1a1f; --panel:#13242b; --line:#24383f; --fg:#e4eeef; --muted:#8ea4ab;
+  --teal:#4cc2b0; --teal-soft:#16393a; --brass:#e0b052; --brass-soft:#3a2f17; --red:#f07f73; --red-soft:#40201e; --ok:#6fcf86; color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 var(--body);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:16px}
+h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance;letter-spacing:-.01em}
+h2{font-size:1.5rem} h3{font-size:1.05rem}
+.num,td.num,.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.shell{display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px;max-width:1180px;margin:0 auto}
+nav.side{display:flex;flex-direction:column;gap:4px;position:sticky;top:16px;align-self:start}
+.brand{font:700 1.35rem var(--display);padding:4px 10px 14px;display:flex;align-items:center;gap:10px}
+.coin{width:22px;height:22px;border-radius:50%;background:var(--brass);box-shadow:inset 0 0 0 4px var(--brass-soft)}
+nav.side button{text-align:left;background:none;border:0;border-radius:8px;padding:9px 12px;color:var(--muted);font-weight:500}
+nav.side button[aria-current="page"]{background:var(--panel);color:var(--fg);box-shadow:inset 3px 0 0 var(--teal)}
+nav.side button:hover{color:var(--fg)}
+.side .foot{margin-top:16px;padding:0 10px;font-size:.8rem;color:var(--muted);display:grid;gap:8px}
+main{min-width:0;display:grid;gap:20px;align-content:start}
+.bar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
+.banner{background:var(--brass-soft);color:var(--fg);border-radius:8px;padding:8px 12px;font-size:.88rem}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}
+.kpi .label{font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.kpi .value{font:500 1.9rem var(--mono);font-variant-numeric:tabular-nums;margin-top:2px}
+.kpi .sub{font-size:.85rem;color:var(--muted)}
+.pos{color:var(--teal)} .neg{color:var(--red)}
+.comp{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--line);margin:10px 0 8px}
+.comp i{display:block;height:100%}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.85rem;color:var(--muted)}
+.legend b{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px}
+table{width:100%;border-collapse:collapse;font-size:.92rem}
+th{text-align:left;font-size:.75rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600;padding:6px 10px;border-bottom:1px solid var(--line)}
+td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+td.r,th.r{text-align:right}
+.scroll{overflow-x:auto}
+.pill{display:inline-block;border-radius:999px;padding:1px 10px;font-size:.78rem;font-weight:600;background:var(--line);color:var(--muted)}
+.pill.t{background:var(--teal-soft);color:var(--teal)} .pill.b{background:var(--brass-soft);color:var(--brass)} .pill.r{background:var(--red-soft);color:var(--red)}
+.btn{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:7px 14px;font-weight:500}
+.btn:hover{border-color:var(--teal)}
+.btn.primary{background:var(--teal);border-color:var(--teal);color:#fff}
+:root[data-theme="dark"] .btn.primary{color:#062b26}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .btn.primary{color:#062b26}}
+.btn.danger{color:var(--red)}
+.btn.sm{padding:3px 10px;font-size:.85rem}
+form.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;align-items:end}
+label{display:grid;gap:3px;font-size:.78rem;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+input,select{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 10px;text-transform:none;letter-spacing:0;font-size:.95rem;min-width:0;width:100%}
+.ev{display:grid;grid-template-columns:auto 1fr auto;gap:12px;padding:9px 0;border-bottom:1px solid var(--line);align-items:center}
+.ev .when{font:.78rem var(--mono);color:var(--muted)}
+.ev:last-child,tr:last-child td{border-bottom:0}
+.url{display:flex;gap:8px;align-items:center}
+.url code{flex:1;min-width:0;overflow-x:auto;white-space:nowrap;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:.82rem var(--mono)}
+.muted{color:var(--muted)} .small{font-size:.85rem}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+svg text{fill:var(--muted);font:11px var(--mono)}
+.login{max-width:420px;margin:12vh auto;display:grid;gap:14px}
+.toast{position:fixed;bottom:max(16px,env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 16px;border-radius:8px;font-size:.9rem;z-index:20}
+@media (max-width:760px){
+  .shell{grid-template-columns:minmax(0,1fr);gap:12px}
+  nav.side{position:static;flex-direction:row;overflow-x:auto;gap:2px;padding-bottom:4px}
+  nav.side .brand,.side .foot{display:none}
+  nav.side button{white-space:nowrap;padding:8px 12px}
+  nav.side button[aria-current="page"]{box-shadow:inset 0 -3px 0 var(--teal)}
+}
+@media (prefers-reduced-motion:no-preference){.panel{transition:border-color .15s}.panel:hover{border-color:var(--teal-soft)}}
+</style>
+
+<div id="app"></div>
+
+<script>
+"use strict";
+/* ---------- tiny DOM helper: strings are always text nodes, so bank data can never inject HTML ---------- */
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (v === true) el.setAttribute(k, "");
+    else if (v !== false && v != null) el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat(9)) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  return el;
+}
+const $ = (s) => document.querySelector(s);
+const usd = (n, signed) => (n == null ? "–" : (signed && n > 0 ? "+" : n < 0 ? "−" : "") + "$" + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+const today = () => new Date().toISOString().slice(0, 10);
+const addDays = (d, n) => { const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+const ago = (iso) => { const d = Math.round((Date.now() - new Date(iso)) / 36e5); return d < 1 ? "now" : d < 24 ? d + "h ago" : Math.round(d / 24) + "d ago"; };
+function toast(msg) { const t = h("div", { class: "toast", role: "status" }, msg); document.body.append(t); setTimeout(() => t.remove(), 2600); }
+function copy(text) { (navigator.clipboard?.writeText(text) || Promise.reject()).then(() => toast("Copied"), () => toast("Select and copy manually")); }
+
+/* ---------- sample data (shown when no gateway answers, e.g. in the shared preview) ---------- */
+function demoBackend() {
+  const t = today();
+  const accts = [
+    ["Huntington", "Checking ••4821", "cash", 4218.37], ["Huntington", "Savings ••1190", "cash", 12840.0], ["Axos", "High Yield Savings", "cash", 22500.0],
+    ["Discover", "it Card ••7733", "credit", 612.44], ["Capital One", "Quicksilver ••0182", "credit", 1284.9], ["Robinhood", "Robinhood (main)", "investment", 38902.55],
+    ["Robinhood", "Robinhood (agent)", "investment", 1204.1], ["Axos", "Roth IRA", "investment", 17650.0], ["PayPal", "PayPal Credit", "credit", 340.0],
+  ].map(([institution, name, kind, balance], i) => ({ id: "a" + i, institution, name, kind, balance, currency: "USD", source: "demo" }));
+  const subs = [
+    ["Netflix", 15.49, "monthly", 3, "Entertainment"], ["Spotify Family", 16.99, "monthly", 9, "Entertainment"], ["iCloud 2TB", 9.99, "monthly", 14, "Software"],
+    ["Gym", 480, "yearly", 41, "Health"], ["Home insurance", 1320, "yearly", 88, "Insurance"], ["Cloudflare", 5, "monthly", 5, "Software"], ["Water bill", 62, "monthly", 11, "Utilities"],
+    ["Domain renewals", 54, "yearly", 160, "Software"], ["Paper subscription", 4.5, "weekly", 2, "News"],
+  ].map(([name, amount, cycle, d, category], i) => ({ id: i + 1, name, amount, cycle, next_date: addDays(t, d), category, url: "", notes: "", active: 1, source: i < 3 ? "plaid" : "manual", currency: "USD" }));
+  const events = [
+    ["Huntington: Payroll", 2480, 1], ["Capital One: Whole Foods", -86.12, 3], ["Discover: Shell", -41.7, 5], ["Robinhood (agent): balance", 38.2, 8],
+    ["Huntington: Netflix", -15.49, 30], ["PayPal: Etsy", -25, 50], ["Axos: Interest", 61.4, 70], ["Venmo: Pizza w/ Sam", -12.5, 90],
+  ].map(([title, amount, hrs], i) => ({ id: "e" + i, ts: new Date(Date.now() - hrs * 36e5).toISOString(), kind: i === 3 ? "balance" : "transaction", title, amount, detail: "sample" }));
+  const history = Array.from({ length: 30 }, (_, i) => ({ date: addDays(t, i - 29), net_worth: 76000 + i * 120 + Math.sin(i / 3) * 900 }));
+  const mo = (s) => (s.active ? s.amount * { weekly: 52 / 12, biweekly: 26 / 12, monthly: 1, yearly: 1 / 12 }[s.cycle] : 0);
+  const rh = (positions, eq) => ({ source: "sample", as_of: new Date().toISOString(), balances: { equity: eq }, positions });
+  return async (path, opts = {}) => {
+    const m = opts.method || "GET";
+    if (path === "/api/overview") {
+      const sg = { credit: -1, loan: -1 };
+      return { net_worth: accts.reduce((s, a) => s + a.balance * (sg[a.kind] || 1), 0), accounts: accts, subscriptions_monthly: subs.reduce((s, x) => s + mo(x), 0),
+        upcoming: subs.filter((s) => s.active && s.next_date <= addDays(t, 30)).sort((a, b) => a.next_date.localeCompare(b.next_date)), events: events.slice(0, 8) };
+    }
+    if (path === "/api/history") return history;
+    if (path.startsWith("/api/events")) return events;
+    if (path.startsWith("/api/transactions")) return events.filter((e) => e.kind === "transaction").map((e) => ({ id: e.id, date: e.ts.slice(0, 10), name: e.title, amount: e.amount, account_id: "a0" }));
+    if (path === "/api/accounts") return accts;
+    if (path === "/api/subscriptions" && m === "GET") { const items = subs.map((s) => ({ ...s, monthly: mo(s) })); const tot = items.reduce((a, s) => a + s.monthly, 0); return { items, monthly_total: tot, yearly_total: tot * 12 }; }
+    if (path === "/api/subscriptions" && m === "POST") { const b = JSON.parse(opts.body); subs.push({ ...b, id: Date.now(), active: 1, source: "manual" }); return {}; }
+    const sm = path.match(/^\/api\/subscriptions\/(\d+)$/);
+    if (sm && m === "PUT") { const i = subs.findIndex((s) => s.id == sm[1]); subs[i] = { ...subs[i], ...JSON.parse(opts.body), active: JSON.parse(opts.body).active ? 1 : 0 }; return {}; }
+    if (sm && m === "DELETE") { subs.splice(subs.findIndex((s) => s.id == sm[1]), 1); return {}; }
+    if (path.includes("export/caldav")) return { pushed: subs.filter((s) => s.active).length, failed: [] };
+    if (path === "/robinhood/main") return rh([{ symbol: "VTI", quantity: 62.4, net_cost: 14900 }, { symbol: "AAPL", quantity: 40, net_cost: 6120 }, { symbol: "MSFT", quantity: 18, net_cost: 6480 }], 38902.55);
+    if (path === "/robinhood/agent") return rh([{ symbol: "NVDA", quantity: 4, net_cost: 540 }, { symbol: "SPY", quantity: 1.2, net_cost: 610 }], 1204.1);
+    if (path === "/sync") return { plaid: [], robinhood: {} };
+    if (path.startsWith("/plaid/link-token")) throw new Error("Plaid Link is disabled in the sample preview");
+    if (path.startsWith("/import/csv")) throw new Error("CSV import is disabled in the sample preview");
+    throw new Error("not in sample: " + path);
+  };
+}
+
+/* ---------- API: real gateway (/g/<name>/...) or sample backend ---------- */
+const S = { demo: false, name: "", token: "", feedToken: store.get("gb_feed") || "", tab: "overview", cache: {}, call: null };
+async function api(path, opts = {}) {
+  if (S.demo) return S.call(path, opts);
+  const r = await fetch(`/g/${S.name}${path}`, { ...opts, headers: { Authorization: "Bearer " + S.token, ...(opts.headers || {}) } });
+  if (r.status === 401) { sessionStorage.removeItem("gb_tok"); location.reload(); }
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "HTTP " + r.status);
+  return r.json();
+}
+
+/* ---------- views ---------- */
+const KIND = { cash: ["Cash", "var(--teal)"], investment: ["Investments", "var(--brass)"], credit: ["Credit owed", "var(--red)"], loan: ["Loans", "#8a5a7a"] };
+const CYCLES = ["weekly", "biweekly", "monthly", "yearly"];
+
+function kpi(label, value, sub, cls) { return h("div", { class: "panel kpi" }, h("div", { class: "label" }, label), h("div", { class: "value " + (cls || "") }, value), h("div", { class: "sub" }, sub)); }
+function spark(points, w = 560, ht = 120) {
+  if (points.length < 2) return h("p", { class: "muted small" }, "Needs a few days of balance snapshots.");
+  const ys = points.map((p) => p.net_worth), lo = Math.min(...ys), hi = Math.max(...ys), pad = 28, span = hi - lo || 1;
+  const X = (i) => pad + (i * (w - pad - 8)) / (points.length - 1), Y = (v) => ht - 18 - ((v - lo) / span) * (ht - 34);
+  const line = points.map((p, i) => (i ? "L" : "M") + X(i).toFixed(1) + " " + Y(p.net_worth).toFixed(1)).join("");
+  const ns = "http://www.w3.org/2000/svg", mk = (t, a) => { const e = document.createElementNS(ns, t); for (const k in a) e.setAttribute(k, a[k]); return e; };
+  const svg = mk("svg", { viewBox: `0 0 ${w} ${ht}`, width: "100%", role: "img", "aria-label": "Net worth over time" });
+  for (const v of [lo, hi]) { svg.append(mk("line", { x1: pad, x2: w - 8, y1: Y(v), y2: Y(v), stroke: "var(--line)", "stroke-dasharray": "3 4" })); const t = mk("text", { x: 0, y: Y(v) + 4 }); t.textContent = "$" + Math.round(v / 1000) + "k"; svg.append(t); }
+  svg.append(mk("path", { d: line + `L${X(points.length - 1)} ${ht - 18}L${pad} ${ht - 18}Z`, fill: "var(--teal-soft)", stroke: "none" }), mk("path", { d: line, fill: "none", stroke: "var(--teal)", "stroke-width": 2 }),
+    mk("circle", { cx: X(points.length - 1), cy: Y(ys.at(-1)), r: 4, fill: "var(--teal)" }));
+  for (const [i, anchor] of [[0, "start"], [points.length - 1, "end"]]) { const t = mk("text", { x: X(i), y: ht - 3, "text-anchor": anchor }); t.textContent = points[i].date.slice(5); svg.append(t); }
+  return svg;
+}
+function evRow(e) { return h("div", { class: "ev" }, h("span", { class: "when" }, ago(e.ts)), h("span", {}, e.title.replace(/ [+−-]\$[\d,.]+$/, "")), h("span", { class: "num " + (e.amount > 0 ? "pos" : e.amount < 0 ? "neg" : "") }, e.amount == null ? "" : usd(e.amount, true))); }
+
+async function viewOverview(root) {
+  const [o, hist] = await Promise.all([api("/api/overview"), api("/api/history").catch(() => [])]);
+  const by = {}; for (const a of o.accounts) by[a.kind] = (by[a.kind] || 0) + (a.balance || 0);
+  const gross = Object.values(by).reduce((s, v) => s + v, 0) || 1;
+  const owed = (by.credit || 0) + (by.loan || 0);
+  root.append(
+    h("div", { class: "grid" }, kpi("Net worth", usd(o.net_worth), `${o.accounts.length} accounts linked`), kpi("Owed on cards", usd(owed), "Credit + loans", "neg"),
+      kpi("Subscriptions / month", usd(o.subscriptions_monthly), usd(o.subscriptions_monthly * 12) + " a year"), kpi("Next 30 days", String(o.upcoming.length) + " bills", o.upcoming[0] ? `${o.upcoming[0].name} on ${o.upcoming[0].next_date.slice(5)}` : "Nothing due")),
+    h("div", { class: "panel" }, h("h3", {}, "Net worth, last 30 days"), spark(hist)),
+    h("div", { class: "panel" }, h("h3", {}, "Where the money sits"),
+      h("div", { class: "comp" }, Object.entries(by).map(([k, v]) => h("i", { style: `width:${(Math.abs(v) / gross) * 100}%;background:${(KIND[k] || ["", "var(--muted)"])[1]}`, title: `${(KIND[k] || [k])[0]} ${usd(v)}` }))),
+      h("div", { class: "legend" }, Object.entries(by).map(([k, v]) => h("span", {}, h("b", { style: "background:" + (KIND[k] || ["", "var(--muted)"])[1] }), `${(KIND[k] || [k])[0]} ${usd(v)}`)))),
+    h("div", { class: "two" },
+      h("div", { class: "panel" }, h("h3", {}, "Coming up"), o.upcoming.length ? o.upcoming.slice(0, 6).map((s) => h("div", { class: "ev" }, h("span", { class: "when" }, s.next_date.slice(5)), h("span", {}, s.name), h("span", { class: "num neg" }, usd(-s.amount)))) : h("p", { class: "muted" }, "No bills in the next 30 days.")),
+      h("div", { class: "panel" }, h("h3", {}, "Latest movement"), o.events.length ? o.events.slice(0, 6).map(evRow) : h("p", { class: "muted" }, "Link a bank or import a CSV to see movement."))));
+}
+
+async function viewMovement(root) {
+  const ev = await api("/api/events?limit=100");
+  const base = location.origin + `/feed/${S.name}/${S.feedToken || "<feed-token>"}`;
+  const url = (p) => (S.demo ? "https://bank.example/feed/alice/<feed-token>/" + p : base + "/" + p);
+  root.append(
+    h("div", { class: "panel" }, h("h3", {}, "Subscribe in any RSS reader"), h("p", { class: "muted small" }, "Every posted transaction and balance change becomes an Atom entry. The token in the URL is the password. Anyone with the link can read your amounts."),
+      h("div", { class: "url" }, h("code", {}, url("money.atom")), h("button", { class: "btn", onclick: () => copy(url("money.atom")) }, "Copy")),
+      h("p", { class: "muted small" }, "Add ", h("code", { class: "mono" }, "?min_amount=50"), " to hide small stuff, or ", h("code", { class: "mono" }, "?limit=20"), " to trim it.")),
+    h("div", { class: "panel" }, h("h3", {}, "Money movement"), ev.length ? ev.map(evRow) : h("p", { class: "muted" }, "Nothing yet. Run a sync after linking an account.")));
+}
+
+function subForm(existing, done) {
+  const s = existing || { name: "", amount: "", cycle: "monthly", next_date: today(), category: "", notes: "" };
+  const f = (id, label, attrs) => h("label", {}, label, h("input", { id: "sf-" + id, value: s[id] ?? "", ...attrs }));
+  const cyc = h("select", { id: "sf-cycle" }, CYCLES.map((c) => h("option", { value: c, selected: c === s.cycle }, c)));
+  return h("form", { class: "row", onsubmit: async (e) => {
+    e.preventDefault(); const v = (id) => $("#sf-" + id).value;
+    const body = { name: v("name"), amount: parseFloat(v("amount")), cycle: v("cycle"), next_date: v("next_date"), category: v("category"), notes: v("notes"), active: existing ? !!existing.active : true };
+    try { await api(existing ? `/api/subscriptions/${existing.id}` : "/api/subscriptions", { method: existing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); done(); } catch (err) { toast(err.message); }
+  } }, f("name", "Name", { required: true }), f("amount", "Amount", { type: "number", step: "0.01", min: "0", required: true }), h("label", {}, "Repeats", cyc),
+    f("next_date", "Next payment", { type: "date", required: true }), f("category", "Category"), h("button", { class: "btn primary", type: "submit" }, existing ? "Save" : "Add subscription"));
+}
+
+async function viewSubs(root, rerender) {
+  const d = await api("/api/subscriptions"), cats = {};
+  for (const s of d.items) if (s.active) cats[s.category || "Other"] = (cats[s.category || "Other"] || 0) + s.monthly;
+  const top = Math.max(...Object.values(cats), 1);
+  let editing = null;
+  const table = h("div", { class: "panel scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["Name", "Category", "Repeats", "Next", "Amount", "Per month", ""].map((x, i) => h("th", { class: i > 3 ? "r" : "" }, x)))),
+    h("tbody", {}, d.items.map((s) => h("tr", { style: s.active ? "" : "opacity:.5" }, h("td", {}, s.name, " ", s.source === "plaid" ? h("span", { class: "pill t" }, "auto") : null, s.active ? null : h("span", { class: "pill" }, "paused")),
+      h("td", { class: "muted" }, s.category), h("td", {}, s.cycle), h("td", { class: "mono" }, s.next_date), h("td", { class: "num r" }, usd(s.amount)), h("td", { class: "num r" }, usd(s.monthly)),
+      h("td", { class: "r", style: "white-space:nowrap" },
+        h("button", { class: "btn sm", onclick: async () => { await api(`/api/subscriptions/${s.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...s, active: !s.active }) }); rerender(); } }, s.active ? "Pause" : "Resume"), " ",
+        h("button", { class: "btn sm danger", onclick: async (ev) => { if (s.pendingDelete) { await api(`/api/subscriptions/${s.id}`, { method: "DELETE" }); rerender(); } else { s.pendingDelete = true; ev.target.textContent = "Sure?"; } } }, "Delete")))))));
+  const url = (p) => (S.demo ? "webcal://bank.example/feed/alice/<feed-token>/" + p : location.origin.replace(/^http/, "webcal") + `/feed/${S.name}/${S.feedToken || "<feed-token>"}/${p}`);
+  root.append(
+    h("div", { class: "grid" }, kpi("Monthly", usd(d.monthly_total), "paused ones excluded"), kpi("Yearly", usd(d.yearly_total), `${d.items.filter((s) => s.active).length} active subscriptions`)),
+    h("div", { class: "panel" }, h("h3", {}, "Add a subscription"), subForm(null, () => { toast("Added"); rerender(); })),
+    h("div", { class: "panel" }, h("h3", {}, "By category, per month"), h("div", { style: "display:grid;gap:6px;margin-top:8px" }, Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([c, v]) =>
+      h("div", { style: "display:grid;grid-template-columns:110px 1fr 90px;gap:10px;align-items:center" }, h("span", { class: "small muted" }, c), h("div", { style: `height:10px;border-radius:5px;background:var(--teal);width:${(v / top) * 100}%` }), h("span", { class: "num small", style: "text-align:right" }, usd(v)))))),
+    table,
+    h("div", { class: "panel" }, h("h3", {}, "Put them on your calendar"), h("p", { class: "muted small" }, "Each subscription becomes a repeating all-day event titled with its amount."),
+      h("div", { class: "url" }, h("code", {}, url("subscriptions.ics")), h("button", { class: "btn", onclick: () => copy(url("subscriptions.ics")) }, "Copy")),
+      h("p", { style: "margin:12px 0 0" }, h("button", { class: "btn primary", onclick: async (e) => { try { const r = await api("/api/subscriptions/export/caldav", { method: "POST" }); toast(`Pushed ${r.pushed} to CalDAV` + (r.failed.length ? `, ${r.failed.length} failed` : "")); } catch (err) { toast(err.message); } } }, "Push to CalDAV now"))));
+}
+
+async function viewAccounts(root) {
+  const acc = await api("/api/accounts"), tx = await api("/api/transactions?limit=60");
+  const names = Object.fromEntries(acc.map((a) => [a.id, a.name]));
+  root.append(h("div", { class: "panel scroll" }, h("h3", {}, "Accounts"), h("table", {}, h("thead", {}, h("tr", {}, ["Institution", "Account", "Type", "Balance"].map((x, i) => h("th", { class: i === 3 ? "r" : "" }, x)))),
+    h("tbody", {}, acc.map((a) => h("tr", {}, h("td", {}, a.institution), h("td", {}, a.name), h("td", {}, h("span", { class: "pill " + (a.kind === "credit" || a.kind === "loan" ? "r" : a.kind === "investment" ? "b" : "t") }, (KIND[a.kind] || [a.kind])[0])), h("td", { class: "num r" }, usd(a.balance))))))),
+    h("div", { class: "panel scroll" }, h("h3", {}, "Recent transactions"), tx.length ? h("table", {}, h("tbody", {}, tx.map((t) => h("tr", {}, h("td", { class: "mono muted" }, t.date), h("td", {}, t.name), h("td", { class: "muted small" }, names[t.account_id] || ""), h("td", { class: "num r " + (t.amount > 0 ? "pos" : "") }, usd(t.amount, true)))))) : h("p", { class: "muted" }, "No transactions yet.")));
+}
+
+function portfolio(title, badge, d) {
+  if (!d || d.error) return h("div", { class: "panel" }, h("h3", {}, title), h("p", { class: "muted" }, d?.error || "Not configured."));
+  const eq = d.balances && (d.balances.equity ?? d.balances.net_transfers);
+  return h("div", { class: "panel scroll" }, h("div", { class: "bar" }, h("h3", {}, title), h("span", { class: "pill b" }, badge)),
+    h("div", { class: "kpi" }, h("div", { class: "value" }, usd(eq == null ? null : Number(eq))), h("div", { class: "sub" }, `source ${d.source || "?"} · as of ${d.as_of ? ago(d.as_of) : "unknown"}`)),
+    d.errors ? h("p", { class: "neg small" }, "Partial data: " + d.errors.join(", ")) : null,
+    Array.isArray(d.positions) && d.positions.length ? h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Symbol"), h("th", { class: "r" }, "Shares"), h("th", { class: "r" }, "Cost"))), h("tbody", {}, d.positions.map((p) => h("tr", {}, h("td", { class: "mono" }, p.symbol), h("td", { class: "num r" }, p.quantity), h("td", { class: "num r" }, usd(p.net_cost)))))) : h("p", { class: "muted small" }, "No positions reported."));
+}
+async function viewRobinhood(root) {
+  const [m, a] = await Promise.all([api("/robinhood/main").catch((e) => ({ error: e.message })), api("/robinhood/agent").catch((e) => ({ error: e.message }))]);
+  root.append(h("div", { class: "two" }, portfolio("Main account", "read-only", m), portfolio("Agent account", "read-only", a)),
+    h("p", { class: "muted small" }, "Main comes from live data when that connector is on, otherwise your latest CSV import. Nothing on this page can place a trade."));
+}
+
+async function viewConnect(root) {
+  const feedIn = h("input", { id: "feedtok", value: S.feedToken, placeholder: "paste the feed token printed by gen_compose.py", autocomplete: "off" });
+  const dis = S.demo;
+  root.append(
+    h("div", { class: "panel" }, h("h3", {}, "Banks, cards, savings and IRA (Plaid)"), h("p", { class: "muted small" }, "Huntington, Discover, Axos and Capital One link through Plaid. Tokens are encrypted in your own container; the gateway never sees them."),
+      h("button", { class: "btn primary", disabled: dis, onclick: async () => {
+        try {
+          const { link_token } = await api("/plaid/link-token", { method: "POST" });
+          await new Promise((ok, no) => { const s = document.createElement("script"); s.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js"; s.onload = ok; s.onerror = no; document.head.append(s); });
+          Plaid.create({ token: link_token, onSuccess: async (pt, meta) => { const r = await api("/plaid/exchange", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ public_token: pt, institution: meta.institution?.name || "" }) }); toast(`Linked. ${r.sync.added} transactions pulled.`); } }).open();
+        } catch (e) { toast(e.message); }
+      } }, "Link an account"), " ", h("button", { class: "btn", disabled: dis, onclick: async () => { try { await api("/sync", { method: "POST" }); toast("Synced"); } catch (e) { toast(e.message); } } }, "Sync now")),
+    h("div", { class: "panel" }, h("h3", {}, "PayPal, Venmo, Cash App"), h("p", { class: "muted small" }, "None of these offer a personal-account API, so export the CSV from each app and import it here. The format is detected automatically, and re-importing never double counts."),
+      h("input", { type: "file", id: "csvfile", accept: ".csv,text/csv", disabled: dis }), " ", h("button", { class: "btn", disabled: dis, onclick: async () => {
+        const f = $("#csvfile").files[0]; if (!f) return toast("Choose a CSV first");
+        try { const r = await api("/import/csv", { method: "POST", headers: { "Content-Type": "text/csv" }, body: await f.text() }); toast(`${r.provider}: ${r.added} new of ${r.rows} rows`); } catch (e) { toast(e.message); }
+      } }, "Import")),
+    h("div", { class: "panel" }, h("h3", {}, "Robinhood"), h("p", { class: "muted small" }, "Agent account: official MCP connector, read tools only. Main account: drop activity-report CSVs in ", h("code", { class: "mono" }, "data/<you>/robinhood-csv/"), ", or turn on the live connector (unofficial, off by default).")),
+    h("div", { class: "panel" }, h("h3", {}, "Feed token"), h("p", { class: "muted small" }, "Needed to show your RSS and calendar links. Stored only in this browser."),
+      h("div", { class: "url" }, feedIn, h("button", { class: "btn", onclick: () => { S.feedToken = feedIn.value.trim(); store.set("gb_feed", S.feedToken); toast("Saved"); } }, "Save"))),
+    dis ? h("p", { class: "muted small" }, "Buttons are disabled because this preview runs on sample data.") : null);
+}
+
+/* ---------- shell ---------- */
+const TABS = [["overview", "Overview", viewOverview], ["movement", "Money movement", viewMovement], ["subs", "Subscriptions", viewSubs], ["accounts", "Accounts", viewAccounts], ["robinhood", "Robinhood", viewRobinhood], ["connect", "Connect", viewConnect]];
+async function render() {
+  const [, title, view] = TABS.find((t) => t[0] === S.tab);
+  const main = h("main", {}, h("div", { class: "bar" }, h("h2", {}, title), S.demo ? h("span", { class: "banner" }, "Sample data. Nothing here is a real account.") : h("span", { class: "muted small" }, S.name)));
+  $("#app").replaceChildren(h("div", { class: "shell" },
+    h("nav", { class: "side", "aria-label": "Sections" }, h("div", { class: "brand" }, h("span", { class: "coin" }), "Goblin Bank"),
+      TABS.map(([id, label]) => h("button", { "aria-current": id === S.tab ? "page" : null, onclick: () => { S.tab = id; location.hash = id; render(); } }, label)),
+      h("div", { class: "foot" }, S.demo ? null : h("button", { class: "btn sm", onclick: () => { sessionStorage.clear(); location.reload(); } }, "Sign out"))), main));
+  try { await view(main, render); } catch (e) { main.append(h("div", { class: "panel" }, h("p", { class: "neg" }, "Could not load: " + e.message))); }
+}
+function login() {
+  $("#app").replaceChildren(h("form", { class: "panel login", onsubmit: async (e) => {
+    e.preventDefault(); S.name = $("#ln").value.trim().toLowerCase(); S.token = $("#lt").value.trim();
+    try { await api("/api/overview"); sessionStorage.setItem("gb_name", S.name); sessionStorage.setItem("gb_tok", S.token); render(); } catch (err) { toast("Sign-in failed"); }
+  } }, h("h2", {}, "Goblin Bank"), h("label", {}, "Goblin", h("input", { id: "ln", autocomplete: "username", required: true })), h("label", {}, "Login token", h("input", { id: "lt", type: "password", autocomplete: "current-password", required: true })), h("button", { class: "btn primary", type: "submit" }, "Open my vault")));
+}
+(async function boot() {
+  const want = location.hash.slice(1); if (TABS.some((t) => t[0] === want)) S.tab = want;
+  let live = false;
+  try { live = (await fetch("/health", { cache: "no-store" })).headers.get("content-type")?.includes("json") && !new URLSearchParams(location.search).has("demo"); } catch {}
+  if (!live) { S.demo = true; S.call = demoBackend(); return render(); }
+  S.name = sessionStorage.getItem("gb_name") || ""; S.token = sessionStorage.getItem("gb_tok") || "";
+  S.name && S.token ? render() : login();
+})();
+</script>

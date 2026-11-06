@@ -205,6 +205,18 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             return store.all("SELECT * FROM transactions WHERE account_id=? ORDER BY date DESC LIMIT ?", (account_id, limit))
         return store.all("SELECT * FROM transactions ORDER BY date DESC LIMIT ?", (limit,))
 
+    @app.get("/api/history")
+    def history(request: Request):
+        """Daily net worth built from balance snapshots (last known balance carried forward)."""
+        auth(request)
+        kinds = {a["id"]: a["kind"] for a in store.all("SELECT id,kind FROM accounts")}
+        sign = {"credit": -1, "loan": -1}
+        last, by_day = {}, {}
+        for r in store.all("SELECT * FROM snapshots ORDER BY ts"):
+            last[r["account_id"]] = r["balance"] * sign.get(kinds.get(r["account_id"], "cash"), 1)
+            by_day[r["ts"][:10]] = round(sum(last.values()), 2)
+        return [{"date": d, "net_worth": v} for d, v in by_day.items()]
+
     @app.get("/api/events")
     def events(request: Request, limit: int = 50):
         auth(request)

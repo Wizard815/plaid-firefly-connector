@@ -194,3 +194,12 @@ def test_link_token_and_unconfigured(monkeypatch):
     assert calls[0][1]["products"] == ["transactions"]
     monkeypatch.delenv("PLAID_SECRET")
     assert TestClient(mk()).post("/plaid/link-token", headers=H).status_code == 502
+
+
+def test_net_worth_history():
+    db = DB(":memory:")
+    with db.tx() as c:
+        c.execute("INSERT INTO accounts(id,source,name,kind,balance) VALUES('a','x','A','cash',0),('b','x','B','credit',0)")
+        c.executemany("INSERT INTO snapshots VALUES(?,?,?)", [("2026-11-01T00:00:00", "a", 100.0), ("2026-11-01T01:00:00", "b", 30.0), ("2026-11-02T00:00:00", "a", 150.0)])
+    out = TestClient(mk(db=db)).get("/api/history", headers=H).json()
+    assert out == [{"date": "2026-11-01", "net_worth": 70.0}, {"date": "2026-11-02", "net_worth": 120.0}]
