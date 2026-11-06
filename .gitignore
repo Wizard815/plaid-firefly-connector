@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+.secrets/
+data/
+goblins.yaml
+gateway.yaml
+docker-compose.generated.yml
+.env

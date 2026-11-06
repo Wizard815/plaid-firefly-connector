@@ -1,0 +1,8 @@
+goblins:
+  - name: alice
+    share: [robinhood_agent]
+    rh_agent: true
+    rh_live: false
+  - name: bob
+    share: []
+orb_key: true
