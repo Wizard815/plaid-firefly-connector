@@ -11,11 +11,13 @@ goblins.yaml:
 
 User tokens / orb key are printed ONCE; only their sha256 is stored.
 """
+import os
 import secrets
 import sys
 from pathlib import Path
 
 import yaml
+from cryptography.fernet import Fernet
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from goblinbank.security import sha256  # noqa: E402
@@ -43,23 +45,44 @@ def main(src="goblins.yaml"):
         if not n.replace("-", "").isalnum() or not n.islower():
             sys.exit(f"bad goblin name {n!r} (lowercase alnum/hyphen)")
         f = SEC / f"{n}.env"
-        if f.exists():
-            kv = dict(l.split("=", 1) for l in f.read_text().splitlines() if "=" in l)
-            internal, connector, tok_hash = kv["INTERNAL_SECRET"], kv["CONNECTOR_SECRET"], kv["USER_TOKEN_SHA256"]
-        else:
-            internal, connector = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+        kv = dict(l.split("=", 1) for l in f.read_text().splitlines() if "=" in l) if f.exists() else {}
+        changed = False
+        if "INTERNAL_SECRET" not in kv:
+            kv["INTERNAL_SECRET"], kv["CONNECTOR_SECRET"] = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
             token = secrets.token_urlsafe(32)
-            tok_hash = sha256(token)
+            kv["USER_TOKEN_SHA256"] = sha256(token)
             print(f"[{n}] login token (shown once): {token}")
-            f.write_text(f"INTERNAL_SECRET={internal}\nCONNECTOR_SECRET={connector}\nUSER_TOKEN_SHA256={tok_hash}\n")
+            changed = True
+        if "FIELD_KEY" not in kv:          # encrypts Plaid tokens at rest; LOSE THIS AND LINKS MUST BE REDONE
+            kv["FIELD_KEY"] = Fernet.generate_key().decode()
+            changed = True
+        if "FEED_TOKEN_SHA256" not in kv:
+            ft = secrets.token_urlsafe(24)
+            kv["FEED_TOKEN_SHA256"] = sha256(ft)
+            print(f"[{n}] feed token (shown once). Atom: /feed/{n}/{ft}/money.atom  Calendar: /feed/{n}/{ft}/subscriptions.ics")
+            changed = True
+        if changed:
+            f.write_text("".join(f"{k}={v}\n" for k, v in kv.items()))
             f.chmod(0o600)
-        gw_goblins.append({"name": n, "url": f"http://goblin-{n}:8000", "internal_secret": internal, "user_token_sha256": tok_hash})
+        internal, connector, tok_hash = kv["INTERNAL_SECRET"], kv["CONNECTOR_SECRET"], kv["USER_TOKEN_SHA256"]
+        _stub(SEC / f"{n}.integrations.env", "CALDAV_URL=\nCALDAV_USER=\nCALDAV_PASSWORD=\n")
+        _stub(SEC / "plaid.env", "PLAID_CLIENT_ID=\nPLAID_SECRET=\nPLAID_ENV=sandbox\nPLAID_WEBHOOK_URL=\n")
+        gw_goblins.append({"name": n, "url": f"http://goblin-{n}:8000", "internal_secret": internal, "user_token_sha256": tok_hash, "feed_token_sha256": kv["FEED_TOKEN_SHA256"]})
+        for sub in ("db", "robinhood-csv", "rh-live-session"):
+            d = ROOT / "data" / n / sub
+            d.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chown(d, 10001, 10001)    # the containers run as uid 10001
+            except PermissionError:
+                print(f"hint: sudo chown -R 10001:10001 data/{n}")
         net = f"net-{n}"
+        networks["egress"] = {}
         networks[net] = {"internal": True}  # connectors sit on an internal-only network
         env = {"ROLE": "goblin", "GOBLIN_NAME": n, "SHARE": ",".join(g.get("share", [])),
                "GATEWAY_URL": "http://gateway:8000", "RH_CSV_URL": f"http://{n}-rh-csv:8000"}
-        services[f"goblin-{n}"] = {"build": ".", "env_file": [f".secrets/{n}.env"], "environment": env,
-                                   "networks": ["edge", net], "restart": "unless-stopped"}
+        services[f"goblin-{n}"] = {"build": ".", "env_file": [f".secrets/{n}.env", f".secrets/{n}.integrations.env", ".secrets/plaid.env"], "environment": env,
+                                   "volumes": [f"./data/{n}/db:/data"], "user": "10001",
+                                   "networks": ["edge", net, "egress"], "restart": "unless-stopped"}
         conn_env = {"INTERNAL_SECRET": connector}
         services[f"{n}-rh-csv"] = {"build": ".", "environment": {"ROLE": "rh-csv", "CSV_DIR": "/csv", **conn_env},
                                    "volumes": [f"./data/{n}/robinhood-csv:/csv:ro"], "networks": [net], "restart": "unless-stopped"}
@@ -88,7 +111,7 @@ def main(src="goblins.yaml"):
         orb = [{"sha256": of.read_text().strip(), "scopes": ["summary:read"]}]
     (ROOT / "gateway.yaml").write_text(yaml.safe_dump({"goblins": gw_goblins, "orb_keys": orb}))
     (ROOT / "gateway.yaml").chmod(0o600)
-    services["gateway"] = {"build": ".", "environment": {"ROLE": "gateway", "GATEWAY_CONFIG": "/config/gateway.yaml"},
+    services["gateway"] = {"build": ".", "environment": {"ROLE": "gateway", "GATEWAY_CONFIG": "/config/gateway.yaml", "UI_DIR": "/app/ui"},
                            "volumes": ["./gateway.yaml:/config/gateway.yaml:ro"], "networks": ["edge"],
                            "ports": ["127.0.0.1:8080:8000"], "restart": "unless-stopped"}
     (ROOT / "docker-compose.generated.yml").write_text(yaml.safe_dump({"services": services, "networks": networks}, sort_keys=False))

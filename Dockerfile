@@ -2,6 +2,7 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY pyproject.toml ./
 COPY src ./src
+COPY ui ./ui
 ARG WITH_LIVE=0
 RUN pip install --no-cache-dir . && if [ "$WITH_LIVE" = "1" ]; then pip install --no-cache-dir robin_stocks; fi
 RUN useradd -r -u 10001 goblin

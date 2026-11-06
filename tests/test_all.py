@@ -3,6 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from goblinbank import gateway, goblin
+from goblinbank.db import DB
 from goblinbank.connectors.base import make_connector_app
 from goblinbank.connectors.rh_agent import AgentConnector
 from goblinbank.connectors.rh_csv import CsvConnector
@@ -97,7 +98,7 @@ def test_end_to_end(csv_dir, monkeypatch):
     for k, v in {"GOBLIN_NAME": "alice", "INTERNAL_SECRET": "isec", "CONNECTOR_SECRET": "conn",
                  "SHARE": "robinhood_main", "RH_CSV_URL": "http://csv", "GATEWAY_URL": "http://gw"}.items():
         monkeypatch.setenv(k, v)
-    g = goblin.create_app(transport=_bridge(conn))
+    g = goblin.create_app(transport=_bridge(conn), db=DB(":memory:"))
     cfg = {"goblins": [
         {"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("alice-tok")},
         {"name": "bob", "url": "http://bob", "internal_secret": "x", "user_token_sha256": sha256("bob-tok")}],
@@ -116,9 +117,3 @@ def test_end_to_end(csv_dir, monkeypatch):
     assert out["alice"]["robinhood_main"]["source"] == "rh-main-csv"
     assert "robinhood_agent" not in out["alice"]
     assert out["bob"] == {"error": "unavailable"}
-
-
-def test_plaid_webhook_fails_closed(monkeypatch):
-    monkeypatch.delenv("GATEWAY_INSECURE_WEBHOOKS", raising=False)
-    gw = TestClient(gateway.create_app({"goblins": []}))
-    assert gw.post("/webhooks/plaid", json={"item_id": "i"}).status_code == 501

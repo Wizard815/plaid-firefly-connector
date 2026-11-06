@@ -3,7 +3,9 @@
 It never stores Plaid tokens, balances or transactions. It only knows:
 goblin name -> url + secrets, and plaid item_id -> goblin name.
 """
+import json
 import os
+from pathlib import Path
 
 import httpx
 import yaml
@@ -78,16 +80,49 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
 
     @app.post("/webhooks/plaid")
     async def plaid_webhook(request: Request):
-        # Plaid signs webhooks with a JWT (Plaid-Verification header). Verification is not
-        # implemented yet, so this FAILS CLOSED unless explicitly overridden for local testing.
-        if os.environ.get("GATEWAY_INSECURE_WEBHOOKS") != "1":
-            raise HTTPException(501, "plaid webhook signature verification not implemented")
-        body = await request.json()
-        name = items.get(body.get("item_id", ""))
+        """Relay to the owning goblin. The goblin verifies Plaid's JWT signature (it holds the
+        Plaid credentials); routing on the unverified item_id is harmless because nothing acts
+        until that verification passes."""
+        raw = await request.body()
+        try:
+            item_id = json.loads(raw).get("item_id", "")
+        except ValueError:
+            raise HTTPException(400, "bad json")
+        name = items.get(item_id)
         if not name:
             return {"ignored": True}
         g = goblins[name]
-        client.post(f"{g['url']}/plaid/webhook", json=body, headers=goblin_headers(g))
-        return {"relayed_to": name}
+        r = client.post(f"{g['url']}/plaid/webhook", content=raw,
+                        headers={**goblin_headers(g), "Plaid-Verification": request.headers.get("plaid-verification", ""),
+                                 "Content-Type": "application/json"})
+        return Response(r.content, r.status_code, media_type="application/json")
+
+    def feed_goblin(name: str, token: str) -> dict:
+        g = goblins.get(name)
+        if not g or not check_token(token, g.get("feed_token_sha256", "")):
+            raise HTTPException(404, "not found")   # 404, not 401: don't reveal the feed exists
+        return g
+
+    @app.get("/feed/{name}/{token}/money.atom")
+    def money_feed(name: str, token: str, request: Request):
+        """Subscribe in any RSS/Atom reader. The token in the URL is the credential: treat it like a password."""
+        g = feed_goblin(name, token)
+        r = client.get(f"{g['url']}/feed.atom", params=dict(request.query_params), headers=goblin_headers(g))
+        return Response(r.content, r.status_code, media_type="application/atom+xml")
+
+    @app.get("/feed/{name}/{token}/subscriptions.ics")
+    def subs_calendar(name: str, token: str):
+        g = feed_goblin(name, token)
+        r = client.get(f"{g['url']}/subscriptions.ics", headers=goblin_headers(g))
+        return Response(r.content, r.status_code, media_type="text/calendar")
+
+    ui = Path(os.environ.get("UI_DIR", Path(__file__).resolve().parents[2] / "ui"))
+
+    @app.get("/")
+    def index():
+        f = ui / "index.html"
+        if not f.exists():
+            raise HTTPException(404, "ui not installed")
+        return Response(f.read_text(), media_type="text/html")
 
     return app
