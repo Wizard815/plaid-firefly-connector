@@ -287,11 +287,21 @@ def monthly_plan(db, month: str, today: date) -> dict:
     goals_month = round(sum(g["monthly"] or 0 for g in active), 2)
     left = round(income_month - outflow - goals_month, 2)
     left_smooth = round(income_smooth - outflow - goals_month, 2)
+    extra = round(max(0.0, income_month - income_smooth), 2) if any(i["extra_paycheck"] for i in inc) else 0.0
+    extra_goal = None
+    if extra > 0:                                       # an extra paycheck is a bonus: point it at the highest-priority goal that still needs money
+        gs = sorted((g for g in active if g["status"] == "active"), key=lambda g: (g["priority"], g["deadline"] or "9999-12-31", g["id"]))
+        got = {a["goal_id"]: a["amount"] for a in _allocs(db)}
+        for g in gs:
+            need = round(g["target"] - got.get(g["id"], 0.0), 2)
+            if need > 0.005:
+                extra_goal = {"goal_id": g["id"], "goal": g["name"], "amount": round(min(extra, need), 2)}
+                break
     if income_month and left < 0:
         warnings.append(f"The plan spends ${-left:,.2f} more than your expected income.")
     got = db.one("SELECT COALESCE(SUM(t.amount),0) s FROM transactions t JOIN categories c ON c.name=t.category WHERE t.amount>0 AND c.kind='income' AND t.date BETWEEN ? AND ?", (start, end))["s"]
     other_spent = round(sum(v for k, v in spent.items() if k not in {r["category"] for r in rows}), 2)
-    return {"month": month, "income_month": income_month, "income_smoothed": income_smooth, "left_smoothed": left_smooth, "extra_paycheck_month": any(i["extra_paycheck"] for i in inc), "incomes": inc, "outflow_planned": outflow, "goals_month": goals_month, "left": left, "rows": rows, "warnings": warnings,
+    return {"month": month, "income_month": income_month, "income_smoothed": income_smooth, "left_smoothed": left_smooth, "extra_paycheck_month": any(i["extra_paycheck"] for i in inc), "extra_income": extra, "extra_for_goal": extra_goal, "incomes": inc, "outflow_planned": outflow, "goals_month": goals_month, "left": left, "rows": rows, "warnings": warnings,
             "actual": {"income": round(got, 2), "spent": round(sum(spent.values()), 2), "unbudgeted_spent": other_spent},
             "income_suggestions": income_suggestions(db, today)}
 

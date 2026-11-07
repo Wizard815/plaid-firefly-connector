@@ -251,7 +251,7 @@ def test_bill_and_alert_lists_are_separate_opt_ins():
     s = c.get("/summary", headers=H).json()
     assert s["bill_list"][0] == {"date": date.today().isoformat(), "name": "Netflix", "amount": 15.49, "category": "Subscriptions", "paid_by": "me"}
     assert any(a["kind"] == "due_soon" and "Netflix" in a["title"] for a in s["alert_list"])
-    assert set(s["alert_list"][0]) == {"severity", "kind", "title", "detail"}
+    assert set(s["alert_list"][0]) - {"date"} == {"severity", "kind", "title", "detail"}          # "date" rides along on dated alerts (a bill due, a CD maturing)
     assert "bills" not in s and "net_worth" not in s
 
 

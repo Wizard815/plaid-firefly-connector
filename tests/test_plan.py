@@ -309,3 +309,62 @@ def test_maturity_outlook_hands_money_out_across_several_cds_in_date_order():
     assert a["name"] == "CD A" and [(x["goal"], x["amount"]) for x in a["suggestions"]] == [("Boiler", a["free_at_maturity"])]
     assert [(x["goal"], x["amount"]) for x in b["suggestions"]] == [("Boiler", round(3000 - a["free_at_maturity"], 2))]        # the first CD covers part; the second finishes it
     assert b["leftover"] == round(b["free_at_maturity"] - (3000 - a["free_at_maturity"]), 2)
+
+
+# ---------------------------------------------------------------- maturity alerts and the extra paycheck
+def maturity_world(days_out, **kw):
+    c, db = api()
+    add_place(db, "12-mo CD", 10000, kind="cd", apy=5.0, maturity=(TODAY + timedelta(days=days_out)).isoformat())
+    return c, db
+
+
+def test_maturity_alert_has_date_destination_and_severity_by_closeness():
+    c, db = maturity_world(25)
+    car = c.post("/api/goals", headers=H, json={"name": "Car", "target": 3000, "priority": 1}).json()
+    a = next(x for x in c.get("/api/alerts", headers=H).json() if x["kind"] == "maturing")
+    assert a["severity"] == "info" and a["date"] == (TODAY + timedelta(days=25)).isoformat() and "matures in 25 days" in a["title"]
+    assert "Worth about 10,0" in a["detail"] and "→ Car 3,000.00" in a["detail"]                                # says where the money would go
+    c2, _ = maturity_world(5)
+    b = next(x for x in c2.get("/api/alerts", headers=H).json() if x["kind"] == "maturing")
+    assert b["severity"] == "warning" and "in 5 days" in b["title"]                                              # a week out it becomes a warning
+    c3, _ = maturity_world(0)
+    assert "matures today" in next(x for x in c3.get("/api/alerts", headers=H).json() if x["kind"] == "maturing")["title"]
+    c4, _ = maturity_world(45)
+    assert not [x for x in c4.get("/api/alerts", headers=H).json() if x["kind"] == "maturing"]                   # outside the default 30 days: quiet
+
+
+def test_maturity_warning_window_is_adjustable_and_can_be_switched_off():
+    c, _ = maturity_world(45)
+    kinds = lambda: [x["kind"] for x in c.get("/api/alerts", headers=H).json()]
+    c.put("/api/settings", headers=H, json={"alert_maturity_days": "60"})
+    assert "maturing" in kinds()
+    c.put("/api/settings", headers=H, json={"alert_maturity_days": "14"})
+    assert "maturing" not in kinds()
+    c.put("/api/settings", headers=H, json={"alert_maturity_days": "0"})
+    assert "maturing" not in kinds()
+    assert c.put("/api/settings", headers=H, json={"alert_maturity_days": "soon"}).status_code == 422
+
+
+def test_maturity_alert_passes_through_to_the_orb_with_its_date():
+    c, db = maturity_world(10)
+    c.put("/api/settings", headers=H, json={"share": ["alert_list"]})
+    lst = c.get("/summary", headers=H).json()["alert_list"]
+    m = next(a for a in lst if a["kind"] == "maturing")
+    assert m["date"] == (TODAY + timedelta(days=10)).isoformat() and m["severity"] == "info" and "12-mo CD matures" in m["title"] and set(m) == {"severity", "kind", "title", "detail", "date"}
+    c.put("/api/settings", headers=H, json={"share": ["alerts"]})                                               # totals alone never carry it
+    assert "alert_list" not in c.get("/summary", headers=H).json()
+
+
+def test_extra_paycheck_month_points_at_the_top_goal():
+    c, db = api()
+    db.conn.execute("INSERT INTO incomes(name,amount,every,unit,next_date) VALUES('Pay',2000,2,'week','2026-11-13')"); db.conn.commit()
+    c.post("/api/goals", headers=H, json={"name": "Laptop", "target": 900, "priority": 3})
+    c.post("/api/goals", headers=H, json={"name": "House", "target": 50000, "priority": 1})
+    apr = c.get("/api/plan?month=2027-04", headers=H).json()                                                    # three paydays
+    assert apr["extra_paycheck_month"] and apr["extra_income"] == round(6000 - 2000 * 30.4375 / 14 * 1, 2) == round(6000 - apr["income_smoothed"], 2)
+    assert apr["extra_for_goal"] == {"goal_id": 2, "goal": "House", "amount": apr["extra_income"]}                # highest priority first
+    c.post("/api/goals/2/close", headers=H, json={"status": "done"})
+    assert c.get("/api/plan?month=2027-04", headers=H).json()["extra_for_goal"]["goal"] == "Laptop"
+    assert c.get("/api/plan?month=2027-04", headers=H).json()["extra_for_goal"]["amount"] == 900                    # capped at what the goal still needs
+    jan = c.get("/api/plan?month=2027-01", headers=H).json()
+    assert not jan["extra_paycheck_month"] and jan["extra_income"] == 0 and jan["extra_for_goal"] is None

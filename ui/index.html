@@ -493,6 +493,8 @@ async function viewPlanner(root, rerender) {
     /* ---------- the plan ---------- */
     h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Monthly plan"), h("input", { type: "month", id: "bm", value: month, class: "tiny", style: "width:auto", onchange: (e) => { S.month = e.target.value; rerender(); } })),
       h("p", { class: "muted small" }, "Income minus bills, budgets and what you plan to put toward goals. A budget covers everything in its category, bills included, so nothing is counted twice."),
+      pl.extra_income > 0 ? h("div", { class: "alert info", style: "margin-bottom:10px" }, h("b", {}, `An extra paycheck lands this month: ${usd(pl.extra_income)} beyond your usual.`),
+        pl.extra_for_goal ? h("span", { class: "muted small" }, ` It is already inside "Left to assign". Putting ${usd(pl.extra_for_goal.amount)} toward ${pl.extra_for_goal.goal} would move it forward.`) : h("span", { class: "muted small" }, " It is already inside \"Left to assign\".")) : null,
       pl.warnings.length ? h("div", { class: "alerts", style: "margin-bottom:10px" }, pl.warnings.map((w) => alertRow({ severity: "warning", title: w }))) : null,
       h("div", { class: "grid" }, kpi("Expected income", usd(pl.income_month), (() => { const n = pl.incomes.reduce((a, i) => a + (i.paydays?.length || 0), 0); return `${n} payday${n === 1 ? "" : "s"} this month${pl.extra_paycheck_month ? ", an extra paycheck" : ""} · ${usd(pl.actual.income)} so far`; })(), "pos"), kpi("Planned spending", usd(pl.outflow_planned), `${usd(pl.actual.spent)} spent so far`),
         kpi("Toward goals", usd(pl.goals_month), `${activeGoals.length} goal${activeGoals.length === 1 ? "" : "s"}`), kpi("Left to assign", usd(pl.left), pl.left >= 0 ? "free to budget or save" : "over your income", pl.left < 0 ? "neg" : "pos")),
@@ -724,11 +726,12 @@ async function tabCategories(root, rerender) {
 async function tabAlerts(root, rerender) {
   const cfg = await api("/api/settings");
   add(root, h("div", { class: "panel" }, h("h3", {}, "What should I flag?"), h("p", { class: "muted small" }, "Always on: overdrawn accounts and accounts below the minimum you set on them."),
-    h("form", { onsubmit: (e) => { e.preventDefault(); saveCfg({ alert_untracked: $("#al-un").checked ? "on" : "off", alert_missed: $("#al-mi").checked ? "on" : "off" }, rerender); }, style: "display:grid;gap:12px" },
+    h("form", { onsubmit: (e) => { e.preventDefault(); saveCfg({ alert_untracked: $("#al-un").checked ? "on" : "off", alert_missed: $("#al-mi").checked ? "on" : "off", alert_maturity_days: val("al-mat") }, rerender); }, style: "display:grid;gap:12px" },
       h("label", { class: "check" }, h("input", { type: "checkbox", id: "al-un", checked: cfg.alert_untracked !== "off" }), "Repeating payments that are not in Subscriptions yet (same payee, same amount, same timing)"),
       h("label", { class: "check" }, h("input", { type: "checkbox", id: "al-mi", checked: cfg.alert_missed !== "off" }), "A subscription bound to an account whose charge did not show up when expected (a failed payment, a cancelled card, a price change)"),
+      field("al-mat", "Warn me when a CD or bond is this many days from maturing (0 = never)", cfg.alert_maturity_days, { type: "number", min: "0", max: "3650", placeholder: "30", style: "max-width:140px" }),
       h("div", {}, h("button", { class: "btn primary", type: "submit" }, "Save"))),
-    h("p", { class: "muted small", style: "margin-top:12px" }, "Alerts show on the Overview and the Subscriptions page. Phone notifications are not set up yet.")));
+    h("p", { class: "muted small", style: "margin-top:12px" }, "Alerts show on the Overview and the Subscriptions page, and reach the Pondering Orb (with their date) when you share the alert list. Phone notifications are not set up yet.")));
 }
 /* ---------- Sharing: the Pondering Orb, and API tokens for Home Assistant and scripts ---------- */
 const SHARE_LABELS = { net_worth: "Net worth", subscriptions: "Monthly subscription total", bills: "Bills due: totals for 7 and 30 days, and the next one", bill_list: "Bill list: each upcoming bill with its date, name and amount", alerts: "Alert counts", alert_list: "Alert list: the alert titles (these can name your accounts)", savings: "Savings: total, free, set aside", goals: "Goal names and progress", spending: "Spending: this month so far, projected, average income", robinhood_main: "Robinhood main balance", robinhood_agent: "Robinhood agent balance" };

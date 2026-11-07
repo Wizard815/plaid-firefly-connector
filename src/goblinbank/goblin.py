@@ -481,7 +481,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             out["bill_list"] = [{"date": i["date"], "name": i["name"], "amount": i["amount"], "category": i["category"],
                                  "paid_by": "me" if i["payer"] == "me" else (i["payer_name"] or "someone else")} for i in up]
         if "alert_list" in share() or every:
-            out["alert_list"] = [{"severity": a["severity"], "kind": a["kind"], "title": a["title"], "detail": a.get("detail", "")}
+            out["alert_list"] = [{"severity": a["severity"], "kind": a["kind"], "title": a["title"], "detail": a.get("detail", ""), **({"date": a["date"]} if a.get("date") else {})}
                                  for a in ledger.alerts(store, (today or date.today)())][:30]
         if "savings" in share() or every:
             out["savings"] = {"total": ext["savings_total"], "free": ext["savings_free"], "earmarked": ext["savings_earmarked"]}

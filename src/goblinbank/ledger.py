@@ -332,13 +332,20 @@ def alerts(db, today: date) -> list[dict]:
         top = next(g for g in gv["items"] if g["status"] == "active" and g["shortfall"] > 0)
         out.append({"kind": "free_savings", "severity": "info", "title": f"${gv['free']:,.2f} of your savings is free",
                     "detail": f"{top['name']} still needs ${top['shortfall']:,.2f}"})
-    for s in savings_summary(db, today)["maturing_soon"]:
-        if s["days_to_maturity"] <= 30:
-            out.append({"kind": "maturing", "severity": "info", "title": f"{s['name']} matures in {s['days_to_maturity']} days", "detail": f"About {s.get('value_at_maturity', s['balance']):,.2f}"})
+    try:
+        warn_days = int(float(cfg.get(db, "alert_maturity_days") or 30))   # how early to warn; 0 turns it off
+    except ValueError:
+        warn_days = 30
+    if warn_days > 0:
+        for m in plan.maturity_outlook(db, today, warn_days):
+            where = (" → " + ", then ".join(f"{x['goal']} {x['amount']:,.2f}" for x in m["suggestions"])) if m["suggestions"] else ""
+            out.append({"kind": "maturing", "severity": "warning" if m["days"] <= 7 else "info", "date": m["maturity"],
+                        "title": f"{m['name']} matures " + ("today" if m["days"] == 0 else f"in {m['days']} day{'s' if m['days'] != 1 else ''} ({m['maturity']})"),
+                        "detail": f"Worth about {m['value_at_maturity']:,.2f}; {m['free_at_maturity']:,.2f} free{where}. {m['advice']}"})
     for s in db.all("SELECT * FROM subscriptions WHERE active=1 AND coalesce(payer,'me')='me'"):
         nd = sub_view(s, today)["next_due"]
         if nd and 0 <= (d(nd) - today).days <= (s["notify_days"] if s["notify_days"] is not None else 3):
-            out.append({"kind": "due_soon", "severity": "info", "title": f"{s['name']} due {nd}", "detail": f"{s['amount']:,.2f}", "sub_id": s["id"]})
+            out.append({"kind": "due_soon", "severity": "info", "title": f"{s['name']} due {nd}", "detail": f"{s['amount']:,.2f}", "sub_id": s["id"], "date": nd})
     rank = {"critical": 0, "warning": 1, "info": 2}
     return sorted(out, key=lambda a: rank[a["severity"]])
 
