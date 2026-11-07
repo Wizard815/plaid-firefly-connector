@@ -75,7 +75,7 @@ def test_every_tool_runs_and_matches_the_database(seed_no):
     assert got["calculate"]["result"] == 1200 / 4 + 15.49 * 3
     assert got["get_overview"]["net_worth"] == ledger.net_worth(db) == round(sum((a["balance"] or 0) * (-1 if a["kind"] == "credit" else 1) for a in db.all("SELECT * FROM accounts")) + 8000, 2)
     assert got["upcoming_bills"]["days"] == 45 and any(i["name"] == "Netflix" for i in got["upcoming_bills"]["items"])
-    assert got["savings_summary"]["total"] == 8000 and got["savings_summary"]["items"][0]["days_to_maturity"] == (date(2027, 1, 1) - TODAY).days
+    assert got["savings_summary"]["total_savings"] == 8000 and got["savings_summary"]["places"][0]["days_to_maturity"] == (date(2027, 1, 1) - TODAY).days and got["savings_summary"]["free_savings"] == 8000
     assert got["budget_status"]["items"][0]["category"] == "Food"
     assert any("farm box" in s["name"].lower() for s in got["find_recurring_payments"]) and got["project_balance"]["days"] == 30
     assert got["write_note"]["saved"] and db.one("SELECT author FROM notes")["author"] == "agent"
@@ -87,7 +87,7 @@ def test_every_tool_runs_and_matches_the_database(seed_no):
 def test_tool_list_covers_every_data_area():
     c, _, _ = make()
     names = {t["name"] for t in c.get("/api/agent/tools", headers=H).json()}
-    assert names >= {"get_overview", "list_accounts", "search_transactions", "spending_by_category", "list_subscriptions", "upcoming_bills", "find_recurring_payments",
+    assert names >= {"list_goals", "can_i_afford", "monthly_plan", "add_goal", "fund_goal", "add_subscription", "get_overview", "list_accounts", "search_transactions", "spending_by_category", "list_subscriptions", "upcoming_bills", "find_recurring_payments",
                      "savings_summary", "get_alerts", "project_balance", "budget_status", "calendar_events", "list_notes", "read_note", "write_note", "propose_subscription", "calculate"}
     for t in c.get("/api/agent/tools", headers=H).json():
         assert t["parameters"]["type"] == "object" and t["description"]
@@ -180,7 +180,7 @@ def test_is_local(url, local):
 
 def test_provider_validation_and_secret_storage():
     c, db, _ = make()
-    for bad in [dict(kind="grpc"), dict(base_url="ftp://x"), dict(base_url="not a url"), dict(name=" "), dict(model="")]:
+    for bad in [dict(kind="grpc"), dict(base_url="ftp://x"), dict(base_url="not a url"), dict(model="")]:       # a blank name is now fine: it is generated
         body = {"name": "n", "kind": "openai", "base_url": "http://localhost:1/v1", "model": "m", **bad}
         assert c.post("/api/agent/providers", headers=H, json=body).status_code == 422, bad
     p = add_provider(c, api_key="topsecret")
@@ -249,3 +249,63 @@ def test_calculator(expr, val):
 def test_calculator_rejects(expr):
     with pytest.raises((ValueError, ZeroDivisionError, TypeError)):
         agent.calculate(expr)
+
+
+# ---------------------------------------------------------------- the model dropdown + refresh
+def models_server(routes, log=None):
+    def h(req: httpx.Request):
+        if log is not None:
+            log.append((req.method, str(req.url), req.headers.get("authorization"), req.headers.get("x-api-key")))
+        for (method, path), resp in routes.items():
+            if req.method == method and req.url.path == path:
+                return resp if isinstance(resp, httpx.Response) else httpx.Response(200, json=resp)
+        return httpx.Response(404)
+    return httpx.MockTransport(h)
+
+
+def test_refresh_lists_models_from_an_openai_compatible_server():
+    log = []
+    c = TestClient(goblin.create_app(db=DB(":memory:"), today=lambda: TODAY, llm_transport=models_server({("GET", "/v1/models"): {"data": [{"id": "qwen2.5:32b"}, {"id": "llama3.1:8b"}]}}, log)))
+    r = c.post("/api/agent/models", headers=H, json={"kind": "openai", "base_url": "http://localhost:11434/v1"}).json()
+    assert [m["id"] for m in r["models"]] == ["llama3.1:8b", "qwen2.5:32b"] and r["local"] is True                 # sorted, and tagged local
+    assert log[0][1] == "http://localhost:11434/v1/models" and log[0][2] is None                                    # no key sent when none given
+
+
+def test_refresh_falls_back_to_ollama_native_list_and_reads_context_sizes():
+    c = TestClient(goblin.create_app(db=DB(":memory:"), today=lambda: TODAY, llm_transport=models_server({("GET", "/api/tags"): {"models": [{"name": "mistral:7b"}]}, ("POST", "/api/show"): {"model_info": {"llama.context_length": 131072}}})))
+    assert [m["id"] for m in c.post("/api/agent/models", headers=H, json={"kind": "openai", "base_url": "http://host.docker.internal:11434/v1"}).json()["models"]] == ["mistral:7b"]
+    assert c.post("/api/agent/model-info", headers=H, json={"kind": "openai", "base_url": "http://host.docker.internal:11434/v1", "model": "mistral:7b"}).json() == {"context_tokens": 131072}
+    c2 = TestClient(goblin.create_app(db=DB(":memory:"), today=lambda: TODAY, llm_transport=models_server({})))
+    assert c2.post("/api/agent/model-info", headers=H, json={"kind": "openai", "base_url": "http://x:1/v1", "model": "m"}).json() == {"context_tokens": None}     # unknown is fine
+
+
+def test_refresh_openrouter_with_a_saved_key_and_anthropic_headers():
+    log = []
+    t = models_server({("GET", "/api/v1/models"): {"data": [{"id": "anthropic/claude-sonnet-4.5", "context_length": 200000}]}, ("GET", "/v1/models"): {"data": [{"id": "claude-sonnet-4-5"}]}}, log)
+    c = TestClient(goblin.create_app(db=DB(":memory:"), today=lambda: TODAY, llm_transport=t))
+    # cloud servers can be listed without 'allow cloud': only the key goes out, never your data
+    r = c.post("/api/agent/models", headers=H, json={"kind": "openai", "base_url": "https://openrouter.ai/api/v1", "api_key": "or-key"}).json()
+    assert r["models"] == [{"id": "anthropic/claude-sonnet-4.5", "context": 200000}] and r["local"] is False and log[0][2] == "Bearer or-key"
+    p = c.post("/api/agent/providers", headers=H, json={"kind": "anthropic", "base_url": "https://api.anthropic.com", "model": "claude-x", "api_key": "sk-saved"}).json()
+    r = c.post("/api/agent/models", headers=H, json={"kind": "anthropic", "base_url": "https://api.anthropic.com", "provider_id": p["id"]}).json()       # refresh with the stored key
+    assert [m["id"] for m in r["models"]] == ["claude-sonnet-4-5"] and log[-1][3] == "sk-saved"
+
+
+def test_refresh_errors_are_readable():
+    c = TestClient(goblin.create_app(db=DB(":memory:"), today=lambda: TODAY, llm_transport=models_server({("GET", "/v1/models"): httpx.Response(401), ("GET", "/api/tags"): httpx.Response(404)})))
+    r = c.post("/api/agent/models", headers=H, json={"kind": "anthropic", "base_url": "https://api.anthropic.com"})
+    assert r.status_code == 502 and "401" in r.json()["detail"] and "API key" in r.json()["detail"]
+    def refuse(req): raise httpx.ConnectError("no")
+    c = TestClient(goblin.create_app(db=DB(":memory:"), today=lambda: TODAY, llm_transport=httpx.MockTransport(refuse)))
+    assert "Is it running" in c.post("/api/agent/models", headers=H, json={"kind": "openai", "base_url": "http://localhost:1/v1"}).json()["detail"]
+    assert c.post("/api/agent/models", headers=H, json={"kind": "grpc", "base_url": "http://x"}).status_code == 422
+    assert c.post("/api/agent/models", headers=H, json={"kind": "openai", "base_url": "file:///etc/passwd"}).status_code == 422
+
+
+def test_models_get_a_generated_name():
+    c = TestClient(goblin.create_app(db=DB(":memory:"), today=lambda: TODAY))
+    a = c.post("/api/agent/providers", headers=H, json={"kind": "openai", "base_url": "http://host.docker.internal:11434/v1", "model": "qwen2.5:32b"}).json()
+    b = c.post("/api/agent/providers", headers=H, json={"kind": "openai", "base_url": "https://openrouter.ai/api/v1", "model": "x/y", "api_key": "k"}).json()
+    d = c.post("/api/agent/providers", headers=H, json={"kind": "openai", "base_url": "http://nas.local:9000/v1", "model": "big"}).json()
+    assert (a["name"], b["name"], d["name"]) == ("Ollama · qwen2.5:32b", "OpenRouter · x/y", "nas.local · big")
+    assert c.post("/api/agent/providers", headers=H, json={"kind": "openai", "base_url": "http://x:1/v1", "model": " "}).status_code == 422

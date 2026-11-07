@@ -82,6 +82,9 @@ def test_suggestion_accept_with_name_interval_account(api):
     r = c.post("/api/suggestions/accept", headers=H, json={"key": farm["key"], "name": "Farm box (CSA)", "account_id": "crd", "every": 1, "unit": "week"})
     assert r.status_code == 200 and r.json()["name"] == "Farm box (CSA)" and r.json()["account_id"] == "crd" and r.json()["amount"] == 32.0
     assert not any("farm box" in s["name"].lower() for s in c.get("/api/suggestions", headers=H).json())      # gone once tracked
+    sug2 = next(s for s in c.get("/api/suggestions", headers=H).json() if "netflix" in s["name"].lower())
+    c.post("/api/suggestions/accept", headers=H, json={"key": sug2["key"], "name": "Streaming"})              # renamed to something unrelated...
+    assert not any("netflix" in s["name"].lower() for s in c.get("/api/suggestions", headers=H).json())      # ...and the detector must not offer it again
     assert c.post("/api/suggestions/accept", headers=H, json={"key": farm["key"], "name": "x"}).status_code == 404
     other = next(s for s in c.get("/api/suggestions", headers=H).json() if "water" in s["name"].lower())
     c.post("/api/suggestions/dismiss", headers=H, json={"key": other["key"]})

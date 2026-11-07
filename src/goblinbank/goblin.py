@@ -12,7 +12,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from goblinbank import agent, api_money, crypto, feed, importers, ledger, settings as cfg, sync
+from goblinbank import agent, api_money, api_plan, external, plan, crypto, feed, importers, ledger, settings as cfg, sync
 from goblinbank.db import DB
 from goblinbank.plaid import Plaid, PlaidError
 from goblinbank.security import require_internal
@@ -228,6 +228,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     ctx = api_money.make_ctx(store, auth, today or date.today, name=name, plaid=plaid, client=client, caldav_transport=caldav_transport)
     ctx.llm_transport = llm_transport
     api_money.register(app, ctx)
+    api_plan.register(app, ctx)
     agent.register(app, ctx)
 
     @app.post("/api/subscriptions/export/caldav")
@@ -362,6 +363,60 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             c.execute("DELETE FROM plaid_items WHERE item_id=?", (item_id,))
         return {"removed": item_id, "accounts": len(ids)}
 
+    # ---------------- API tokens: read-only access for Home Assistant, the Orb, scripts ----------------
+    class TokenIn(BaseModel):
+        name: str
+        scopes: list[str]
+
+    limiter = external.Limiter(int(os.environ.get("API_RATE_PER_MIN", "120")))
+
+    @app.get("/api/tokens")
+    def tokens(request: Request):
+        auth(request)
+        return {"items": [{**t, "scopes": t["scopes"].split(",")} for t in store.all("SELECT id,name,scopes,created,last_used,revoked FROM api_tokens ORDER BY revoked, id DESC")], "scopes": external.SCOPES}
+
+    @app.post("/api/tokens")
+    def token_new(request: Request, b: TokenIn):
+        auth(request)
+        bad = [x for x in b.scopes if x not in external.SCOPES]
+        if not b.name.strip() or not b.scopes or bad:
+            raise HTTPException(422, "a name and at least one valid scope are required" + (f" (unknown: {', '.join(bad)})" if bad else ""))
+        tok = external.new_token(name)
+        with store.tx() as c:
+            cur = c.execute("INSERT INTO api_tokens(name,token_hash,scopes,created) VALUES(?,?,?,?)", (b.name.strip()[:60], external_hash(tok), ",".join(sorted(set(b.scopes))), sync.now()))
+        return {"id": cur.lastrowid, "name": b.name.strip(), "scopes": sorted(set(b.scopes)), "token": tok, "note": "Copy it now. It is not shown again."}
+
+    @app.delete("/api/tokens/{tid}")
+    def token_revoke(request: Request, tid: int):
+        auth(request)
+        with store.tx() as c:
+            cur = c.execute("UPDATE api_tokens SET revoked=1 WHERE id=?", (tid,))
+        if not cur.rowcount:
+            raise HTTPException(404, "not found")
+        return {"revoked": tid}
+
+    def external_hash(tok):
+        from goblinbank.security import sha256
+        return sha256(tok)
+
+    @app.get("/external/{resource:path}")
+    def external_get(request: Request, resource: str):
+        """Called by the gateway on behalf of a token holder (the gateway adds the internal secret; the token is checked here)."""
+        auth(request)
+        tok = request.headers.get("x-api-token", "")
+        row, err = external.authenticate(store, tok, resource.strip("/"), sync.now())
+        if err:
+            raise HTTPException(*err)
+        if not limiter.ok(row["id"]):
+            raise HTTPException(429, "too many requests: slow down (limit %d a minute)" % limiter.n)
+        res = resource.strip("/")
+        if not res:
+            return {"goblin": name, "token": row["name"], "resources": sorted(r for r, sc in external.RESOURCES.items() if sc in row["scopes"].split(","))}
+        try:
+            return external.data(store, res, (today or date.today)(), dict(request.query_params))
+        except ValueError:
+            raise HTTPException(422, "bad parameter")
+
     # ---------------- Opt-in summary for gateway / Orb ----------------
     @app.get("/summary")
     def summary(request: Request, scope: str = "shared"):
@@ -376,6 +431,16 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         if "robinhood_main" in share() or every:
             m = main_portfolio()
             out["robinhood_main"] = m and {"as_of": m.get("as_of"), "source": m.get("source"), "balances": m.get("balances")}
+        ext = external.summary(store, (today or date.today)()) if share() & {"bills", "alerts", "savings", "goals"} or every else {}
+        if "bills" in share() or every:
+            out["bills"] = {"next_7d": ext["bills_7d"], "next_30d": ext["bills_30d"], "next": ext["next_bill"]}
+        if "alerts" in share() or every:
+            out["alerts"] = {"total": ext["alerts_total"], "critical": ext["alerts_critical"], "warning": ext["alerts_warning"]}
+        if "savings" in share() or every:
+            out["savings"] = {"total": ext["savings_total"], "free": ext["savings_free"], "earmarked": ext["savings_earmarked"]}
+        if "goals" in share() or every:
+            gv = plan.goals_view(store, (today or date.today)())
+            out["goals"] = [{"name": g["name"], "target": g["target"], "allocated": g["allocated"], "pct": g["pct"]} for g in gv["items"] if g["status"] == "active"]
         if "robinhood_agent" in share() or every:
             a = fetch("agent")
             out["robinhood_agent"] = a and {"as_of": a.get("as_of"), "balances": a.get("balances")}

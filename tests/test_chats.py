@@ -181,3 +181,84 @@ def test_category_tag_controls_whether_it_counts_as_spending():
     assert spent()["Investing"] == pytest.approx(-tx["amount"], abs=0.01)      # flip the tag and it counts
     assert c.put("/api/categories/Nope", headers=H, json={"kind": "expense"}).status_code == 404
     assert c.put("/api/categories/Food", headers=H, json={"kind": "bogus"}).status_code == 422
+
+
+# ---------------------------------------------------------------- goals through the agent, and linking goals/notes to a chat
+def goal_stack(script):
+    c, db, log = stack(script, seeded=False)
+    db.conn.execute("INSERT INTO savings(name,kind,balance,apy) VALUES('Axos HYSA','savings',10000,4.2)"); db.conn.commit()
+    return c, db, log
+
+
+def test_agent_creates_goal_funds_it_and_checks_affordability():
+    script = [[("add_goal", {"name": "House", "target": 9000}), ("add_goal", {"name": "Car", "target": 3000, "monthly": 200}), ("can_i_afford", {"amount": 500}), ("list_goals", {}), ("monthly_plan", {})]]
+    c, db, _ = goal_stack(script)
+    cid = c.post("/api/chats", headers=H).json()["chat"]["id"]
+    tr = {t["tool"]: t for t in say(c, cid, "set up a house goal of 9000 and a car goal").json()["messages"][-1]["trace"]}
+    assert all(t["ok"] for t in tr.values()), tr
+    goals = {g["name"]: g for g in c.get("/api/goals", headers=H).json()["items"]}
+    assert goals["House"]["allocated"] == 9000 and goals["Car"]["allocated"] == 1000 and goals["Car"]["shortfall"] == 2000      # free money went to the first, then the rest
+    assert c.get("/api/goals", headers=H).json()["free"] == 0
+    res = [t for t in say(c, c.post("/api/chats", headers=H).json()["chat"]["id"], "afford?").json()["messages"][-1]["trace"] if t["tool"] == "can_i_afford"]
+    assert res  # the tool ran against the books as they now stand
+
+
+def test_agent_goal_tools_reject_bad_requests_and_cannot_overspend_savings():
+    script = [[("add_goal", {"name": "x"}), ("add_goal", {"name": "x", "target": -5}), ("add_goal", {"name": "x", "target": 10, "deadline": "2020-01-01"}), ("fund_goal", {"goal_id": 999, "amount": 5}),
+               ("fund_goal", {"goal_id": 1}), ("can_i_afford", {})]]
+    c, db, _ = goal_stack(script)
+    g = c.post("/api/goals", headers=H, json={"name": "Seed", "target": 10000}).json()          # takes all 10000 of the free money
+    cid = c.post("/api/chats", headers=H).json()["chat"]["id"]
+    trace = say(c, cid, "do bad things").json()["messages"][-1]["trace"]
+    assert [t["ok"] for t in trace] == [False] * 6
+    assert db.one("SELECT COUNT(*) n FROM goals")["n"] == 1                                       # nothing sneaked in
+
+
+def test_fund_goal_tool_respects_free_money_and_offers_undo_data():
+    c, db, log = goal_stack([[("fund_goal", {"goal_id": 1, "amount": 600})]])
+    c.post("/api/goals", headers=H, json={"name": "Trip", "target": 5000, "auto_allocate": False})
+    cid = c.post("/api/chats", headers=H).json()["chat"]["id"]
+    t = say(c, cid, "put 600 toward the trip").json()["messages"][-1]["trace"][0]
+    assert t["ok"] and t["result"]["funded"] and t["result"]["earmarked_now"] == 600 and t["result"]["earmarked_before"] == 0
+    # the UI's Undo = release exactly what was added
+    c.post("/api/goals/1/release", headers=H, json={"amount": 600, "place": ""})
+    assert c.get("/api/goals", headers=H).json()["free"] == 10000
+
+
+def test_linked_goals_and_notes_reach_the_model_and_survive_changes():
+    c, db, log = goal_stack([])
+    g = c.post("/api/goals", headers=H, json={"name": "House", "target": 9000, "deadline": "2027-11-07"}).json()
+    n = c.post("/api/notes", headers=H, json={"title": "House plan", "body": "Put the CD money into the house fund."}).json()
+    chat = c.post("/api/chats", headers=H, json={"links": [{"kind": "goal", "ref_id": g["id"]}, {"kind": "note", "ref_id": n["id"]}]}).json()
+    assert [(l["kind"], l["title"]) for l in chat["links"]] == [("goal", "House"), ("note", "House plan")]
+    say(c, chat["chat"]["id"], "how is it going?")
+    sysmsg = log[-1]["body"]["messages"][0]["content"]
+    assert "GOAL #%d House: target $9,000.00, earmarked $9,000.00, still needs $0.00" % g["id"] in sysmsg and "deadline 2027-11-07" in sysmsg and "Put the CD money into the house fund." in sysmsg
+    # attach / detach later, with validation
+    other = c.post("/api/chats", headers=H).json()["chat"]["id"]
+    assert c.post(f"/api/chats/{other}/links", headers=H, json={"kind": "goal", "ref_id": g["id"]}).json()["links"][0]["title"] == "House"
+    assert c.post(f"/api/chats/{other}/links", headers=H, json={"kind": "goal", "ref_id": 999}).status_code == 404
+    assert c.post(f"/api/chats/{other}/links", headers=H, json={"kind": "wiki", "ref_id": 1}).status_code == 422
+    assert c.delete(f"/api/chats/{other}/links/goal/{g['id']}", headers=H).json()["links"] == []
+    # editing the note is reflected next time; deleting the goal drops its link without breaking the chat
+    c.put(f"/api/notes/{n['id']}", headers=H, json={"title": "House plan v2", "body": "New idea."})
+    c.delete(f"/api/goals/{g['id']}", headers=H)
+    r = say(c, chat["chat"]["id"], "and now?").json()
+    assert [(l["kind"], l["title"]) for l in r["links"]] == [("note", "House plan v2")]
+    assert "GOAL" not in log[-1]["body"]["messages"][0]["content"] and "New idea." in log[-1]["body"]["messages"][0]["content"]
+    assert c.get("/api/chats/%d" % chat["chat"]["id"], headers=H).json()["usage"]["used"] > 0
+    c.delete(f"/api/chats/{chat['chat']['id']}", headers=H)
+    assert db.one("SELECT COUNT(*) n FROM chat_links WHERE chat_id=?", (chat["chat"]["id"],))["n"] == 0
+
+
+def test_savings_summary_tool_shows_free_and_earmarked():
+    c, db, _ = goal_stack([[("savings_summary", {})]])
+    c.post("/api/goals", headers=H, json={"name": "House", "target": 9000})
+    cid = c.post("/api/chats", headers=H).json()["chat"]["id"]
+    t = say(c, cid, "savings?").json()["messages"][-1]["trace"][0]
+    assert t["ok"]
+    out = c.post("/api/agent/chat", headers=H, json={"messages": [{"role": "user", "content": "savings?"}]}).json()
+    body = [x for x in out["reply"].removeprefix("RESULTS:").split("||") if x.startswith("{")]
+    import json as _j
+    s = _j.loads(body[0])
+    assert (s["total_savings"], s["earmarked_for_goals"], s["free_savings"]) == (10000, 9000, 1000)

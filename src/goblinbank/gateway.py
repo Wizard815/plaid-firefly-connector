@@ -70,6 +70,18 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
                 out[name] = {"error": "unavailable"}
         return {"goblins": out}
 
+    @app.get("/api/v1/me")
+    @app.get("/api/v1/me/{resource:path}")
+    async def me(request: Request, resource: str = ""):
+        """For Home Assistant and scripts: Authorization: Bearer gb_<goblin>_<secret>. The token is checked inside that goblin."""
+        tok = bearer(request) or ""
+        parts = tok.split("_", 2)
+        g = goblins.get(parts[1]) if len(parts) == 3 and parts[0] == "gb" else None
+        if not g:
+            raise HTTPException(401, "invalid token")           # same answer for an unknown goblin and a bad secret
+        r = await run_in_threadpool(client.get, f"{g['url']}/external/{resource}", params=dict(request.query_params), headers={**goblin_headers(g), "X-API-Token": tok})
+        return Response(r.content, r.status_code, media_type=r.headers.get("content-type"))
+
     @app.post("/internal/items")
     async def register_item(request: Request):
         g = goblins.get(request.headers.get("x-goblin", ""))

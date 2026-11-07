@@ -284,7 +284,7 @@ def recurring_found(db, today: date) -> list[dict]:
 def suggestions(db, today: date) -> list[dict]:
     """Detected repeating payments not yet tracked, plus anything the agent proposed. Dismissed ones stay hidden."""
     subs = db.all("SELECT name FROM subscriptions")
-    hidden = {r["key"] for r in db.all("SELECT key FROM dismissed")}
+    hidden = {r["key"] for r in db.all("SELECT key FROM dismissed")} | {r["match_key"] for r in db.all("SELECT match_key FROM subscriptions WHERE match_key IS NOT NULL")}   # accepted under any name stays hidden
     out = []
     for r in recurring_found(db, today):
         if r["direction"] != "out" or r["key"] in hidden or any(recur.same_payee(r["name"], s["name"]) for s in subs):
@@ -323,6 +323,15 @@ def alerts(db, today: date) -> list[dict]:
         out.append({"kind": "missed_payment", "severity": "critical" if m["misses"] >= 2 else "warning", "sub_id": m["sub_id"],
                     "title": f"{m['name']} not seen in {m['account']}" + (f" ({m['misses']} times in a row)" if m["misses"] > 1 else ""),
                     "detail": "Expected " + ", ".join(m["missed_dates"])})
+    from goblinbank import plan                       # imported here: plan builds on this module
+    gv = plan.goals_view(db, today)
+    if gv["overallocated"]:
+        out.append({"kind": "overallocated", "severity": "warning", "title": "You have earmarked more than you have saved",
+                    "detail": f"Saved {gv['total']:,.2f}, earmarked {gv['allocated']:,.2f}. Release some or wait for the balance to recover."})
+    elif gv["free"] >= 50 and any(g["status"] == "active" and g["shortfall"] > 0 for g in gv["items"]):
+        top = next(g for g in gv["items"] if g["status"] == "active" and g["shortfall"] > 0)
+        out.append({"kind": "free_savings", "severity": "info", "title": f"${gv['free']:,.2f} of your savings is free",
+                    "detail": f"{top['name']} still needs ${top['shortfall']:,.2f}"})
     for s in savings_summary(db, today)["maturing_soon"]:
         if s["days_to_maturity"] <= 30:
             out.append({"kind": "maturing", "severity": "info", "title": f"{s['name']} matures in {s['days_to_maturity']} days", "detail": f"About {s.get('value_at_maturity', s['balance']):,.2f}"})
@@ -353,6 +362,8 @@ def overview(db, days: int, today: date) -> dict:
     for a in accts:
         by_kind[a["kind"]] = round(by_kind.get(a["kind"], 0) + (a["balance"] or 0), 2)
     sav = savings_summary(db, today)
+    from goblinbank import plan
+    gv = plan.goals_view(db, today)
     unlinked = sum(i["balance"] for i in sav["items"] if not i["linked"])
     if unlinked:
         by_kind["savings (manual)"] = round(unlinked, 2)
@@ -360,4 +371,4 @@ def overview(db, days: int, today: date) -> dict:
     subs = db.all("SELECT * FROM subscriptions WHERE active=1")
     monthly = sum(sub_view(s, today)["monthly"] for s in subs)
     return {"net_worth": net_worth(db), "by_kind": by_kind, "accounts": accts, "subscriptions_monthly": round(monthly, 2), "upcoming": up,
-            "events": db.all("SELECT * FROM events ORDER BY ts DESC LIMIT 10"), "alerts": alerts(db, today), "savings_total": sav["total"]}
+            "events": db.all("SELECT * FROM events ORDER BY ts DESC LIMIT 10"), "alerts": alerts(db, today), "savings_total": gv["total"], "savings_free": gv["free"], "goals_needed": gv["needed"]}

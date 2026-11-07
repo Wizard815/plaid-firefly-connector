@@ -13,7 +13,7 @@ import httpx
 from fastapi import HTTPException, Request
 from pydantic import BaseModel
 
-from goblinbank import crypto, feed, ledger, recur, settings as cfg, sync
+from goblinbank import crypto, feed, ledger, plan, recur, settings as cfg, sync
 
 PRESETS = [
     {"name": "Ollama (this machine)", "kind": "openai", "base_url": "http://host.docker.internal:11434/v1", "model": "llama3.1", "tools": True},
@@ -119,7 +119,45 @@ def build_tools(ctx):
         return ledger.suggestions(store, today())
 
     def t_savings(a):
-        return ledger.savings_summary(store, today())
+        gv, sv = plan.goals_view(store, today()), ledger.savings_summary(store, today())
+        return {"places": gv["places"], "total_savings": gv["total"], "earmarked_for_goals": gv["allocated"], "free_savings": gv["free"], "overallocated": gv["overallocated"],
+                "weighted_apy": sv["weighted_apy"], "yearly_interest": sv["yearly_interest"], "maturing_soon": sv["maturing_soon"],
+                "goals": [{k: g[k] for k in ("id", "name", "target", "allocated", "shortfall", "pct", "deadline", "priority", "monthly", "status") if k in g} for g in gv["items"]]}
+
+    def t_goals(a):
+        gv = plan.goals_view(store, today())
+        return {"free_savings": gv["free"], "total_savings": gv["total"], "earmarked": gv["allocated"], "still_needed_for_goals": gv["needed"],
+                "goals": [{k: v for k, v in g.items() if k != "allocations"} | {"earmarks": g["allocations"]} for g in gv["items"]]}
+
+    def t_add_goal(a):
+        try:
+            g = plan.add_goal(store, str(a.get("name", "")), float(a["target"]), today(), a.get("deadline") or None, int(a.get("priority", 2)), float(a.get("monthly", 0) or 0), str(a.get("note", "")), a.get("auto_allocate", True))
+        except (plan.PlanError, KeyError, TypeError, ValueError) as e:
+            return {"error": f"could not add the goal: {e}"}
+        return {"added": True, "id": g["id"], "name": g["name"], "target": g["target"], "earmarked_now": g["allocated"], "shortfall": g["shortfall"], "funded": g["funded"],
+                "ready_date": g.get("ready_date"), "monthly_needed": g.get("monthly_needed")}
+
+    def t_fund_goal(a):
+        try:
+            gid, amt = int(a["goal_id"]), float(a["amount"])
+            before = {x["place"]: x["amount"] for x in next(g for g in plan.goals_view(store, today())["items"] if g["id"] == gid)["allocations"]}.get(a.get("place") or "", 0.0)
+            g = plan.fund(store, gid, amt, today(), a.get("place") or "")
+        except (plan.PlanError, KeyError, StopIteration, TypeError, ValueError) as e:
+            return {"error": f"could not earmark that: {e}"}
+        return {"funded": True, "goal_id": g["id"], "name": g["name"], "added": amt, "place": a.get("place") or "", "earmarked_before": before, "earmarked_now": g["allocated"], "shortfall": g["shortfall"]}
+
+    def t_afford(a):
+        try:
+            return plan.afford(store, float(a["amount"]), today())
+        except (KeyError, TypeError, ValueError):
+            return {"error": "amount is required"}
+
+    def t_plan(a):
+        m = a.get("month") or today().strftime("%Y-%m")
+        try:
+            return plan.monthly_plan(store, m, today())
+        except ValueError:
+            return {"error": "month must be YYYY-MM"}
 
     def t_alerts(a):
         return ledger.alerts(store, today())
@@ -198,7 +236,14 @@ def build_tools(ctx):
         ("list_subscriptions", "Every subscription/recurring bill: amount, repeat interval, next due date, monthly cost, who pays, bound account.", S({}), t_subs),
         ("upcoming_bills", "Bills due in the next N days with each occurrence dated, the total you pay, and what others pay.", S({"days": INT}), t_upcoming),
         ("find_recurring_payments", "Payments that repeat at a steady interval and amount in the transaction history but are not tracked yet, plus pending proposals.", S({}), t_recurring),
-        ("savings_summary", "Savings, CDs and similar: balances, APY, yearly interest, maturity dates and values, goals.", S({}), t_savings),
+        ("savings_summary", "Where the savings are (accounts, CDs...), total, how much is earmarked for goals and how much is free, APY and maturities.", S({}), t_savings),
+        ("list_goals", "Savings goals (things to save for): target, earmarked amount, shortfall, deadline, monthly needed. Also the free savings.", S({}), t_goals),
+        ("can_i_afford", "Check whether a purchase fits in FREE savings (not earmarked) and how long saving would take at the monthly plan's leftover.", S({"amount": NUM}, ["amount"]), t_afford),
+        ("monthly_plan", "Monthly income vs bills, budgets and goal contributions, with what is left over. month is YYYY-MM (default this month).", S({"month": STR}), t_plan),
+        ("add_goal", "Create a savings goal. ONLY when the user asks. Free savings are earmarked automatically; with none free it starts unfunded. Optional deadline (YYYY-MM-DD), priority 1 high..3 low, monthly contribution.",
+         S({"name": STR, "target": NUM, "deadline": DATE, "priority": INT, "monthly": NUM, "note": STR}, ["name", "target"]), t_add_goal),
+        ("fund_goal", "Earmark FREE savings for a goal (goal_id from list_goals). ONLY when the user asks. Optional place = a savings place key like s:3 or a:abc to take it from one account.",
+         S({"goal_id": INT, "amount": NUM, "place": STR}, ["goal_id", "amount"]), t_fund_goal),
         ("get_alerts", "Active alerts: overdrawn or low accounts, expected payments not seen, CDs maturing, bills due soon.", S({}), t_alerts),
         ("project_balance", "Estimate cash balance over the next N days from today's balances, upcoming bills and detected steady income. Excludes everyday spending.",
          S({"days": INT, "account_id": STR, "include_income": {"type": "boolean"}}), t_project),
@@ -221,7 +266,8 @@ def system_prompt(name: str, today: date) -> str:
     return (f"You are Goblin, the finance assistant for {name}'s private bank dashboard. Today is {today.isoformat()}.\n"
             "You can only see data through the tools. Use them for every figure; never guess or invent numbers. Use calculate for arithmetic and show the working briefly.\n"
             "Amounts are signed: positive is money in, negative is money out. Projections are estimates that leave out everyday spending, so say so.\n"
-            "You cannot move money. You may save planner notes. Add a subscription only when the user explicitly asks you to (add_subscription); otherwise propose it. Be concise.")
+            "You cannot move money. You may save planner notes. Add a subscription, add a goal or earmark savings only when the user explicitly asks (add_subscription, add_goal, fund_goal); otherwise propose it. "
+            "Savings model: savings sit in places (accounts, CDs); goals are what they are for; earmarked money is reserved for a goal and free money is the rest. Before saying someone can afford something, call can_i_afford. Be concise.")
 
 
 def _call_openai(http, prov, key, system, messages, tools):
@@ -274,25 +320,27 @@ def _call_anthropic(http, prov, key, system, messages, tools):
             "tool_calls": [{"id": b["id"], "name": b["name"], "args": b.get("input") or {}} for b in blocks if b["type"] == "tool_use"]}
 
 
-WRITE_TOOLS = {"add_subscription", "write_note", "propose_subscription"}
+WRITE_TOOLS = {"add_subscription", "write_note", "propose_subscription", "add_goal", "fund_goal"}
 
 
 def est_tokens(text: str) -> int:
     return len(text) // 4 + 1
 
 
-def context_usage(ctx, prov: dict, summary: str, msgs: list[dict], use_tools: bool) -> dict:
+def context_usage(ctx, prov: dict, summary: str, msgs: list[dict], use_tools: bool, extra: str = "") -> dict:
     """Rough token count (about 4 characters per token) against the model's context window."""
-    base = est_tokens(system_prompt(ctx.name, ctx.today()) + (json.dumps([(n, d, s) for n, d, s, _ in build_tools(ctx)]) if use_tools else "") + (summary or ""))
+    base = est_tokens(system_prompt(ctx.name, ctx.today()) + (json.dumps([(n, d, s) for n, d, s, _ in build_tools(ctx)]) if use_tools else "") + (summary or "") + (extra or ""))
     used = base + (0 if use_tools else 3500) + sum(est_tokens(m["content"]) + 4 for m in msgs)       # no-tool mode carries a data snapshot (up to 14k chars)
     limit = int(prov.get("context_tokens") or 8192)
     return {"used": used, "limit": limit, "pct": round(used / limit, 3)}
 
 
-def run_chat(ctx, prov: dict, key: str, history: list[dict], max_steps: int = 8, summary: str = "", use_tools: bool | None = None) -> dict:
+def run_chat(ctx, prov: dict, key: str, history: list[dict], max_steps: int = 8, summary: str = "", use_tools: bool | None = None, extra: str = "") -> dict:
     tools = build_tools(ctx)
     by_name = {n: f for n, _, _, f in tools}
     system = system_prompt(ctx.name, ctx.today())
+    if extra:
+        system += "\nThe user linked these items to this chat. Treat them as what the conversation is about:\n" + extra
     if summary:
         system += "\nEarlier in this conversation (compacted summary):\n" + summary
     call = _call_anthropic if prov["kind"] == "anthropic" else _call_openai
@@ -324,9 +372,61 @@ def run_chat(ctx, prov: dict, key: str, history: list[dict], max_steps: int = 8,
     return {"reply": "I hit my step limit before finishing. Try a narrower question.", "trace": trace, "steps": max_steps}
 
 
+# ------------------------------------------------------------------ discovering which models a server offers
+def _origin(base_url: str) -> str:
+    u = urlparse(base_url)
+    return f"{u.scheme}://{u.netloc}"
+
+
+def list_models(kind: str, base_url: str, key: str, transport=None) -> list[dict]:
+    """Ask the server what it has. OpenAI-compatible servers answer GET /models (Ollama and LM Studio included);
+    Anthropic answers GET /v1/models. Ollama's own /api/tags is the fallback. Returns [{id, context}]."""
+    base = base_url.rstrip("/")
+    with httpx.Client(timeout=15, transport=transport) as http:
+        if kind == "anthropic":
+            r = http.get(base + "/v1/models", headers={"x-api-key": key, "anthropic-version": "2023-06-01"}, params={"limit": 1000})
+            r.raise_for_status()
+            return [{"id": m["id"], "context": None} for m in r.json().get("data", [])]
+        hdr = {"Authorization": f"Bearer {key}"} if key else {}
+        try:
+            r = http.get(base + "/models", headers=hdr)
+            r.raise_for_status()
+            body = r.json()
+            rows = body.get("data") or body.get("models") or []
+            out = [{"id": m.get("id") or m.get("name"), "context": m.get("context_length") or m.get("max_context_length")} for m in rows if isinstance(m, dict) and (m.get("id") or m.get("name"))]
+            if out:
+                return out
+        except (httpx.HTTPError, ValueError):
+            pass
+        r = http.get(_origin(base_url) + "/api/tags")                  # Ollama's native listing
+        r.raise_for_status()
+        return [{"id": m["name"], "context": None} for m in r.json().get("models", []) if m.get("name")]
+
+
+def model_context(base_url: str, model: str, transport=None) -> int | None:
+    """Ollama can say how long a context a model supports (POST /api/show). None when the server cannot tell."""
+    try:
+        with httpx.Client(timeout=15, transport=transport) as http:
+            r = http.post(_origin(base_url) + "/api/show", json={"model": model, "name": model})
+            r.raise_for_status()
+            info = r.json().get("model_info") or {}
+            for k, v in info.items():
+                if k.endswith(".context_length") and isinstance(v, int):
+                    return v
+    except (httpx.HTTPError, ValueError):
+        pass
+    return None
+
+
+def auto_name(base_url: str, model: str) -> str:
+    host = (urlparse(base_url).hostname or "").lower()
+    label = next((p["name"].split(" (")[0] for p in PRESETS if (urlparse(p["base_url"]).hostname or "") == host and urlparse(p["base_url"]).port == urlparse(base_url).port), None)
+    return f"{label or host} · {model}"
+
+
 # ------------------------------------------------------------------ routes
 class ProviderIn(BaseModel):
-    name: str
+    name: str = ""                      # optional: filled in from the address and model when blank
     kind: str = "openai"
     base_url: str
     model: str
@@ -351,8 +451,8 @@ def register(app, ctx):
     def check(p: ProviderIn):
         if p.kind not in ("openai", "anthropic"):
             raise HTTPException(422, "kind must be openai (any OpenAI-compatible server) or anthropic")
-        if not p.name.strip() or not p.model.strip():
-            raise HTTPException(422, "name and model required")
+        if not p.model.strip():
+            raise HTTPException(422, "pick or type a model")
         if not 1024 <= p.context_tokens <= 4_000_000:
             raise HTTPException(422, "context_tokens must be between 1024 and 4000000")
         if urlparse(p.base_url).scheme not in ("http", "https") or not urlparse(p.base_url).hostname:
@@ -374,7 +474,7 @@ def register(app, ctx):
         check(p)
         with store.tx() as c:
             cur = c.execute("INSERT INTO providers(name,kind,base_url,model,key_enc,tools,allow_cloud,context_tokens) VALUES(?,?,?,?,?,?,?,?)",
-                            (p.name.strip(), p.kind, p.base_url.strip(), p.model.strip(), crypto.encrypt(p.api_key) if p.api_key else "", int(p.tools), int(p.allow_cloud), p.context_tokens))
+                            ((p.name.strip() or auto_name(p.base_url, p.model.strip())), p.kind, p.base_url.strip(), p.model.strip(), crypto.encrypt(p.api_key) if p.api_key else "", int(p.tools), int(p.allow_cloud), p.context_tokens))
         return view(store.one("SELECT * FROM providers WHERE id=?", (cur.lastrowid,)))
 
     @app.put("/api/agent/providers/{pid}")
@@ -387,7 +487,7 @@ def register(app, ctx):
         key = row["key_enc"] if p.api_key is None else (crypto.encrypt(p.api_key) if p.api_key else "")
         with store.tx() as c:
             c.execute("UPDATE providers SET name=?,kind=?,base_url=?,model=?,key_enc=?,tools=?,allow_cloud=?,context_tokens=? WHERE id=?",
-                      (p.name.strip(), p.kind, p.base_url.strip(), p.model.strip(), key, int(p.tools), int(p.allow_cloud), p.context_tokens, pid))
+                      ((p.name.strip() or auto_name(p.base_url, p.model.strip())), p.kind, p.base_url.strip(), p.model.strip(), key, int(p.tools), int(p.allow_cloud), p.context_tokens, pid))
         return view(store.one("SELECT * FROM providers WHERE id=?", (pid,)))
 
     @app.delete("/api/agent/providers/{pid}")
@@ -396,6 +496,38 @@ def register(app, ctx):
         with store.tx() as c:
             c.execute("DELETE FROM providers WHERE id=?", (pid,))
         return {"deleted": pid}
+
+    class Discover(BaseModel):
+        kind: str = "openai"
+        base_url: str
+        api_key: str | None = None
+        provider_id: int | None = None       # reuse a saved key instead of retyping it
+        model: str | None = None
+
+    def discover_key(b: Discover) -> str:
+        if b.api_key:
+            return b.api_key
+        row = store.one("SELECT key_enc FROM providers WHERE id=?", (b.provider_id,)) if b.provider_id else None
+        return crypto.decrypt(row["key_enc"]) if row and row["key_enc"] else ""
+
+    @app.post("/api/agent/models")
+    def models(request: Request, b: Discover):
+        """The refresh button: what models does this server offer right now? Only your API key is sent, never your data."""
+        auth(request)
+        if b.kind not in ("openai", "anthropic") or urlparse(b.base_url).scheme not in ("http", "https") or not urlparse(b.base_url).hostname:
+            raise HTTPException(422, "pick a server type and a valid address")
+        try:
+            found = list_models(b.kind, b.base_url, discover_key(b), ctx.llm_transport)
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(502, f"the server answered {e.response.status_code} when asked for its models" + (" (check the API key)" if e.response.status_code in (401, 403) else ""))
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"could not reach {b.base_url} ({type(e).__name__}). Is it running?")
+        return {"models": sorted(found, key=lambda m: m["id"]), "local": is_local(b.base_url)}
+
+    @app.post("/api/agent/model-info")
+    def model_info(request: Request, b: Discover):
+        auth(request)
+        return {"context_tokens": model_context(b.base_url, b.model or "", ctx.llm_transport) if b.kind == "openai" else None}
 
     @app.get("/api/agent/tools")
     def tool_list(request: Request):
@@ -427,6 +559,25 @@ def register(app, ctx):
     def live(chat_id):
         return store.all("SELECT * FROM chat_messages WHERE chat_id=? AND compacted=0 ORDER BY id", (chat_id,))
 
+    def link_context(chat_id) -> tuple[str, list[dict]]:
+        """Resolve linked goals/notes to (text for the model, display rows for the UI). Deleted items just drop out."""
+        links, text = [], []
+        gv = None
+        for l in store.all("SELECT * FROM chat_links WHERE chat_id=? ORDER BY rowid", (chat_id,)):
+            if l["kind"] == "goal":
+                gv = gv or plan.goals_view(store, ctx.today())
+                g = next((x for x in gv["items"] if x["id"] == l["ref_id"]), None)
+                if g:
+                    links.append({"kind": "goal", "ref_id": g["id"], "title": g["name"]})
+                    text.append(f"GOAL #{g['id']} {g['name']}: target ${g['target']:,.2f}, earmarked ${g['allocated']:,.2f}, still needs ${g['shortfall']:,.2f}"
+                                + (f", deadline {g['deadline']}" if g.get("deadline") else "") + (f", planned ${g['monthly']:,.2f}/month" if g.get("monthly") else "") + f". Free savings overall: ${gv['free']:,.2f}.")
+            elif l["kind"] == "note":
+                n = store.one("SELECT * FROM notes WHERE id=?", (l["ref_id"],))
+                if n:
+                    links.append({"kind": "note", "ref_id": n["id"], "title": n["title"]})
+                    text.append(f"NOTE '{n['title']}' (by {n['author']}):\n{n['body'][:2500]}")
+        return "\n".join(text), links
+
     def chat_view(chat_id):
         chat = store.one("SELECT * FROM chats WHERE id=?", (chat_id,))
         if not chat:
@@ -435,8 +586,8 @@ def register(app, ctx):
         for m in msgs:
             m["trace"] = json.loads(m["trace"]) if m["trace"] else []
         prov = (store.one("SELECT * FROM providers WHERE id=?", (chat["provider_id"],)) if chat["provider_id"] else None) or store.one("SELECT * FROM providers ORDER BY id LIMIT 1")
-        usage = context_usage(ctx, prov, chat["summary"], [m for m in msgs if not m["compacted"]], bool(prov["tools"])) if prov else None
-        return {"chat": chat, "messages": msgs, "usage": usage}
+        usage = context_usage(ctx, prov, chat["summary"], [m for m in msgs if not m["compacted"]], bool(prov["tools"]), link_context(chat_id)[0]) if prov else None
+        return {"chat": chat, "messages": msgs, "usage": usage, "links": link_context(chat_id)[1]}
 
     def compact(chat, prov, key, keep=4) -> bool:
         rows = live(chat["id"])
@@ -462,13 +613,43 @@ def register(app, ctx):
         auth(request)
         return store.all("SELECT c.id, c.title, c.updated, c.provider_id, (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id=c.id) messages FROM chats c ORDER BY c.updated DESC")
 
+    class NewChat(BaseModel):
+        title: str | None = None
+        links: list[dict] = []              # [{kind: goal|note, ref_id}] to attach right away, e.g. "discuss this goal"
+
     @app.post("/api/chats")
-    def chat_new(request: Request):
+    def chat_new(request: Request, b: NewChat | None = None):
         auth(request)
         ts = sync.now()
         with store.tx() as c:
-            cur = c.execute("INSERT INTO chats(title,created,updated) VALUES('New chat',?,?)", (ts, ts))
+            cur = c.execute("INSERT INTO chats(title,created,updated) VALUES(?,?,?)", ((b.title or "New chat")[:80] if b else "New chat", ts, ts))
+            for l in (b.links if b else []):
+                if l.get("kind") in ("goal", "note") and isinstance(l.get("ref_id"), int):
+                    c.execute("INSERT OR IGNORE INTO chat_links VALUES(?,?,?)", (cur.lastrowid, l["kind"], l["ref_id"]))
         return chat_view(cur.lastrowid)
+
+    class LinkIn(BaseModel):
+        kind: str
+        ref_id: int
+
+    @app.post("/api/chats/{cid}/links")
+    def chat_link(request: Request, cid: int, b: LinkIn):
+        auth(request)
+        if b.kind not in ("goal", "note"):
+            raise HTTPException(422, "kind must be goal or note")
+        table = "goals" if b.kind == "goal" else "notes"
+        if not store.one("SELECT 1 FROM chats WHERE id=?", (cid,)) or not store.one(f"SELECT 1 FROM {table} WHERE id=?", (b.ref_id,)):
+            raise HTTPException(404, "chat or item not found")
+        with store.tx() as c:
+            c.execute("INSERT OR IGNORE INTO chat_links VALUES(?,?,?)", (cid, b.kind, b.ref_id))
+        return chat_view(cid)
+
+    @app.delete("/api/chats/{cid}/links/{kind}/{ref_id}")
+    def chat_unlink(request: Request, cid: int, kind: str, ref_id: int):
+        auth(request)
+        with store.tx() as c:
+            c.execute("DELETE FROM chat_links WHERE chat_id=? AND kind=? AND ref_id=?", (cid, kind, ref_id))
+        return chat_view(cid)
 
     @app.get("/api/chats/{cid}")
     def chat_get(request: Request, cid: int):
@@ -494,6 +675,7 @@ def register(app, ctx):
         auth(request)
         with store.tx() as c:
             c.execute("DELETE FROM chat_messages WHERE chat_id=?", (cid,))
+            c.execute("DELETE FROM chat_links WHERE chat_id=?", (cid,))
             c.execute("DELETE FROM chats WHERE id=?", (cid,))
         return {"deleted": cid}
 
@@ -519,11 +701,12 @@ def register(app, ctx):
         compacted = False
         try:
             msgs = live(cid)
-            if context_usage(ctx, row, chat["summary"], msgs, use_tools)["pct"] > 0.75 and len(msgs) > 5:       # make room before the model runs out
+            extra = link_context(cid)[0]
+            if context_usage(ctx, row, chat["summary"], msgs, use_tools, extra)["pct"] > 0.75 and len(msgs) > 5:       # make room before the model runs out
                 compacted = model_errors(row, lambda: compact(chat, row, key))
                 chat = store.one("SELECT * FROM chats WHERE id=?", (cid,))
             hist = [{"role": m["role"], "content": m["content"]} for m in live(cid)]
-            out = model_errors(row, lambda: run_chat(ctx, row, key, hist[-40:], summary=chat["summary"], use_tools=use_tools))
+            out = model_errors(row, lambda: run_chat(ctx, row, key, hist[-40:], summary=chat["summary"], use_tools=use_tools, extra=extra))
         except Exception:
             with store.tx() as c:                      # a failed turn leaves no half-saved question behind
                 c.execute("DELETE FROM chat_messages WHERE id=?", (mid,))

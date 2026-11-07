@@ -36,6 +36,7 @@ class AccountIn(BaseModel):
     kind: str | None = None
     balance: float | None = None
     min_balance: float | None = None
+    savings_mode: str | None = None        # auto | yes | no: does this account count as savings?
 
 
 class TxIn(BaseModel):
@@ -167,9 +168,13 @@ def register(app, ctx):
         if not row:
             bad("account not found", 404)
         manual = row["source"] == "manual"
-        if (a.balance is not None or a.kind or a.name) and not manual and (a.balance is not None or a.kind):
+        if not manual and (a.balance is not None or a.kind):
             bad("balance and type of a linked account come from the bank; only manual accounts can be edited", 409)
+        if a.savings_mode not in (None, "auto", "yes", "no"):
+            bad("savings_mode must be auto, yes or no")
         with store.tx() as c:
+            if a.savings_mode:
+                c.execute("UPDATE accounts SET savings_pool=? WHERE id=?", ({"auto": None, "yes": 1, "no": 0}[a.savings_mode], aid))
             if a.min_balance is not None:
                 c.execute("UPDATE accounts SET min_balance=? WHERE id=?", (a.min_balance if a.min_balance >= 0 else None, aid))
             if manual:
@@ -426,6 +431,8 @@ def register(app, ctx):
             cur = c.execute(f"INSERT INTO subscriptions({COLS},created) VALUES({','.join('?' * 17)},?)", sub_row(s, every, unit) + (sync.now(),))
             if sug.get("proposal_id"):
                 c.execute("UPDATE proposals SET status='accepted' WHERE id=?", (sug["proposal_id"],))
+            else:
+                c.execute("UPDATE subscriptions SET match_key=? WHERE id=?", (sug["key"], cur.lastrowid))
         return ledger.subscription(store, cur.lastrowid, ctx.today())
 
     class Dismiss(BaseModel):

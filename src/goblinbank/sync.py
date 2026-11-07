@@ -45,10 +45,10 @@ def sync_item(db, plaid: Plaid, item_id: str) -> dict:
         kind = KIND.get(a["type"], "cash")
         bal = a["balances"].get("current")
         with db.tx() as c:
-            c.execute("""INSERT INTO accounts(id,item_id,source,institution,name,kind,balance,currency,updated) VALUES(?,?,?,?,?,?,?,?,?)
-                         ON CONFLICT(id) DO UPDATE SET balance=excluded.balance,name=excluded.name,updated=excluded.updated""",
+            c.execute("""INSERT INTO accounts(id,item_id,source,institution,name,kind,balance,currency,updated,subtype) VALUES(?,?,?,?,?,?,?,?,?,?)
+                         ON CONFLICT(id) DO UPDATE SET balance=excluded.balance,name=excluded.name,updated=excluded.updated,subtype=excluded.subtype""",
                       (a["account_id"], item_id, "plaid", inst, a.get("official_name") or a["name"], kind, bal,
-                       a["balances"].get("iso_currency_code") or "USD", now()))
+                       a["balances"].get("iso_currency_code") or "USD", now(), a.get("subtype")))
         record_balance(db, a["account_id"], a["name"], bal, kind)
 
     cursor, more = row["cursor"], True
