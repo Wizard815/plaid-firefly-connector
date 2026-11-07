@@ -70,7 +70,7 @@ def test_upcoming_window_is_adjustable(api):
     c.post("/api/subscriptions", headers=H, json=sub(name="Monthly", amount=50, next_date="2026-11-20"))
     u7, u30, u365 = (c.get(f"/api/upcoming?days={d}", headers=H).json() for d in (7, 30, 365))
     assert u7["total"] == 10 and u30["total"] == 10 * 5 + 50 and u365["count"] > u30["count"]
-    assert u30["by_category"] == {"Subscriptions": 90.0}
+    assert u30["by_category"] == {"Subscriptions": 100.0}
     assert c.get("/api/overview?days=7", headers=H).json()["upcoming"]["total"] == 10
     assert c.get("/api/upcoming?days=0", headers=H).json()["days"] == 1
 
