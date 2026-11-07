@@ -64,7 +64,7 @@ def test_plaid_exchange_encrypts_token_and_syncs():
     stored = db.one("SELECT token_enc FROM plaid_items")["token_enc"]
     assert "access-SECRET" not in stored                       # encrypted at rest
     # signs flipped: spending negative, income positive
-    amts = {t["id"]: t["amount"] for t in c.get("/api/transactions", headers=H).json()}
+    amts = {t["id"]: t["amount"] for t in c.get("/api/transactions?limit=500", headers=H).json()["items"]}
     assert amts == {"t1": -15.99, "t2": 2000.0}
     ov = c.get("/api/overview", headers=H).json()
     assert ov["net_worth"] == 800.0                            # 1000 cash - 200 card owed
@@ -102,7 +102,7 @@ def test_subscriptions_crud_totals_ics_caldav(monkeypatch):
     c.post("/api/subscriptions", headers=H, json=mkb(name="Spotify", amount=10.0, cycle="monthly"))
     t = c.get("/api/subscriptions", headers=H).json()
     assert t["monthly_total"] == 20.0 and t["yearly_total"] == 240.0
-    assert c.post("/api/subscriptions", headers=H, json=mkb(cycle="daily")).status_code == 422
+    assert c.post("/api/subscriptions", headers=H, json=mkb(cycle="fortnightly")).status_code == 422
     assert c.post("/api/subscriptions", headers=H, json=mkb(next_date="soon")).status_code == 422
     assert c.put(f"/api/subscriptions/{s['id']}", headers=H, json=mkb(active=False)).json()["active"] == 0
     assert c.get("/api/subscriptions", headers=H).json()["monthly_total"] == 10.0   # paused excluded
@@ -125,7 +125,7 @@ def test_csv_import_paypal_venmo_cashapp():
     v = c.post("/import/csv?provider=venmo", headers=H, content=venmo).json()
     assert v["added"] == 1
     assert c.post("/import/csv", headers=H, content=cash).json()["provider"] == "cashapp"
-    amts = sorted(t["amount"] for t in c.get("/api/transactions", headers=H).json())
+    amts = sorted(t["amount"] for t in c.get("/api/transactions?limit=500", headers=H).json()["items"])
     assert amts == [-25.0, -12.5, -8.0]
     assert c.post("/import/csv", headers=H, content="a,b\n1,2\n").status_code == 422
 
@@ -319,7 +319,7 @@ def test_plaid_item_removal_deletes_data():
     c.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "Huntington"})
     assert c.get("/api/plaid/items", headers=H).json() == [{"item_id": "item-1", "institution": "Huntington"}]
     assert c.delete("/api/plaid/items/item-1", headers=H).json()["accounts"] == 2
-    assert c.get("/api/accounts", headers=H).json() == [] and c.get("/api/transactions", headers=H).json() == []
+    assert c.get("/api/accounts", headers=H).json() == [] and c.get("/api/transactions?limit=500", headers=H).json()["items"] == []
     assert c.delete("/api/plaid/items/item-1", headers=H).status_code == 404
 
 

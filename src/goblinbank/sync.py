@@ -1,11 +1,11 @@
 """Pull data from Plaid into the goblin DB and record money-movement events."""
 from datetime import datetime, timezone
 
-from goblinbank import crypto
+from goblinbank import crypto, ledger, recur
 from goblinbank.plaid import Plaid
 
 KIND = {"depository": "cash", "credit": "credit", "investment": "investment", "loan": "loan", "brokerage": "investment"}
-CYCLE = {"WEEKLY": "weekly", "BIWEEKLY": "biweekly", "SEMI_MONTHLY": "monthly", "MONTHLY": "monthly", "ANNUALLY": "yearly"}
+CYCLE = {"WEEKLY": (1, "week"), "BIWEEKLY": (2, "week"), "SEMI_MONTHLY": (1, "month"), "MONTHLY": (1, "month"), "ANNUALLY": (1, "year")}
 
 
 def now() -> str:
@@ -57,11 +57,16 @@ def sync_item(db, plaid: Plaid, item_id: str) -> dict:
         for t in r.get("added", []) + r.get("modified", []):
             amt = -float(t["amount"])        # Plaid: positive = outflow. We store positive = inflow.
             is_new = db.one("SELECT 1 FROM transactions WHERE id=?", (t["transaction_id"],)) is None
+            pfc = t.get("personal_finance_category") or {}
+            pcat = pfc.get("detailed") or pfc.get("primary") or ""
+            cat = ledger.categorize(db, t.get("merchant_name") or t["name"], amt, pcat)
             with db.tx() as c:
-                c.execute("INSERT OR REPLACE INTO transactions VALUES(?,?,?,?,?,?,?,?,?)",
+                c.execute("""INSERT INTO transactions(id,account_id,date,name,amount,currency,category,pending,source,plaid_category) VALUES(?,?,?,?,?,?,?,?,?,?)
+                             ON CONFLICT(id) DO UPDATE SET account_id=excluded.account_id, date=excluded.date, name=excluded.name, amount=excluded.amount,
+                               pending=excluded.pending, plaid_category=excluded.plaid_category,
+                               category=CASE WHEN transactions.category_locked=1 THEN transactions.category ELSE excluded.category END""",
                           (t["transaction_id"], t["account_id"], t["date"], t.get("merchant_name") or t["name"], amt,
-                           t.get("iso_currency_code") or "USD",
-                           (t.get("personal_finance_category") or {}).get("primary", ""), int(t.get("pending", False)), "plaid"))
+                           t.get("iso_currency_code") or "USD", cat, int(t.get("pending", False)), "plaid", pcat))
                 if is_new:
                     c.execute("INSERT OR IGNORE INTO events VALUES(?,?,?,?,?,?,?)",
                               (f"tx:{t['transaction_id']}", f"{t['date']}T00:00:00+00:00", "transaction",
@@ -111,10 +116,10 @@ def sync_recurring(db, plaid: Plaid, token: str):
         amt = abs(float((s.get("last_amount") or s.get("average_amount") or {}).get("amount", 0)))
         nxt = s.get("predicted_next_date") or s["last_date"]
         with db.tx() as c:
-            c.execute("""INSERT INTO subscriptions(name,amount,cycle,next_date,category,source,plaid_stream_id)
-                         VALUES(?,?,?,?,?,?,?) ON CONFLICT(plaid_stream_id) DO UPDATE SET amount=excluded.amount,next_date=excluded.next_date""",
-                      (s.get("merchant_name") or s["description"], amt, CYCLE[s["frequency"]], nxt,
-                       (s.get("personal_finance_category") or {}).get("primary", "").title(), "plaid", s["stream_id"]))
+            ev, un = CYCLE[s["frequency"]]
+            c.execute("""INSERT INTO subscriptions(name,amount,cycle,every,unit,next_date,category,source,plaid_stream_id,created)
+                         VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(plaid_stream_id) DO UPDATE SET amount=excluded.amount,next_date=excluded.next_date""",
+                      (s.get("merchant_name") or s["description"], amt, recur.label(ev, un), ev, un, nxt, "Subscriptions", "plaid", s["stream_id"], now()))
 
 
 def sync_all(db, plaid: Plaid) -> list[dict]:

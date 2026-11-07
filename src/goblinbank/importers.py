@@ -77,14 +77,15 @@ def parse(text: str, provider: str | None = None) -> tuple[str, list[dict]]:
 def store(db, provider: str, rows: list[dict]) -> int:
     acct = f"manual:{provider}"
     from goblinbank.sync import money, now
+    from goblinbank import ledger
     with db.tx() as c:
         c.execute("INSERT OR IGNORE INTO accounts(id,source,institution,name,kind,balance,updated) VALUES(?,?,?,?,?,?,?)",
                   (acct, "csv", provider.title(), f"{provider.title()} (CSV import)", "cash", None, now()))
     added = 0
     for r in rows:
         with db.tx() as c:
-            cur = c.execute("INSERT OR IGNORE INTO transactions(id,account_id,date,name,amount,source) VALUES(?,?,?,?,?,?)",
-                            (r["id"], acct, r["date"], r["name"], r["amount"], "csv"))
+            cur = c.execute("INSERT OR IGNORE INTO transactions(id,account_id,date,name,amount,source,category) VALUES(?,?,?,?,?,?,?)",
+                            (r["id"], acct, r["date"], r["name"], r["amount"], "csv", ledger.categorize(db, r["name"], r["amount"])))
             if cur.rowcount:
                 added += 1
                 c.execute("INSERT OR IGNORE INTO events VALUES(?,?,?,?,?,?,?)",

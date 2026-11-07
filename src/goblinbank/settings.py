@@ -17,7 +17,7 @@ SPEC = {
     "rh_mcp_tool_positions": ("str", False, "RH_MCP_TOOL_POSITIONS"),
     "rh_mcp_tool_history": ("str", False, "RH_MCP_TOOL_HISTORY"),
     # Plaid cost guard. Rates are YOURS to enter: Plaid shows them in its dashboard, not in any public price list.
-    "plaid_rate_item_month": ("num", False, ""), "plaid_budget_month": ("num", False, ""), "plaid_daily_cap": ("int", False, ""),
+    "plaid_rate_item_month": ("num", False, ""), "plaid_budget_month": ("num", False, ""), "plaid_daily_cap": ("int", False, ""), "agent_provider": ("int", False, ""),
 }
 
 

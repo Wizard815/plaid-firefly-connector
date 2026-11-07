@@ -12,29 +12,11 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from goblinbank import crypto, feed, importers, settings as cfg, sync
+from goblinbank import agent, api_money, crypto, feed, importers, ledger, settings as cfg, sync
 from goblinbank.db import DB
 from goblinbank.plaid import Plaid, PlaidError
 from goblinbank.security import require_internal
 
-MONTHLY_FACTOR = {"weekly": 52 / 12, "biweekly": 26 / 12, "monthly": 1, "yearly": 1 / 12}
-CYCLES = set(MONTHLY_FACTOR)
-
-
-class Sub(BaseModel):
-    name: str
-    amount: float
-    cycle: str = "monthly"
-    next_date: str
-    currency: str = "USD"
-    category: str = ""
-    url: str = ""
-    notes: str = ""
-    active: bool = True
-
-
-def monthly(s: dict) -> float:
-    return s["amount"] * MONTHLY_FACTOR.get(s["cycle"], 1) if s.get("active", 1) else 0.0
 
 
 def _equity(bal) -> float | None:
@@ -49,7 +31,7 @@ def _equity(bal) -> float | None:
     return None
 
 
-def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: DB | None = None) -> FastAPI:
+def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: DB | None = None, today=None, llm_transport=None) -> FastAPI:
     name = os.environ.get("GOBLIN_NAME", "goblin")
     secret = os.environ.get("INTERNAL_SECRET", "")
     connector_secret = os.environ.get("CONNECTOR_SECRET", secret)
@@ -243,100 +225,10 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             raise HTTPException(422, str(e))
         return {"provider": prov, "rows": len(rows), "added": importers.store(store, prov, rows)}
 
-    # ---------------- Read API for the UI ----------------
-    def net_worth(accts):
-        sign = {"cash": 1, "investment": 1, "credit": -1, "loan": -1}
-        return round(sum((a["balance"] or 0) * sign.get(a["kind"], 1) for a in accts), 2)
-
-    @app.get("/api/accounts")
-    def accounts(request: Request):
-        auth(request)
-        return store.all("SELECT * FROM accounts ORDER BY kind, institution, name")
-
-    @app.get("/api/transactions")
-    def transactions(request: Request, limit: int = 100, account_id: str | None = None):
-        auth(request)
-        limit = max(1, min(limit, 500))
-        if account_id:
-            return store.all("SELECT * FROM transactions WHERE account_id=? ORDER BY date DESC LIMIT ?", (account_id, limit))
-        return store.all("SELECT * FROM transactions ORDER BY date DESC LIMIT ?", (limit,))
-
-    @app.get("/api/history")
-    def history(request: Request):
-        """Daily net worth built from balance snapshots (last known balance carried forward)."""
-        auth(request)
-        kinds = {a["id"]: a["kind"] for a in store.all("SELECT id,kind FROM accounts")}
-        sign = {"credit": -1, "loan": -1}
-        last, by_day = {}, {}
-        for r in store.all("SELECT * FROM snapshots ORDER BY ts"):
-            last[r["account_id"]] = r["balance"] * sign.get(kinds.get(r["account_id"], "cash"), 1)
-            by_day[r["ts"][:10]] = round(sum(last.values()), 2)
-        return [{"date": d, "net_worth": v} for d, v in by_day.items()]
-
-    @app.get("/api/events")
-    def events(request: Request, limit: int = 50):
-        auth(request)
-        return store.all("SELECT * FROM events ORDER BY ts DESC LIMIT ?", (max(1, min(limit, 500)),))
-
-    @app.get("/api/overview")
-    def overview(request: Request):
-        auth(request)
-        accts, subs = store.all("SELECT * FROM accounts"), store.all("SELECT * FROM subscriptions WHERE active=1")
-        horizon = (date.today() + timedelta(days=30)).isoformat()
-        by_kind = {}
-        for a in accts:
-            by_kind[a["kind"]] = round(by_kind.get(a["kind"], 0) + (a["balance"] or 0), 2)
-        return {"goblin": name, "net_worth": net_worth(accts), "by_kind": by_kind, "accounts": accts,
-                "subscriptions_monthly": round(sum(monthly(s) for s in subs), 2),
-                "upcoming": sorted([s for s in subs if s["next_date"] <= horizon], key=lambda s: s["next_date"]),
-                "events": store.all("SELECT * FROM events ORDER BY ts DESC LIMIT 10")}
-
-    # ---------------- Subscriptions (Wallos-style) ----------------
-    def valid(s: Sub):
-        if s.cycle not in CYCLES:
-            raise HTTPException(422, f"cycle must be one of {sorted(CYCLES)}")
-        try:
-            date.fromisoformat(s.next_date)
-        except ValueError:
-            raise HTTPException(422, "next_date must be YYYY-MM-DD")
-        if s.amount < 0:
-            raise HTTPException(422, "amount must be >= 0")
-
-    @app.get("/api/subscriptions")
-    def subs_list(request: Request):
-        auth(request)
-        rows = store.all("SELECT * FROM subscriptions ORDER BY active DESC, next_date")
-        for r in rows:
-            r["monthly"] = round(monthly(r), 2)
-        return {"items": rows, "monthly_total": round(sum(r["monthly"] for r in rows), 2),
-                "yearly_total": round(12 * sum(r["monthly"] for r in rows), 2)}
-
-    @app.post("/api/subscriptions")
-    def subs_add(request: Request, s: Sub):
-        auth(request)
-        valid(s)
-        with store.tx() as c:
-            cur = c.execute("INSERT INTO subscriptions(name,amount,currency,cycle,next_date,category,url,notes,active) VALUES(?,?,?,?,?,?,?,?,?)",
-                            (s.name, s.amount, s.currency, s.cycle, s.next_date, s.category, s.url, s.notes, int(s.active)))
-        return store.one("SELECT * FROM subscriptions WHERE id=?", (cur.lastrowid,))
-
-    @app.put("/api/subscriptions/{sid}")
-    def subs_update(request: Request, sid: int, s: Sub):
-        auth(request)
-        valid(s)
-        with store.tx() as c:
-            cur = c.execute("UPDATE subscriptions SET name=?,amount=?,currency=?,cycle=?,next_date=?,category=?,url=?,notes=?,active=? WHERE id=?",
-                            (s.name, s.amount, s.currency, s.cycle, s.next_date, s.category, s.url, s.notes, int(s.active), sid))
-        if not cur.rowcount:
-            raise HTTPException(404, "not found")
-        return store.one("SELECT * FROM subscriptions WHERE id=?", (sid,))
-
-    @app.delete("/api/subscriptions/{sid}")
-    def subs_delete(request: Request, sid: int):
-        auth(request)
-        with store.tx() as c:
-            c.execute("DELETE FROM subscriptions WHERE id=?", (sid,))
-        return {"deleted": sid}
+    ctx = api_money.make_ctx(store, auth, today or date.today, name=name, plaid=plaid, client=client, caldav_transport=caldav_transport)
+    ctx.llm_transport = llm_transport
+    api_money.register(app, ctx)
+    agent.register(app, ctx)
 
     @app.post("/api/subscriptions/export/caldav")
     def subs_caldav(request: Request):
@@ -478,9 +370,9 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         out = {"goblin": name}
         every = scope == "all"
         if "net_worth" in share() or every:
-            out["net_worth"] = net_worth(store.all("SELECT * FROM accounts"))
+            out["net_worth"] = ledger.net_worth(store)
         if "subscriptions" in share() or every:
-            out["subscriptions_monthly"] = round(sum(monthly(s) for s in store.all("SELECT * FROM subscriptions WHERE active=1")), 2)
+            out["subscriptions_monthly"] = round(sum(s["monthly"] for s in ledger.subscriptions(store, (today or date.today)())), 2)
         if "robinhood_main" in share() or every:
             m = main_portfolio()
             out["robinhood_main"] = m and {"as_of": m.get("as_of"), "source": m.get("source"), "balances": m.get("balances")}

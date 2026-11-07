@@ -20,11 +20,36 @@ CREATE TABLE IF NOT EXISTS subscriptions(
 CREATE TABLE IF NOT EXISTS holdings(account_id TEXT, symbol TEXT, name TEXT, quantity REAL, price REAL, value REAL, PRIMARY KEY(account_id, symbol));
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT, secret INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS plaid_usage(day TEXT, endpoint TEXT, calls INTEGER DEFAULT 0, PRIMARY KEY(day, endpoint));
+CREATE TABLE IF NOT EXISTS categories(name TEXT PRIMARY KEY, kind TEXT DEFAULT 'expense', builtin INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS category_rules(id INTEGER PRIMARY KEY AUTOINCREMENT, pattern TEXT NOT NULL UNIQUE, category TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS budgets(category TEXT PRIMARY KEY, monthly_amount REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS savings(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, kind TEXT DEFAULT 'savings', institution TEXT DEFAULT '', balance REAL DEFAULT 0,
+  apy REAL DEFAULT 0, opened TEXT, maturity TEXT, term_months INTEGER, account_id TEXT, goal REAL, notes TEXT DEFAULT '', active INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT DEFAULT '', author TEXT DEFAULT 'me', pinned INTEGER DEFAULT 0, created TEXT, updated TEXT);
+CREATE TABLE IF NOT EXISTS providers(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, kind TEXT NOT NULL, base_url TEXT NOT NULL, model TEXT NOT NULL,
+  key_enc TEXT DEFAULT '', tools INTEGER DEFAULT 1, allow_cloud INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS proposals(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, amount REAL, every INTEGER, unit TEXT, account_id TEXT, reason TEXT, status TEXT DEFAULT 'pending');
+CREATE TABLE IF NOT EXISTS dismissed(key TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS snapshots(ts TEXT, account_id TEXT, balance REAL);
 CREATE TABLE IF NOT EXISTS events(  -- the money-movement log that feeds the Atom/RSS feed
   id TEXT PRIMARY KEY, ts TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, amount REAL, account_id TEXT, detail TEXT);
 CREATE INDEX IF NOT EXISTS ev_ts ON events(ts DESC);
 """
+
+
+COLUMNS = {  # added after the first release: (table, column) -> DDL fragment
+    ("subscriptions", "every"): "INTEGER DEFAULT 1", ("subscriptions", "unit"): "TEXT DEFAULT 'month'",
+    ("subscriptions", "account_id"): "TEXT", ("subscriptions", "payment_method"): "TEXT DEFAULT ''",
+    ("subscriptions", "payer"): "TEXT DEFAULT 'me'", ("subscriptions", "payer_name"): "TEXT DEFAULT ''",
+    ("subscriptions", "notify_days"): "INTEGER DEFAULT 3", ("subscriptions", "end_date"): "TEXT", ("subscriptions", "created"): "TEXT",
+    ("transactions", "plaid_category"): "TEXT", ("transactions", "category_locked"): "INTEGER DEFAULT 0", ("transactions", "notes"): "TEXT DEFAULT ''",
+    ("accounts", "min_balance"): "REAL",
+}
+DEFAULT_CATEGORIES = [("Income", "income"), ("Food", "expense"), ("Groceries", "expense"), ("Clothes", "expense"), ("Fun", "expense"), ("Games", "expense"),
+                      ("Gas", "expense"), ("Transport", "expense"), ("Bills", "expense"), ("Housing", "expense"), ("Health", "expense"), ("Shopping", "expense"),
+                      ("Subscriptions", "expense"), ("Travel", "expense"), ("Savings", "transfer"), ("Transfer", "transfer"), ("Misc", "expense")]
 
 
 class DB:
@@ -37,6 +62,10 @@ class DB:
         self.lock = threading.RLock()
         with self.tx() as c:
             c.executescript(SCHEMA)
+            for (table, col), ddl in COLUMNS.items():
+                if col not in [r[1] for r in c.execute(f"PRAGMA table_info({table})")]:
+                    c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+            c.executemany("INSERT OR IGNORE INTO categories(name,kind,builtin) VALUES(?,?,1)", DEFAULT_CATEGORIES)
 
     @contextmanager
     def tx(self):
