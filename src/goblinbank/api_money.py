@@ -273,6 +273,21 @@ def register(app, ctx):
             cn.execute("INSERT OR IGNORE INTO categories(name,kind,builtin) VALUES(?,?,0)", (name, c.kind))
         return store.all("SELECT * FROM categories ORDER BY kind, name")
 
+    class CatKind(BaseModel):
+        kind: str
+
+    @app.put("/api/categories/{name}")
+    def category_kind(request: Request, name: str, b: CatKind):
+        """Tag a category as spending, income, or 'not counted' (transfer). Works on built-in ones too."""
+        auth(request)
+        if b.kind not in ("expense", "income", "transfer"):
+            bad("kind must be expense, income or transfer")
+        with store.tx() as c:
+            cur = c.execute("UPDATE categories SET kind=? WHERE name=?", (b.kind, name))
+        if not cur.rowcount:
+            bad("not found", 404)
+        return store.all("SELECT * FROM categories ORDER BY kind, name")
+
     @app.delete("/api/categories/{name}")
     def category_delete(request: Request, name: str):
         auth(request)
@@ -345,13 +360,23 @@ def register(app, ctx):
         return {"items": rows, "monthly_total": mo, "yearly_total": round(12 * mo, 2),
                 "by_category": {c: round(sum(r["monthly"] for r in rows if r["category"] == c), 2) for c in sorted({r["category"] for r in rows if r["monthly"]})}}
 
-    @app.post("/api/subscriptions")
-    def subs_add(request: Request, s: Sub):
-        auth(request)
+    def create_sub(d: dict) -> dict:
+        """One code path for the form and for the agent: same validation, same insert."""
+        try:
+            s = Sub(**d)
+        except Exception as e:
+            raise HTTPException(422, str(e)[:200])
         every, unit = check_sub(s)
         with store.tx() as c:
             cur = c.execute(f"INSERT INTO subscriptions({COLS},created) VALUES({','.join('?' * 17)},?)", sub_row(s, every, unit) + (sync.now(),))
         return ledger.subscription(store, cur.lastrowid, ctx.today())
+
+    ctx.create_sub = create_sub
+
+    @app.post("/api/subscriptions")
+    def subs_add(request: Request, s: Sub):
+        auth(request)
+        return create_sub(s.model_dump())
 
     @app.put("/api/subscriptions/{sid}")
     def subs_update(request: Request, sid: int, s: Sub):

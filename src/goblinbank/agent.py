@@ -173,6 +173,15 @@ def build_tools(ctx):
             cur = c.execute("INSERT INTO proposals(name,amount,every,unit,account_id,reason) VALUES(?,?,?,?,?,?)", (name, amount, every, unit, a.get("account_id") or None, str(a.get("reason", ""))[:500]))
         return {"proposed": True, "id": cur.lastrowid, "note": "The user must approve it on the Subscriptions page. Nothing was added yet."}
 
+    def t_add_sub(a):
+        keep = {k: a[k] for k in ("name", "amount", "next_date", "cycle", "every", "unit", "category", "account_id", "payment_method", "payer", "payer_name", "notify_days", "end_date", "notes", "url") if a.get(k) not in (None, "")}
+        keep.setdefault("next_date", today().isoformat())
+        try:
+            sub = ctx.create_sub(keep)
+        except HTTPException as e:
+            return {"error": str(e.detail)}
+        return {"added": True, "id": sub["id"], "name": sub["name"], "amount": sub["amount"], "repeats": sub["label"], "next_due": sub["next_due"], "account": sub.get("account_name")}
+
     def t_calc(a):
         try:
             return {"expression": a.get("expression"), "result": calculate(str(a.get("expression", "")))}
@@ -199,6 +208,10 @@ def build_tools(ctx):
         ("read_note", "Read one planner note by id.", S({"id": INT}, ["id"]), t_read_note),
         ("write_note", "Save a note in the user's Planner (marked as written by the agent). Use it for plans, budgets and summaries the user asks for.", S({"title": STR, "body": STR}, ["title", "body"]), t_write_note),
         ("propose_subscription", "Suggest tracking a repeating payment. It only creates a proposal the user must approve.", S({"name": STR, "amount": NUM, "every": INT, "unit": {"type": "string", "enum": list(recur.UNITS)}, "account_id": STR, "reason": STR}, ["name", "amount", "every", "unit"]), t_propose),
+        ("add_subscription", "Add a subscription/recurring bill to the user's Subscriptions. ONLY call this when the user has clearly asked you to add it; otherwise use propose_subscription. "
+         "Needs name, amount and an interval (cycle like monthly/weekly/quarterly/yearly, or every + unit). Optional: next_date, account_id (from list_accounts), payer 'me' or 'other' (then payer_name), category, payment_method.",
+         S({"name": STR, "amount": NUM, "cycle": STR, "every": INT, "unit": {"type": "string", "enum": list(recur.UNITS)}, "next_date": DATE, "account_id": STR, "payer": {"type": "string", "enum": ["me", "other"]},
+            "payer_name": STR, "category": STR, "payment_method": STR, "end_date": DATE, "notes": STR}, ["name", "amount"]), t_add_sub),
         ("calculate", "Exact arithmetic for any math question. Use it instead of doing sums in your head.", S({"expression": {**STR, "description": "e.g. (4200 - 3*89.99) / 4"}}, ["expression"]), t_calc),
     ]
 
@@ -208,7 +221,7 @@ def system_prompt(name: str, today: date) -> str:
     return (f"You are Goblin, the finance assistant for {name}'s private bank dashboard. Today is {today.isoformat()}.\n"
             "You can only see data through the tools. Use them for every figure; never guess or invent numbers. Use calculate for arithmetic and show the working briefly.\n"
             "Amounts are signed: positive is money in, negative is money out. Projections are estimates that leave out everyday spending, so say so.\n"
-            "You cannot move money or edit subscriptions. You may save planner notes and propose subscriptions, which the user approves. Be concise.")
+            "You cannot move money. You may save planner notes. Add a subscription only when the user explicitly asks you to (add_subscription); otherwise propose it. Be concise.")
 
 
 def _call_openai(http, prov, key, system, messages, tools):
@@ -261,12 +274,29 @@ def _call_anthropic(http, prov, key, system, messages, tools):
             "tool_calls": [{"id": b["id"], "name": b["name"], "args": b.get("input") or {}} for b in blocks if b["type"] == "tool_use"]}
 
 
-def run_chat(ctx, prov: dict, key: str, history: list[dict], max_steps: int = 8) -> dict:
+WRITE_TOOLS = {"add_subscription", "write_note", "propose_subscription"}
+
+
+def est_tokens(text: str) -> int:
+    return len(text) // 4 + 1
+
+
+def context_usage(ctx, prov: dict, summary: str, msgs: list[dict], use_tools: bool) -> dict:
+    """Rough token count (about 4 characters per token) against the model's context window."""
+    base = est_tokens(system_prompt(ctx.name, ctx.today()) + (json.dumps([(n, d, s) for n, d, s, _ in build_tools(ctx)]) if use_tools else "") + (summary or ""))
+    used = base + (0 if use_tools else 3500) + sum(est_tokens(m["content"]) + 4 for m in msgs)       # no-tool mode carries a data snapshot (up to 14k chars)
+    limit = int(prov.get("context_tokens") or 8192)
+    return {"used": used, "limit": limit, "pct": round(used / limit, 3)}
+
+
+def run_chat(ctx, prov: dict, key: str, history: list[dict], max_steps: int = 8, summary: str = "", use_tools: bool | None = None) -> dict:
     tools = build_tools(ctx)
     by_name = {n: f for n, _, _, f in tools}
     system = system_prompt(ctx.name, ctx.today())
+    if summary:
+        system += "\nEarlier in this conversation (compacted summary):\n" + summary
     call = _call_anthropic if prov["kind"] == "anthropic" else _call_openai
-    use_tools = bool(prov["tools"])
+    use_tools = bool(prov["tools"]) if use_tools is None else use_tools
     if not use_tools:        # models without function calling get a snapshot of the key facts instead
         snap = {n: by_name[n]({}) for n in ("get_overview", "list_accounts", "list_subscriptions", "upcoming_bills", "savings_summary", "find_recurring_payments", "budget_status")}
         system += "\nYou have no tools. Here is a snapshot of the user's data as JSON:\n" + json.dumps(snap, default=str)[:14000]
@@ -286,7 +316,10 @@ def run_chat(ctx, prov: dict, key: str, history: list[dict], max_steps: int = 8)
                 text = json.dumps(res, default=str)
                 if len(text) > 12000:
                     text = text[:12000] + '..."(truncated)"'
-                trace.append({"tool": t["name"], "args": t["args"], "ok": "error" not in res if isinstance(res, dict) else True, "preview": text[:160]})
+                entry = {"tool": t["name"], "args": t["args"], "ok": "error" not in res if isinstance(res, dict) else True, "preview": text[:160]}
+                if t["name"] in WRITE_TOOLS:
+                    entry["result"] = res          # lets the UI offer an Undo
+                trace.append(entry)
                 msgs.append({"role": "tool", "tool_call_id": t["id"], "content": text})
     return {"reply": "I hit my step limit before finishing. Try a narrower question.", "trace": trace, "steps": max_steps}
 
@@ -300,6 +333,7 @@ class ProviderIn(BaseModel):
     api_key: str | None = None          # omit = unchanged, "" = clear
     tools: bool = True
     allow_cloud: bool = False
+    context_tokens: int = 8192          # the model's context window; chats compact before it fills
 
 
 class ChatIn(BaseModel):
@@ -312,13 +346,15 @@ def register(app, ctx):
 
     def view(p):
         return {"id": p["id"], "name": p["name"], "kind": p["kind"], "base_url": p["base_url"], "model": p["model"], "tools": bool(p["tools"]),
-                "allow_cloud": bool(p["allow_cloud"]), "has_key": bool(p["key_enc"]), "local": is_local(p["base_url"])}
+                "allow_cloud": bool(p["allow_cloud"]), "has_key": bool(p["key_enc"]), "local": is_local(p["base_url"]), "context_tokens": p["context_tokens"] or 8192}
 
     def check(p: ProviderIn):
         if p.kind not in ("openai", "anthropic"):
             raise HTTPException(422, "kind must be openai (any OpenAI-compatible server) or anthropic")
         if not p.name.strip() or not p.model.strip():
             raise HTTPException(422, "name and model required")
+        if not 1024 <= p.context_tokens <= 4_000_000:
+            raise HTTPException(422, "context_tokens must be between 1024 and 4000000")
         if urlparse(p.base_url).scheme not in ("http", "https") or not urlparse(p.base_url).hostname:
             raise HTTPException(422, "base_url must be an http(s) address")
 
@@ -337,8 +373,8 @@ def register(app, ctx):
         auth(request)
         check(p)
         with store.tx() as c:
-            cur = c.execute("INSERT INTO providers(name,kind,base_url,model,key_enc,tools,allow_cloud) VALUES(?,?,?,?,?,?,?)",
-                            (p.name.strip(), p.kind, p.base_url.strip(), p.model.strip(), crypto.encrypt(p.api_key) if p.api_key else "", int(p.tools), int(p.allow_cloud)))
+            cur = c.execute("INSERT INTO providers(name,kind,base_url,model,key_enc,tools,allow_cloud,context_tokens) VALUES(?,?,?,?,?,?,?,?)",
+                            (p.name.strip(), p.kind, p.base_url.strip(), p.model.strip(), crypto.encrypt(p.api_key) if p.api_key else "", int(p.tools), int(p.allow_cloud), p.context_tokens))
         return view(store.one("SELECT * FROM providers WHERE id=?", (cur.lastrowid,)))
 
     @app.put("/api/agent/providers/{pid}")
@@ -350,8 +386,8 @@ def register(app, ctx):
             raise HTTPException(404, "not found")
         key = row["key_enc"] if p.api_key is None else (crypto.encrypt(p.api_key) if p.api_key else "")
         with store.tx() as c:
-            c.execute("UPDATE providers SET name=?,kind=?,base_url=?,model=?,key_enc=?,tools=?,allow_cloud=? WHERE id=?",
-                      (p.name.strip(), p.kind, p.base_url.strip(), p.model.strip(), key, int(p.tools), int(p.allow_cloud), pid))
+            c.execute("UPDATE providers SET name=?,kind=?,base_url=?,model=?,key_enc=?,tools=?,allow_cloud=?,context_tokens=? WHERE id=?",
+                      (p.name.strip(), p.kind, p.base_url.strip(), p.model.strip(), key, int(p.tools), int(p.allow_cloud), p.context_tokens, pid))
         return view(store.one("SELECT * FROM providers WHERE id=?", (pid,)))
 
     @app.delete("/api/agent/providers/{pid}")
@@ -366,16 +402,152 @@ def register(app, ctx):
         auth(request)
         return [{"name": n, "description": d, "parameters": s} for n, d, s, _ in build_tools(ctx)]
 
-    @app.post("/api/agent/chat")
-    def chat(request: Request, body: ChatIn):
-        auth(request)
-        pid = body.provider_id or (int(cfg.get(store, "agent_provider")) if cfg.get(store, "agent_provider") else None)
-        row = store.one("SELECT * FROM providers WHERE id=?", (pid,)) if pid else store.one("SELECT * FROM providers ORDER BY id LIMIT 1")
+    def pick_provider(pid):
+        pid = pid or (int(cfg.get(store, "agent_provider")) if cfg.get(store, "agent_provider") else None)
+        row = (store.one("SELECT * FROM providers WHERE id=?", (pid,)) if pid else None) or store.one("SELECT * FROM providers ORDER BY id LIMIT 1")
         if not row:
-            raise HTTPException(409, "No model set up yet. Add one in Settings > Agent.")
+            raise HTTPException(409, "No model set up yet. Add one in Settings > Models.")
         local = is_local(row["base_url"])
         if not local and not row["allow_cloud"]:
             raise HTTPException(403, f"'{row['name']}' is not on your machine or network. Your financial data would be sent to {urlparse(row['base_url']).hostname}. Tick 'allow cloud' on that provider if you really want this.")
+        return row, local
+
+    def model_errors(row, fn):
+        try:
+            return fn()
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(502, f"model server answered {e.response.status_code}: {e.response.text[:200]}")
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"could not reach the model at {row['base_url']} ({type(e).__name__}). Is it running?")
+
+    def key_of(row):
+        return crypto.decrypt(row["key_enc"]) if row["key_enc"] else ""
+
+    # ------------------------------------------------------------ saved chats, with compaction
+    def live(chat_id):
+        return store.all("SELECT * FROM chat_messages WHERE chat_id=? AND compacted=0 ORDER BY id", (chat_id,))
+
+    def chat_view(chat_id):
+        chat = store.one("SELECT * FROM chats WHERE id=?", (chat_id,))
+        if not chat:
+            raise HTTPException(404, "chat not found")
+        msgs = store.all("SELECT * FROM chat_messages WHERE chat_id=? ORDER BY id", (chat_id,))
+        for m in msgs:
+            m["trace"] = json.loads(m["trace"]) if m["trace"] else []
+        prov = (store.one("SELECT * FROM providers WHERE id=?", (chat["provider_id"],)) if chat["provider_id"] else None) or store.one("SELECT * FROM providers ORDER BY id LIMIT 1")
+        usage = context_usage(ctx, prov, chat["summary"], [m for m in msgs if not m["compacted"]], bool(prov["tools"])) if prov else None
+        return {"chat": chat, "messages": msgs, "usage": usage}
+
+    def compact(chat, prov, key, keep=4) -> bool:
+        rows = live(chat["id"])
+        if len(rows) <= keep:
+            return False
+        old = rows[:-keep]
+        text = "\n".join(f"{r['role'].upper()}: {r['content']}" for r in old)
+        prompt = ("Summarize this conversation so you can continue it later. Keep every number, name, decision and open question. Under 250 words.\n\n"
+                  + (f"Earlier summary:\n{chat['summary']}\n\n" if chat["summary"] else "") + text)
+        call = _call_anthropic if prov["kind"] == "anthropic" else _call_openai
+        with httpx.Client(timeout=300, transport=ctx.llm_transport) as http:
+            out = call(http, prov, key, "You write concise, faithful conversation summaries.", [{"role": "user", "content": prompt}], None)
+        summary = out["content"].strip()
+        if not summary:
+            return False
+        with store.tx() as c:
+            c.execute("UPDATE chats SET summary=? WHERE id=?", (summary[:6000], chat["id"]))
+            c.execute(f"UPDATE chat_messages SET compacted=1 WHERE id IN ({','.join('?' * len(old))})", [r["id"] for r in old])
+        return True
+
+    @app.get("/api/chats")
+    def chats(request: Request):
+        auth(request)
+        return store.all("SELECT c.id, c.title, c.updated, c.provider_id, (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id=c.id) messages FROM chats c ORDER BY c.updated DESC")
+
+    @app.post("/api/chats")
+    def chat_new(request: Request):
+        auth(request)
+        ts = sync.now()
+        with store.tx() as c:
+            cur = c.execute("INSERT INTO chats(title,created,updated) VALUES('New chat',?,?)", (ts, ts))
+        return chat_view(cur.lastrowid)
+
+    @app.get("/api/chats/{cid}")
+    def chat_get(request: Request, cid: int):
+        auth(request)
+        return chat_view(cid)
+
+    class Rename(BaseModel):
+        title: str
+
+    @app.put("/api/chats/{cid}")
+    def chat_rename(request: Request, cid: int, b: Rename):
+        auth(request)
+        if not b.title.strip():
+            raise HTTPException(422, "title required")
+        with store.tx() as c:
+            cur = c.execute("UPDATE chats SET title=? WHERE id=?", (b.title.strip()[:80], cid))
+        if not cur.rowcount:
+            raise HTTPException(404, "chat not found")
+        return chat_view(cid)
+
+    @app.delete("/api/chats/{cid}")
+    def chat_delete(request: Request, cid: int):
+        auth(request)
+        with store.tx() as c:
+            c.execute("DELETE FROM chat_messages WHERE chat_id=?", (cid,))
+            c.execute("DELETE FROM chats WHERE id=?", (cid,))
+        return {"deleted": cid}
+
+    class Say(BaseModel):
+        content: str
+        provider_id: int | None = None
+        tools: bool | None = None            # per-chat switch: tool calling on/off for this message
+
+    @app.post("/api/chats/{cid}/messages")
+    def chat_say(request: Request, cid: int, b: Say):
+        auth(request)
+        chat = store.one("SELECT * FROM chats WHERE id=?", (cid,))
+        if not chat:
+            raise HTTPException(404, "chat not found")
+        text = b.content.strip()
+        if not text:
+            raise HTTPException(422, "message is empty")
+        row, local = pick_provider(b.provider_id or chat["provider_id"])
+        key, use_tools = key_of(row), (bool(row["tools"]) if b.tools is None else b.tools)
+        ts = sync.now()
+        with store.tx() as c:
+            mid = c.execute("INSERT INTO chat_messages(chat_id,role,content,created) VALUES(?,?,?,?)", (cid, "user", text, ts)).lastrowid
+        compacted = False
+        try:
+            msgs = live(cid)
+            if context_usage(ctx, row, chat["summary"], msgs, use_tools)["pct"] > 0.75 and len(msgs) > 5:       # make room before the model runs out
+                compacted = model_errors(row, lambda: compact(chat, row, key))
+                chat = store.one("SELECT * FROM chats WHERE id=?", (cid,))
+            hist = [{"role": m["role"], "content": m["content"]} for m in live(cid)]
+            out = model_errors(row, lambda: run_chat(ctx, row, key, hist[-40:], summary=chat["summary"], use_tools=use_tools))
+        except Exception:
+            with store.tx() as c:                      # a failed turn leaves no half-saved question behind
+                c.execute("DELETE FROM chat_messages WHERE id=?", (mid,))
+            raise
+        with store.tx() as c:
+            c.execute("INSERT INTO chat_messages(chat_id,role,content,trace,created) VALUES(?,?,?,?,?)", (cid, "assistant", out["reply"] or "(no answer)", json.dumps(out["trace"], default=str), sync.now()))
+            c.execute("UPDATE chats SET updated=?, provider_id=?, title=CASE WHEN title='New chat' THEN ? ELSE title END WHERE id=?", (sync.now(), row["id"], text[:60], cid))
+        view = chat_view(cid)
+        return {**view, "compacted": compacted, "provider": {"id": row["id"], "name": row["name"], "model": row["model"], "local": local}, "tools_used": use_tools}
+
+    @app.post("/api/chats/{cid}/compact")
+    def chat_compact(request: Request, cid: int):
+        auth(request)
+        chat = store.one("SELECT * FROM chats WHERE id=?", (cid,))
+        if not chat:
+            raise HTTPException(404, "chat not found")
+        row, _ = pick_provider(chat["provider_id"])
+        done = model_errors(row, lambda: compact(chat, row, key_of(row), keep=2))
+        return {**chat_view(cid), "compacted": done}
+
+    @app.post("/api/agent/chat")
+    def chat(request: Request, body: ChatIn):
+        auth(request)
+        row, local = pick_provider(body.provider_id)
         hist = [{"role": m["role"], "content": str(m.get("content", ""))} for m in body.messages if m.get("role") in ("user", "assistant") and m.get("content")]
         if not hist or hist[-1]["role"] != "user":
             raise HTTPException(422, "last message must be from the user")

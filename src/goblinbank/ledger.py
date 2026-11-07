@@ -3,7 +3,7 @@ Signed amounts everywhere: positive = money in, negative = money out."""
 import re
 from datetime import date, timedelta
 
-from goblinbank import recur
+from goblinbank import recur, settings as cfg
 
 OUT_KINDS = {"credit", "loan"}
 
@@ -314,7 +314,12 @@ def alerts(db, today: date) -> list[dict]:
             if p["lowest"] < floor:
                 out.append({"kind": "projected_low", "severity": "warning", "title": f"{a['name']} may run short by {p['lowest_date']}",
                             "detail": f"Bills bound to it take it to {p['lowest']:,.2f} within 14 days", "account_id": a["id"]})
-    for m in late_payments(db, today):
+    if cfg.get(db, "alert_untracked") != "off":
+        found = [x for x in suggestions(db, today) if x["source"] == "detected"]
+        if found:
+            out.append({"kind": "untracked_recurring", "severity": "info", "title": f"{len(found)} repeating payment{'s' if len(found) != 1 else ''} not in Subscriptions yet",
+                        "detail": ", ".join(x["name"] for x in found[:4]) + (" and more" if len(found) > 4 else ""), "count": len(found)})
+    for m in (late_payments(db, today) if cfg.get(db, "alert_missed") != "off" else []):
         out.append({"kind": "missed_payment", "severity": "critical" if m["misses"] >= 2 else "warning", "sub_id": m["sub_id"],
                     "title": f"{m['name']} not seen in {m['account']}" + (f" ({m['misses']} times in a row)" if m["misses"] > 1 else ""),
                     "detail": "Expected " + ", ".join(m["missed_dates"])})

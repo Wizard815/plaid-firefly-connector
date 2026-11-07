@@ -17,7 +17,7 @@ SPEC = {
     "rh_mcp_tool_positions": ("str", False, "RH_MCP_TOOL_POSITIONS"),
     "rh_mcp_tool_history": ("str", False, "RH_MCP_TOOL_HISTORY"),
     # Plaid cost guard. Rates are YOURS to enter: Plaid shows them in its dashboard, not in any public price list.
-    "plaid_rate_item_month": ("num", False, ""), "plaid_budget_month": ("num", False, ""), "plaid_daily_cap": ("int", False, ""), "agent_provider": ("int", False, ""),
+    "plaid_rate_item_month": ("num", False, ""), "plaid_budget_month": ("num", False, ""), "plaid_daily_cap": ("int", False, ""), "agent_provider": ("int", False, ""), "alert_missed": ("onoff", False, ""), "alert_untracked": ("onoff", False, ""),
 }
 
 
@@ -26,7 +26,7 @@ def get(db, key: str) -> str:
     row = db.one("SELECT value FROM settings WHERE key=?", (key,))
     if row is not None:
         return crypto.decrypt(row["value"]) if secret and row["value"] else (row["value"] or "")
-    return os.environ.get(env, "") if env else ("auto" if key == "rh_main_source" else "")
+    return os.environ.get(env, "") if env else ("auto" if key == "rh_main_source" else "on" if kind == "onoff" else "")
 
 
 def get_list(db, key: str) -> list[str]:
@@ -44,6 +44,8 @@ def validate(key: str, value) -> str:
             raise ValueError(f"share may only contain {', '.join(SHAREABLE)}")
         return ",".join(items)
     v = str(value).strip()
+    if kind == "onoff" and v not in ("on", "off"):
+        raise ValueError(f"{key} must be on or off")
     if kind == "choice" and v not in SOURCES:
         raise ValueError(f"{key} must be one of {', '.join(SOURCES)}")
     if kind in ("num", "int") and v:

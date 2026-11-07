@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS providers(
   key_enc TEXT DEFAULT '', tools INTEGER DEFAULT 1, allow_cloud INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS proposals(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, amount REAL, every INTEGER, unit TEXT, account_id TEXT, reason TEXT, status TEXT DEFAULT 'pending');
 CREATE TABLE IF NOT EXISTS dismissed(key TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS chats(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, provider_id INTEGER, summary TEXT DEFAULT '', created TEXT, updated TEXT);
+CREATE TABLE IF NOT EXISTS chat_messages(id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, trace TEXT DEFAULT '', compacted INTEGER DEFAULT 0, created TEXT);
+CREATE INDEX IF NOT EXISTS cm_chat ON chat_messages(chat_id, id);
 CREATE TABLE IF NOT EXISTS snapshots(ts TEXT, account_id TEXT, balance REAL);
 CREATE TABLE IF NOT EXISTS events(  -- the money-movement log that feeds the Atom/RSS feed
   id TEXT PRIMARY KEY, ts TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, amount REAL, account_id TEXT, detail TEXT);
@@ -45,11 +48,11 @@ COLUMNS = {  # added after the first release: (table, column) -> DDL fragment
     ("subscriptions", "payer"): "TEXT DEFAULT 'me'", ("subscriptions", "payer_name"): "TEXT DEFAULT ''",
     ("subscriptions", "notify_days"): "INTEGER DEFAULT 3", ("subscriptions", "end_date"): "TEXT", ("subscriptions", "created"): "TEXT",
     ("transactions", "plaid_category"): "TEXT", ("transactions", "category_locked"): "INTEGER DEFAULT 0", ("transactions", "notes"): "TEXT DEFAULT ''",
-    ("accounts", "min_balance"): "REAL",
+    ("accounts", "min_balance"): "REAL", ("providers", "context_tokens"): "INTEGER DEFAULT 8192",
 }
 DEFAULT_CATEGORIES = [("Income", "income"), ("Food", "expense"), ("Groceries", "expense"), ("Clothes", "expense"), ("Fun", "expense"), ("Games", "expense"),
                       ("Gas", "expense"), ("Transport", "expense"), ("Bills", "expense"), ("Housing", "expense"), ("Health", "expense"), ("Shopping", "expense"),
-                      ("Subscriptions", "expense"), ("Travel", "expense"), ("Savings", "transfer"), ("Transfer", "transfer"), ("Misc", "expense")]
+                      ("Subscriptions", "expense"), ("Travel", "expense"), ("Savings", "transfer"), ("Investing", "transfer"), ("Transfer", "transfer"), ("Misc", "expense")]
 
 
 class DB:

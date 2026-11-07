@@ -122,6 +122,8 @@ textarea{background:var(--bg);border:1px solid var(--line);border-radius:8px;pad
 @media (max-width:760px){.split{grid-template-columns:minmax(0,1fr)}.barrow{grid-template-columns:80px 1fr 80px}}
 main>*,.stack>*{min-width:0}label{min-width:0}select,input{max-width:100%}.filters{grid-template-columns:repeat(auto-fit,minmax(min(130px,100%),1fr))}.subform{grid-template-columns:repeat(auto-fit,minmax(min(190px,100%),1fr))}
 td.mono{white-space:nowrap}
+.ctx{display:flex;gap:10px;align-items:center;margin:6px 0}.ctx .meter{flex:1;max-width:260px}.bubble.old{opacity:.55}.added{margin-top:8px;padding:6px 10px;border-radius:8px;background:var(--teal-soft);font-size:.88rem}
+.badge{margin-left:8px;background:var(--brass);color:#fff;border-radius:999px;padding:0 7px;font-size:.75rem;font-weight:600}
 </style>
 
 <div id="app"></div>
@@ -155,7 +157,7 @@ function toast(msg) { const t = h("div", { class: "toast", role: "status" }, msg
 const fail = (e) => toast(e.message || String(e));
 
 /* ---------- API: the gateway (/g/<name>/...) or a recorded sample (shared preview) ---------- */
-const S = { authed: false, demo: false, name: "", token: "", tab: "overview", settingsTab: "connect", acct: null, edit: null, days: +store.get("gb_days") || 30, chat: [], provider: null };
+const S = { chatId: null, tools: null, badge: 0, authed: false, demo: false, name: "", token: "", tab: "overview", settingsTab: "connect", acct: null, edit: null, days: +store.get("gb_days") || 30, chat: [], provider: null };
 let DEMO = null;
 const CAT_COLORS = ["#17766b", "#a8741a", "#4a6fa5", "#b3372f", "#7a5c99", "#5d8a3c", "#c46a2d", "#2f8f9d", "#8a6d3b", "#6b7a8f"];
 async function api(path, opts = {}) {
@@ -166,8 +168,20 @@ async function api(path, opts = {}) {
   if (!r.ok) throw new Error(typeof body.detail === "string" ? body.detail : Array.isArray(body.detail) ? body.detail.map((d) => d.msg).join("; ") : "HTTP " + r.status);
   return body;
 }
+function demoChats(p, m, opts) {
+  const D = DEMO; D.chatsList ||= D["/api/chats"]; const id = +p.split("/")[3];
+  if (p === "/api/chats" && m === "GET") return Promise.resolve(D.chatsList);
+  if (p === "/api/chats" && m === "POST") { const nid = Date.now(); const v = { chat: { id: nid, title: "New chat", summary: "", provider_id: D.chatProvider }, messages: [], usage: { used: 2300, limit: 8192, pct: 0.28 } }; D["/api/chats/" + nid] = v; D.chatsList.unshift({ id: nid, title: "New chat", updated: "", messages: 0 }); return Promise.resolve(v); }
+  const v = D["/api/chats/" + id]; if (!v) return Promise.reject(new Error("chat not found"));
+  if (m === "DELETE") { D.chatsList = D.chatsList.filter((c) => c.id !== id); return Promise.resolve({}); }
+  if (p.endsWith("/messages")) { const body = JSON.parse(opts.body); v.messages.push({ id: Date.now(), role: "user", content: body.content, trace: [], compacted: 0 }, { id: Date.now() + 1, role: "assistant", content: D.chat.reply, trace: D.chat.trace, compacted: 0 });
+    if (v.chat.title === "New chat") { v.chat.title = body.content.slice(0, 50); D.chatsList.find((c) => c.id === id).title = v.chat.title; } v.usage.used += 700; v.usage.pct = v.usage.used / v.usage.limit; return Promise.resolve({ ...v, compacted: false, provider: D.chat.provider, tools_used: true }); }
+  if (p.endsWith("/compact")) return Promise.resolve({ ...v, compacted: false });
+  return Promise.resolve(v);
+}
 function demoApi(path, opts) {
   const m = opts.method || "GET", [p, q] = path.split("?"), P = new URLSearchParams(q || "");
+  if (p.startsWith("/api/chats")) return demoChats(p, m, opts);
   if (m !== "GET") { if (path.startsWith("/api/agent/chat")) return Promise.resolve(DEMO.chat); throw new Error("Sample preview: changes are not saved"); }
   if (p === "/api/transactions") return Promise.resolve(filterTx(DEMO.transactions, P));
   if (p === "/api/upcoming") return Promise.resolve(DEMO["/api/upcoming?days=" + Math.min(Math.max(+P.get("days") || 30, 1), 120)] || DEMO["/api/upcoming?days=365"]);
@@ -417,31 +431,53 @@ async function viewPlanner(root, rerender) {
 
 /* ================================ AGENT ================================ */
 const PROMPTS = ["How much will I pay in bills over the next 60 days?", "If I spend $1,200 on the 15th, what is my lowest checking balance this month?", "Which payments look recurring but are not in my subscriptions?", "What did I spend on food and gas last month, and how does that compare to my budget?", "Which CD matures next and what will it be worth?", "Does anything on my calendar cost money in the next two weeks?"];
+const kfmt = (n) => (n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k" : String(n));
 async function viewAgent(root, rerender) {
-  const pv = await api("/api/agent/providers");
-  const cur = pv.items.find((p) => p.id === S.provider) || pv.items.find((p) => String(p.id) === String(pv.default)) || pv.items[0];
+  const [pv, list] = await Promise.all([api("/api/agent/providers"), api("/api/chats")]);
+  if (S.chatId && !list.some((c) => c.id === S.chatId)) S.chatId = null;
+  if (!S.chatId && list.length) S.chatId = list[0].id;
+  const view = S.chatId ? await api("/api/chats/" + S.chatId) : null, chat = view?.chat;
+  const cur = pv.items.find((p) => p.id === S.provider) || pv.items.find((p) => p.id === chat?.provider_id) || pv.items.find((p) => String(p.id) === String(pv.default)) || pv.items[0];
   if (cur) S.provider = cur.id;
-  const log = h("div", { class: "chat" }, S.chat.length ? S.chat.map(bubble) : h("p", { class: "muted" }, "Ask about your payments, balances or plans. It looks things up with tools, does the math exactly, and can save notes or suggest subscriptions for you to approve. It cannot move money."));
+  const toolsOn = S.tools == null ? !!cur?.tools : S.tools;
+  const u = view?.usage;
+  const log = h("div", { class: "chat" });
+  const msgs = view?.messages || [];
+  if (!msgs.length) add(log, h("p", { class: "muted" }, "Ask about your payments, balances or plans. It looks things up with tools, does the math exactly, and can save notes or add a subscription when you ask. It cannot move money."));
+  let divided = false;
+  for (const m of msgs) {
+    if (!m.compacted && msgs.some((x) => x.compacted) && !divided) { divided = true; add(log, h("details", { class: "trace", style: "text-align:center" }, h("summary", {}, "Earlier messages were compacted into a summary"), h("div", { class: "small muted", style: "white-space:pre-wrap;text-align:left" }, chat.summary))); }
+    add(log, bubble(m));
+  }
   const input = h("textarea", { id: "ag-in", rows: 2, placeholder: "Ask anything about your money…", onkeydown: (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(); } } });
   async function go(text) {
-    const q = text || input.value.trim(); if (!q) return;
-    S.chat.push({ role: "user", content: q }); input.value = ""; log.replaceChildren(...S.chat.map(bubble), h("div", { class: "bubble agent muted" }, "Thinking…")); log.scrollTop = log.scrollHeight;
-    try { const r = await api("/api/agent/chat", send("POST", { provider_id: S.provider, messages: S.chat.map(({ role, content }) => ({ role, content })) })); S.chat.push({ role: "assistant", content: r.reply || "(no answer)", trace: r.trace, provider: r.provider }); }
-    catch (e) { S.chat.push({ role: "assistant", content: e.message, error: true }); }
-    log.replaceChildren(...S.chat.map(bubble)); log.scrollTop = log.scrollHeight;
+    const q = (text || input.value).trim(); if (!q) return;
+    let id = S.chatId;
+    try { if (!id) { id = S.chatId = (await api("/api/chats", { method: "POST" })).chat.id; } } catch (e) { return fail(e); }
+    input.value = ""; add(log, h("div", { class: "bubble me" }, q), h("div", { class: "bubble agent muted" }, "Thinking…")); log.scrollTop = log.scrollHeight;
+    try { const r = await api(`/api/chats/${id}/messages`, send("POST", { content: q, provider_id: S.provider, tools: S.tools == null ? null : S.tools })); if (r.compacted) toast("Older messages were summarized to fit the model's context"); rerender(); }
+    catch (e) { log.lastChild.replaceWith(h("div", { class: "bubble agent err" }, e.message)); input.value = q; }
   }
-  add(root, 
+  const sidebar = h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Chats"), h("button", { class: "btn sm primary", onclick: async () => { try { S.chatId = (await api("/api/chats", { method: "POST" })).chat.id; rerender(); } catch (e) { fail(e); } } }, "New")),
+    list.length ? list.map((c) => h("div", { class: "ev note" + (c.id === S.chatId ? " on" : ""), style: "grid-template-columns:1fr auto", tabindex: 0, onclick: () => { S.chatId = c.id; rerender(); } },
+      h("span", { style: "overflow:hidden;text-overflow:ellipsis;white-space:nowrap" }, c.title), h("button", { class: "btn sm danger", "aria-label": "Delete chat", onclick: (e) => { e.stopPropagation(); sure(null, "Sure?", async () => { await api("/api/chats/" + c.id, { method: "DELETE" }); if (S.chatId === c.id) S.chatId = null; rerender(); })(e); } }, "×"))) : h("p", { class: "muted small" }, "No chats yet."));
+  add(root,
     !pv.items.length ? h("div", { class: "panel" }, h("h3", {}, "Set up a model first"), h("p", { class: "muted" }, "Add a local model (Ollama, LM Studio, llama.cpp) or a cloud one in Settings, then come back."), h("button", { class: "btn primary", onclick: () => { S.tab = "settings"; S.settingsTab = "models"; render(); } }, "Open model settings")) : null,
-    h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Ask Goblin"),
-      pv.items.length ? h("div", { class: "chips" }, h("select", { class: "bare", "aria-label": "Model", onchange: (e) => { S.provider = +e.target.value; rerender(); } }, pv.items.map((p) => h("option", { value: p.id, selected: p.id === S.provider }, `${p.name} · ${p.model}`))),
-        cur ? h("span", { class: "pill " + (cur.local ? "t" : "r") }, cur.local ? "on your machine" : cur.allow_cloud ? "cloud" : "cloud, blocked") : null, h("button", { class: "btn sm", onclick: () => { S.chat = []; rerender(); } }, "Clear")) : null),
+    h("div", { class: "split" }, sidebar, h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, chat && chat.title !== "New chat" ? chat.title : "Ask Goblin"),
+      pv.items.length ? h("div", { class: "chips" }, h("select", { class: "bare", "aria-label": "Model", onchange: (e) => { S.provider = +e.target.value; S.tools = null; rerender(); } }, pv.items.map((p) => h("option", { value: p.id, selected: p.id === S.provider }, `${p.name} · ${p.model}`))),
+        cur ? h("span", { class: "pill " + (cur.local ? "t" : "r") }, cur.local ? "on your machine" : cur.allow_cloud ? "cloud" : "cloud, blocked") : null,
+        h("label", { class: "check", title: "Off = the model gets a snapshot of your data instead of calling tools. Use it for small models." }, h("input", { type: "checkbox", id: "ag-tools", checked: toolsOn, onchange: (e) => { S.tools = e.target.checked; } }), "Tools")) : null),
+      u ? h("div", { class: "ctx" }, bar(u.pct, u.pct > 0.75 ? "var(--red)" : u.pct > 0.5 ? "var(--brass)" : "var(--teal)"), h("span", { class: "small muted" }, `context ${kfmt(u.used)} / ${kfmt(u.limit)}`),
+        h("button", { class: "btn sm", disabled: msgs.filter((m) => !m.compacted).length < 3, onclick: async () => { try { const r = await api(`/api/chats/${S.chatId}/compact`, { method: "POST" }); toast(r.compacted ? "Compacted" : "Nothing to compact yet"); rerender(); } catch (e) { fail(e); } } }, "Compact")) : null,
       cur && !cur.local ? h("p", { class: "banner" }, cur.allow_cloud ? "This model runs in the cloud. Your numbers are sent to it when you ask." : "This model is in the cloud and is blocked until you tick 'allow cloud' in Settings > Models.") : null,
       log, h("div", { class: "chips", style: "margin:10px 0" }, PROMPTS.map((p) => h("button", { class: "chip", onclick: () => go(p) }, p))),
-      h("div", { class: "url" }, input, h("button", { class: "btn primary", onclick: () => go() }, "Send"))));
+      h("div", { class: "url" }, input, h("button", { class: "btn primary", onclick: () => go() }, "Send")))));
   log.scrollTop = log.scrollHeight;
 }
 function bubble(m) {
-  return h("div", { class: "bubble " + (m.role === "user" ? "me" : "agent") + (m.error ? " err" : "") }, h("div", { style: "white-space:pre-wrap" }, m.content),
+  const adds = (m.trace || []).filter((t) => t.tool === "add_subscription" && t.result?.added);
+  return h("div", { class: "bubble " + (m.role === "user" ? "me" : "agent") + (m.error ? " err" : "") + (m.compacted ? " old" : "") }, h("div", { style: "white-space:pre-wrap" }, m.content),
+    adds.map((t) => h("div", { class: "added" }, `Added subscription: ${t.result.name} ${usd(t.result.amount)} ${t.result.repeats}`, " ", h("button", { class: "btn sm", onclick: async (e) => { try { await api("/api/subscriptions/" + t.result.id, { method: "DELETE" }); e.target.replaceWith("Undone"); } catch (err) { fail(err); } } }, "Undo"))),
     m.trace?.length ? h("details", { class: "trace" }, h("summary", {}, `Looked at: ${[...new Set(m.trace.map((t) => t.tool))].join(", ")}`), m.trace.map((t) => h("div", { class: "small mono muted" }, `${t.ok ? "✓" : "✗"} ${t.tool}(${JSON.stringify(t.args)})`))) : null);
 }
 
@@ -459,11 +495,11 @@ async function viewRobinhood(root) {
 }
 
 /* ================================ SETTINGS (tabs) ================================ */
-const STABS = [["connect", "Connect & import"], ["robinhood", "Robinhood"], ["calendar", "Calendar"], ["models", "Models"], ["categories", "Categories"], ["sharing", "Sharing"]];
+const STABS = [["connect", "Connect & import"], ["robinhood", "Robinhood"], ["calendar", "Calendar"], ["models", "Models"], ["categories", "Categories"], ["alerts", "Alerts"], ["sharing", "Sharing"]];
 async function viewSettings(root, rerender) {
   add(root, h("div", { class: "tabs", role: "tablist" }, STABS.map(([id, t]) => h("button", { role: "tab", "aria-selected": id === S.settingsTab, class: id === S.settingsTab ? "on" : "", onclick: () => { S.settingsTab = id; rerender(); } }, t))));
   const body = h("div", { class: "stack" }); add(root, body);
-  await ({ connect: tabConnect, robinhood: tabRobinhood, calendar: tabCalendar, models: tabModels, categories: tabCategories, sharing: tabSharing }[S.settingsTab])(body, rerender);
+  await ({ connect: tabConnect, robinhood: tabRobinhood, calendar: tabCalendar, models: tabModels, categories: tabCategories, alerts: tabAlerts, sharing: tabSharing }[S.settingsTab])(body, rerender);
 }
 const saveCfg = async (body, rerender, msg = "Saved") => { try { await api("/api/settings", send("PUT", body)); toast(msg); rerender(); } catch (e) { fail(e); } };
 const withSecret = (body, key, id) => { if (val(id)) body[key] = val(id); return body; };
@@ -518,27 +554,40 @@ async function tabModels(root, rerender) {
   const edit = (p) => { S.draftProv = p; rerender(); };
   add(root, h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Models for the agent"), h("button", { class: "btn sm primary", onclick: () => edit({ name: "", kind: "openai", base_url: "", model: "", tools: true, allow_cloud: false }) }, "+ Add a model")),
     h("p", { class: "muted small" }, "Run it on your own machine (Ollama, LM Studio, llama.cpp) so your money data never leaves it. Cloud models are blocked until you allow each one."),
-    pv.items.length ? pv.items.map((p) => h("div", { class: "ev", style: "grid-template-columns:1fr auto auto auto" }, h("span", {}, h("b", {}, p.name), h("span", { class: "muted small" }, ` ${p.model} · ${p.base_url}`)), h("span", { class: "pill " + (p.local ? "t" : "r") }, p.local ? "local" : "cloud"),
+    pv.items.length ? pv.items.map((p) => h("div", { class: "ev", style: "grid-template-columns:1fr auto auto auto" }, h("span", {}, h("b", {}, p.name), h("span", { class: "muted small" }, ` ${p.model} · ${kfmt(p.context_tokens)} context · ${p.base_url}`)), h("span", { class: "pill " + (p.local ? "t" : "r") }, p.local ? "local" : "cloud"),
       h("button", { class: "btn sm", onclick: () => edit({ ...p, api_key: null }) }, "Edit"), h("button", { class: "btn sm danger", onclick: sure(null, "Sure?", async () => { await api(`/api/agent/providers/${p.id}`, { method: "DELETE" }); rerender(); }) }, "Remove"))) : h("p", { class: "muted" }, "No models yet. Add one to use the Agent page."),
     pv.items.length > 1 ? h("form", { class: "row", style: "margin-top:12px", onsubmit: (e) => { e.preventDefault(); saveCfg({ agent_provider: val("s-defprov") }, rerender, "Default model set"); } }, select("s-defprov", "Default model", pv.items.map((p) => [p.id, p.name]), pv.default), h("button", { class: "btn", type: "submit" }, "Set default")) : null),
     draft ? h("div", { class: "panel" }, h("h3", {}, draft.id ? "Edit model" : "Add a model"),
       !draft.id ? h("div", { class: "chips", style: "margin-bottom:10px" }, h("span", { class: "muted small" }, "Start from:"), presets.map((p) => h("button", { class: "chip", onclick: () => edit({ ...draft, ...p, allow_cloud: false }) }, p.name))) : null,
-      h("form", { class: "row", onsubmit: async (e) => { e.preventDefault(); const body = { name: val("pv-name"), kind: val("pv-kind"), base_url: val("pv-url"), model: val("pv-model"), tools: $("#pv-tools").checked, allow_cloud: $("#pv-cloud").checked }; if (val("pv-key")) body.api_key = val("pv-key");
+      h("form", { class: "row", onsubmit: async (e) => { e.preventDefault(); const body = { name: val("pv-name"), kind: val("pv-kind"), base_url: val("pv-url"), model: val("pv-model"), tools: $("#pv-tools").checked, allow_cloud: $("#pv-cloud").checked, context_tokens: parseInt(val("pv-ctx")) || 8192 }; if (val("pv-key")) body.api_key = val("pv-key");
         try { await api(draft.id ? `/api/agent/providers/${draft.id}` : "/api/agent/providers", send(draft.id ? "PUT" : "POST", body)); S.draftProv = null; toast("Saved"); rerender(); } catch (err) { fail(err); } } },
         field("pv-name", "Name", draft.name, { required: true }), select("pv-kind", "API type", [["openai", "OpenAI-compatible (Ollama, LM Studio, OpenRouter…)"], ["anthropic", "Anthropic (Claude)"]], draft.kind), field("pv-url", "Address", draft.base_url, { type: "url", required: true, placeholder: "http://host.docker.internal:11434/v1" }),
-        field("pv-model", "Model name", draft.model, { required: true }), secretField("pv-key", "API key (cloud only)", draft.has_key),
+        field("pv-model", "Model name", draft.model, { required: true }), field("pv-ctx", "Context size (tokens)", draft.context_tokens ?? 8192, { type: "number", min: "1024", step: "1024" }), secretField("pv-key", "API key (cloud only)", draft.has_key),
         h("label", { class: "check" }, h("input", { type: "checkbox", id: "pv-tools", checked: draft.tools }), "Supports tool calling (untick for small models; they get a data snapshot instead)"),
         h("label", { class: "check" }, h("input", { type: "checkbox", id: "pv-cloud", checked: draft.allow_cloud }), "Allow cloud: I accept my financial data is sent to this address"),
         h("div", { class: "formbtns" }, h("button", { class: "btn primary", type: "submit" }, "Save model"), h("button", { class: "btn", type: "button", onclick: () => edit(null) }, "Cancel")))) : null);
 }
 async function tabCategories(root, rerender) {
   const [cats, rules] = await Promise.all([api("/api/categories"), api("/api/category-rules")]);
-  add(root, h("div", { class: "panel" }, h("h3", {}, "Categories"), h("div", { class: "chips" }, cats.map((c) => h("span", { class: "pill " + (c.kind === "income" ? "t" : c.kind === "transfer" ? "" : "b"), style: "padding:3px 12px" }, c.name, c.builtin ? null : h("button", { class: "x", "aria-label": "Delete " + c.name, onclick: sure(null, "?", async () => { try { await api("/api/categories/" + encodeURIComponent(c.name), { method: "DELETE" }); rerender(); } catch (e) { fail(e); } }) }, "×")))),
+  add(root, h("div", { class: "panel" }, h("h3", {}, "Categories"), h("p", { class: "muted small" }, "Each category carries a tag. Tag it 'Not counted' (like Transfer or Investing) to keep it out of spending totals, budgets and charts."),
+    h("div", { class: "scroll" }, h("table", {}, h("tbody", {}, cats.map((c) => h("tr", {}, h("td", {}, c.name, c.builtin ? null : h("span", { class: "pill" }, "yours")),
+      h("td", {}, h("select", { class: "bare", "aria-label": "Tag for " + c.name, onchange: async (e) => { try { await api("/api/categories/" + encodeURIComponent(c.name), send("PUT", { kind: e.target.value })); toast("Tag saved"); } catch (err) { fail(err); } } },
+        [["expense", "Spending"], ["income", "Income"], ["transfer", "Not counted"]].map(([v, t]) => h("option", { value: v, selected: v === c.kind }, t)))),
+      h("td", { class: "r" }, c.builtin ? null : h("button", { class: "btn sm danger", onclick: sure(null, "Sure?", async () => { try { await api("/api/categories/" + encodeURIComponent(c.name), { method: "DELETE" }); rerender(); } catch (e) { fail(e); } }) }, "Delete"))))))),
     h("form", { class: "row", style: "margin-top:12px", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/categories", send("POST", { name: val("cn-name"), kind: val("cn-kind") })); rerender(); } catch (err) { fail(err); } } },
-      field("cn-name", "New category", "", { required: true, maxlength: 30 }), select("cn-kind", "Counts as", [["expense", "Spending"], ["income", "Income"], ["transfer", "Transfer (not counted)"]], "expense"), h("button", { class: "btn primary", type: "submit" }, "Add"))),
+      field("cn-name", "New category", "", { required: true, maxlength: 30 }), select("cn-kind", "Tag", [["expense", "Spending"], ["income", "Income"], ["transfer", "Not counted"]], "expense"), h("button", { class: "btn primary", type: "submit" }, "Add"))),
     h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Automatic rules"), h("button", { class: "btn sm", onclick: async () => { const r = await api("/api/categories/recategorize", { method: "POST" }); toast(`${r.changed} updated`); } }, "Re-run on all")),
       h("p", { class: "muted small" }, "Created when you change a category with 'remember for similar payments' ticked on the Money movement page. Payments you set by hand are never overwritten."),
       rules.length ? rules.map((r) => h("div", { class: "ev", style: "grid-template-columns:1fr auto auto" }, h("span", { class: "mono" }, `"${r.pattern}"`), h("span", { class: "pill b" }, r.category), h("button", { class: "btn sm", onclick: async () => { await api("/api/category-rules/" + r.id, { method: "DELETE" }); rerender(); } }, "Delete"))) : h("p", { class: "muted" }, "No rules yet.")));
+}
+async function tabAlerts(root, rerender) {
+  const cfg = await api("/api/settings");
+  add(root, h("div", { class: "panel" }, h("h3", {}, "What should I flag?"), h("p", { class: "muted small" }, "Always on: overdrawn accounts and accounts below the minimum you set on them."),
+    h("form", { onsubmit: (e) => { e.preventDefault(); saveCfg({ alert_untracked: $("#al-un").checked ? "on" : "off", alert_missed: $("#al-mi").checked ? "on" : "off" }, rerender); }, style: "display:grid;gap:12px" },
+      h("label", { class: "check" }, h("input", { type: "checkbox", id: "al-un", checked: cfg.alert_untracked !== "off" }), "Repeating payments that are not in Subscriptions yet (same payee, same amount, same timing)"),
+      h("label", { class: "check" }, h("input", { type: "checkbox", id: "al-mi", checked: cfg.alert_missed !== "off" }), "A subscription bound to an account whose charge did not show up when expected (a failed payment, a cancelled card, a price change)"),
+      h("div", {}, h("button", { class: "btn primary", type: "submit" }, "Save"))),
+    h("p", { class: "muted small", style: "margin-top:12px" }, "Alerts show on the Overview and the Subscriptions page. Phone notifications are not set up yet.")));
 }
 const SHARE_LABELS = { net_worth: "Net worth", subscriptions: "Monthly subscription total", robinhood_main: "Robinhood main balance", robinhood_agent: "Robinhood agent balance" };
 async function tabSharing(root, rerender) {
@@ -549,12 +598,13 @@ async function tabSharing(root, rerender) {
 }
 
 /* ================================ SHELL ================================ */
-const TABS = [["overview", "Overview", viewOverview], ["movement", "Money movement", viewMovement], ["accounts", "Accounts", viewAccounts], ["subs", "Subscriptions", viewSubs], ["savings", "Savings", viewSavings], ["planner", "Planner", viewPlanner], ["agent", "Agent", viewAgent], ["robinhood", "Robinhood", viewRobinhood], ["settings", "Settings", viewSettings]];
+const TABS = [["overview", "Overview", viewOverview], ["movement", "Money movement", viewMovement], ["accounts", "Accounts", viewAccounts], ["subs", "Subscriptions", viewSubs], ["savings", "Savings", viewSavings], ["planner", "Budgets & notes", viewPlanner], ["agent", "Agent", viewAgent], ["robinhood", "Robinhood", viewRobinhood], ["settings", "Settings", viewSettings]];
 async function render() {
   const [, title, view] = TABS.find((t) => t[0] === S.tab);
+  try { S.badge = (await api("/api/suggestions")).filter((x) => x.source === "detected" || x.source === "agent").length; } catch { S.badge = 0; }
   const main = h("main", {}, h("div", { class: "bar" }, h("h2", {}, title), S.demo ? h("span", { class: "banner" }, "Sample data. Nothing here is a real account, and changes are not saved.") : h("span", { class: "muted small" }, S.name)));
   $("#app").replaceChildren(h("div", { class: "shell" }, h("nav", { class: "side", "aria-label": "Sections" }, h("div", { class: "brand" }, h("span", { class: "coin" }), "Goblin Bank"),
-    TABS.map(([id, label]) => h("button", { "aria-current": id === S.tab ? "page" : null, onclick: () => { S.tab = id; S.acct = null; S.edit = null; location.hash = id; render(); } }, label)),
+    TABS.map(([id, label]) => h("button", { "aria-current": id === S.tab ? "page" : null, onclick: () => { S.tab = id; S.acct = null; S.edit = null; location.hash = id; render(); } }, label, id === "subs" && S.badge ? h("span", { class: "badge", title: "Repeating payments to review" }, S.badge) : null)),
     h("div", { class: "foot" }, S.demo ? null : h("button", { class: "btn sm", onclick: () => { sessionStorage.clear(); location.reload(); } }, "Sign out"))), main));
   try { await view(main, render); } catch (e) { add(main, h("div", { class: "panel" }, h("p", { class: "neg" }, "Could not load: " + e.message))); }
 }

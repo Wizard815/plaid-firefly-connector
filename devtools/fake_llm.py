@@ -11,6 +11,8 @@ def openai_server(script: list[list[tuple[str, dict]]], log: list):
     def handler(req: httpx.Request):
         body = json.loads(req.content)
         log.append({"url": str(req.url), "auth": req.headers.get("authorization"), "body": body})
+        if body["messages"][0]["content"].startswith("You write concise"):      # the compaction call
+            return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "SUMMARY: " + body["messages"][-1]["content"][-300:]}}]})
         n = sum(1 for m in body["messages"] if m["role"] == "assistant")
         if body.get("tools") and n < len(script):
             return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [

@@ -68,6 +68,16 @@ def main(out: str, artifact: bool):
         db.conn.execute("INSERT INTO plaid_usage VALUES(?,?,?)", (TODAY.isoformat(), ep, n))
     db.conn.commit()
 
+    # a few saved chats so the sample shows the chat list, undo, and compaction
+    def chat(title, summary, msgs):
+        cid = db.conn.execute("INSERT INTO chats(title,provider_id,summary,created,updated) VALUES(?,?,?,?,?)", (title, 1, summary, ts, ts)).lastrowid
+        for role, text, trace, comp in msgs:
+            db.conn.execute("INSERT INTO chat_messages(chat_id,role,content,trace,compacted,created) VALUES(?,?,?,?,?,?)", (cid, role, text, json.dumps(trace), comp, ts))
+        db.conn.commit()
+    chat("Bills for the next two months", "", [("user", "How much will I pay in bills over the next 60 days?", [], 0), ("assistant", "About $576 across 10 payments. State Farm is the biggest at $294 due in a few weeks.", [{"tool": "upcoming_bills", "args": {"days": 60}, "ok": True, "preview": ""}], 0)])
+    chat("Add my gym", "", [("user", "please add my gym, $24.99 a month from checking", [], 0), ("assistant", "Done. I added Planet Fitness at $24.99 a month, paid from Everyday Checking.", [{"tool": "add_subscription", "args": {}, "ok": True, "preview": "", "result": {"added": True, "id": 9999, "name": "Planet Fitness", "amount": 24.99, "repeats": "monthly"}}], 0)])
+    chat("Saving plan (long chat)", "You are saving toward a CD ladder: $10k CD matures in July, $5k CD matures in December. Checking should stay above $500. Goal: move $500 each payday.",
+         [("user", "Where should my first $500 go?", [], 1), ("assistant", "Into the 6-month CD, it matures soonest.", [], 1), ("user", "And the second $500?", [], 0), ("assistant", "Axos HYSA until the CD matures, then roll it over.", [], 0)])
     g = lambda p: c.get(p, headers=H).json()
     rec = {"transactions": g("/api/transactions?limit=500")}
     for p in ["/api/overview", "/api/history", "/api/spending", f"/api/spending?start={TODAY:%Y-%m}-01", "/api/categories", "/api/accounts", "/api/subscriptions", "/api/suggestions", "/api/alerts", "/api/savings", "/api/notes",
@@ -91,6 +101,9 @@ def main(out: str, artifact: bool):
                    "trace": [{"tool": "upcoming_bills", "args": {"days": 60}, "ok": True, "preview": ""}, {"tool": "project_balance", "args": {"days": 30, "account_id": "chk"}, "ok": True, "preview": ""}, {"tool": "calculate", "args": {"expression": "6200 - 1200"}, "ok": True, "preview": ""}],
                    "provider": {"id": rec["chatProvider"], "name": "Ollama (this machine)", "model": "llama3.1", "local": True}, "steps": 2}
     rec["/api/budgets?month="] = rec["/api/budgets"]
+    rec["/api/chats"] = g("/api/chats")
+    for ch in rec["/api/chats"]:
+        rec[f"/api/chats/{ch['id']}"] = g(f"/api/chats/{ch['id']}")
     html = (ROOT / "ui" / "index.html").read_text()
     html = html.replace("window.GOBLIN_DEMO = null; /*DEMO*/", "window.GOBLIN_DEMO = " + json.dumps(rec, default=str).replace("</", "<\\/") + ";")
     if artifact:
