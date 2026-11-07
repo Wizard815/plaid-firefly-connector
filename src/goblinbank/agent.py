@@ -131,7 +131,7 @@ def build_tools(ctx):
 
     def t_add_goal(a):
         try:
-            g = plan.add_goal(store, str(a.get("name", "")), float(a["target"]), today(), a.get("deadline") or None, int(a.get("priority", 2)), float(a.get("monthly", 0) or 0), str(a.get("note", "")), a.get("auto_allocate", True))
+            g = plan.add_goal(store, str(a.get("name", "")), float(a["target"]), today(), a.get("deadline") or None, int(a.get("priority", 2)), float(a.get("monthly", 0) or 0), str(a.get("note", "")), bool(a.get("use_free_savings", False)))
         except (plan.PlanError, KeyError, TypeError, ValueError) as e:
             return {"error": f"could not add the goal: {e}"}
         return {"added": True, "id": g["id"], "name": g["name"], "target": g["target"], "earmarked_now": g["allocated"], "shortfall": g["shortfall"], "funded": g["funded"],
@@ -145,6 +145,9 @@ def build_tools(ctx):
         except (plan.PlanError, KeyError, StopIteration, TypeError, ValueError) as e:
             return {"error": f"could not earmark that: {e}"}
         return {"funded": True, "goal_id": g["id"], "name": g["name"], "added": amt, "place": a.get("place") or "", "earmarked_before": before, "earmarked_now": g["allocated"], "shortfall": g["shortfall"]}
+
+    def t_maturities(a):
+        return plan.maturity_outlook(store, today(), int(a.get("days", 365) or 365))
 
     def t_afford(a):
         try:
@@ -243,11 +246,12 @@ def build_tools(ctx):
         ("find_recurring_payments", "Payments that repeat at a steady interval and amount in the transaction history but are not tracked yet, plus pending proposals.", S({}), t_recurring),
         ("savings_summary", "Where the savings are (accounts, CDs...), total, how much is earmarked for goals and how much is free, APY and maturities.", S({}), t_savings),
         ("list_goals", "Savings goals (things to save for): target, earmarked amount, shortfall, deadline, monthly needed. Also the free savings.", S({}), t_goals),
+        ("maturity_outlook", "For each CD/bond with a maturity date: value then, what is pinned to goals, what is free, and which goals the free money would reach in priority order.", S({"days": INT}), t_maturities),
         ("can_i_afford", "Check whether a purchase fits in FREE savings (not earmarked) and how long saving would take at the monthly plan's leftover.", S({"amount": NUM}, ["amount"]), t_afford),
         ("spending_forecast", "Projected spending for this month from past months (per category), what is spent so far, and how both compare to average monthly income.", S({"months": INT}), t_forecast),
         ("monthly_plan", "Monthly income vs bills, budgets and goal contributions, with what is left over. month is YYYY-MM (default this month).", S({"month": STR}), t_plan),
-        ("add_goal", "Create a savings goal. ONLY when the user asks. Free savings are earmarked automatically; with none free it starts unfunded. Optional deadline (YYYY-MM-DD), priority 1 high..3 low, monthly contribution.",
-         S({"name": STR, "target": NUM, "deadline": DATE, "priority": INT, "monthly": NUM, "note": STR}, ["name", "target"]), t_add_goal),
+        ("add_goal", "Create a savings goal. ONLY when the user asks. It starts unfunded; set use_free_savings true ONLY if the user says to take the free money now. Optional deadline (YYYY-MM-DD), priority 1 high..3 low, monthly contribution.",
+         S({"name": STR, "target": NUM, "deadline": DATE, "priority": INT, "monthly": NUM, "note": STR, "use_free_savings": {"type": "boolean"}}, ["name", "target"]), t_add_goal),
         ("fund_goal", "Earmark FREE savings for a goal (goal_id from list_goals). ONLY when the user asks. Optional place = a savings place key like s:3 or a:abc to take it from one account.",
          S({"goal_id": INT, "amount": NUM, "place": STR}, ["goal_id", "amount"]), t_fund_goal),
         ("get_alerts", "Active alerts: overdrawn or low accounts, expected payments not seen, CDs maturing, bills due soon.", S({}), t_alerts),

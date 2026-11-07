@@ -191,7 +191,7 @@ def goal_stack(script):
 
 
 def test_agent_creates_goal_funds_it_and_checks_affordability():
-    script = [[("add_goal", {"name": "House", "target": 9000}), ("add_goal", {"name": "Car", "target": 3000, "monthly": 200}), ("can_i_afford", {"amount": 500}), ("list_goals", {}), ("monthly_plan", {})]]
+    script = [[("add_goal", {"name": "House", "target": 9000, "use_free_savings": True}), ("add_goal", {"name": "Car", "target": 3000, "monthly": 200, "use_free_savings": True}), ("can_i_afford", {"amount": 500}), ("list_goals", {}), ("monthly_plan", {})]]
     c, db, _ = goal_stack(script)
     cid = c.post("/api/chats", headers=H).json()["chat"]["id"]
     tr = {t["tool"]: t for t in say(c, cid, "set up a house goal of 9000 and a car goal").json()["messages"][-1]["trace"]}
@@ -227,7 +227,7 @@ def test_fund_goal_tool_respects_free_money_and_offers_undo_data():
 
 def test_linked_goals_and_notes_reach_the_model_and_survive_changes():
     c, db, log = goal_stack([])
-    g = c.post("/api/goals", headers=H, json={"name": "House", "target": 9000, "deadline": "2027-11-07"}).json()
+    g = c.post("/api/goals", headers=H, json={"name": "House", "target": 9000, "deadline": "2027-11-07", "auto_allocate": True}).json()
     n = c.post("/api/notes", headers=H, json={"title": "House plan", "body": "Put the CD money into the house fund."}).json()
     chat = c.post("/api/chats", headers=H, json={"links": [{"kind": "goal", "ref_id": g["id"]}, {"kind": "note", "ref_id": n["id"]}]}).json()
     assert [(l["kind"], l["title"]) for l in chat["links"]] == [("goal", "House"), ("note", "House plan")]
@@ -253,7 +253,7 @@ def test_linked_goals_and_notes_reach_the_model_and_survive_changes():
 
 def test_savings_summary_tool_shows_free_and_earmarked():
     c, db, _ = goal_stack([[("savings_summary", {})]])
-    c.post("/api/goals", headers=H, json={"name": "House", "target": 9000})
+    c.post("/api/goals", headers=H, json={"name": "House", "target": 9000, "auto_allocate": True})
     cid = c.post("/api/chats", headers=H).json()["chat"]["id"]
     t = say(c, cid, "savings?").json()["messages"][-1]["trace"][0]
     assert t["ok"]
@@ -262,3 +262,15 @@ def test_savings_summary_tool_shows_free_and_earmarked():
     import json as _j
     s = _j.loads(body[0])
     assert (s["total_savings"], s["earmarked_for_goals"], s["free_savings"]) == (10000, 9000, 1000)
+
+
+def test_agent_goal_starts_unfunded_unless_told_to_use_free_savings():
+    script = [[("add_goal", {"name": "Boat", "target": 2000}), ("add_goal", {"name": "Bike", "target": 600, "use_free_savings": True}), ("maturity_outlook", {})]]
+    c, db, _ = goal_stack(script)
+    cid = c.post("/api/chats", headers=H).json()["chat"]["id"]
+    t = say(c, cid, "add two goals").json()["messages"][-1]["trace"]
+    assert [x["ok"] for x in t] == [True, True, True]
+    g = {x["name"]: x for x in c.get("/api/goals", headers=H).json()["items"]}
+    assert g["Boat"]["allocated"] == 0 and g["Bike"]["allocated"] == 600                                       # only the one the user said to fund
+    assert t[0]["result"]["earmarked_now"] == 0 and t[1]["result"]["earmarked_now"] == 600
+    assert "maturity_outlook" in {x["name"] for x in c.get("/api/agent/tools", headers=H).json()}

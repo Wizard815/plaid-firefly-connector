@@ -5,6 +5,8 @@ authenticating the person), so nothing here is reachable without going through C
 Amounts are signed: positive = money in, negative = money out.
 """
 import os
+import threading
+import time
 from datetime import date, timedelta
 
 import httpx
@@ -31,7 +33,7 @@ def _equity(bal) -> float | None:
     return None
 
 
-def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: DB | None = None, today=None, llm_transport=None) -> FastAPI:
+def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: DB | None = None, today=None, llm_transport=None, autosync: bool = False, autosync_tick: float | None = None) -> FastAPI:
     name = os.environ.get("GOBLIN_NAME", "goblin")
     secret = os.environ.get("INTERNAL_SECRET", "")
     connector_secret = os.environ.get("CONNECTOR_SECRET", secret)
@@ -176,16 +178,42 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             return {"synced": await run_in_threadpool(sync.sync_item, store, plaid, body["item_id"])}
         return {"ignored": body.get("webhook_code")}
 
+    sync_state = {"last": 0.0, "at": None}
+    sync_lock = threading.Lock()
+
+    def do_sync() -> dict:
+        """One pull of everything: Plaid, Robinhood snapshots, drop-folder CSVs. One at a time, whoever asks."""
+        with sync_lock:
+            out = {"plaid": [], "robinhood": snapshot_robinhood(), "imports": scan_imports()}
+            if plaid.configured:
+                try:
+                    out["plaid"] = sync.sync_all(store, plaid)
+                except PlaidError as e:
+                    out["plaid_error"] = str(e)
+            sync_state["last"], sync_state["at"] = time.time(), sync.now()
+            return out
+
     @app.post("/sync")
     def sync_now(request: Request):
         auth(request)
-        out = {"plaid": [], "robinhood": snapshot_robinhood(), "imports": scan_imports()}
-        if plaid.configured:
+        return do_sync()
+
+    def autosync_loop():
+        """Keep the data fresh without anyone pressing Sync. Every `sync_minutes` (default 15; 0 turns it off)."""
+        while True:
             try:
-                out["plaid"] = sync.sync_all(store, plaid)
-            except PlaidError as e:
-                out["plaid_error"] = str(e)
-        return out
+                mins = float(cfg.get(store, "sync_minutes") or 15)
+            except ValueError:
+                mins = 15.0
+            time.sleep(autosync_tick if autosync_tick is not None else max(60.0, mins * 60))        # autosync_tick: tests only
+            if mins > 0 and (autosync_tick is not None or time.time() - sync_state["last"] >= mins * 60 - 5):
+                try:
+                    do_sync()
+                except Exception:           # a failed round must never kill the loop
+                    pass
+
+    if autosync:
+        threading.Thread(target=autosync_loop, daemon=True, name="autosync").start()
 
     def scan_imports() -> list[dict]:
         """Import any CSV dropped in the imports folder, then move it to done/ so it is never re-read."""
@@ -410,12 +438,23 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         if not limiter.ok(row["id"]):
             raise HTTPException(429, "too many requests: slow down (limit %d a minute)" % limiter.n)
         res = resource.strip("/")
+        wants_refresh = request.query_params.get("refresh") in ("1", "true", "yes")
+        refreshed = False
+        if wants_refresh:
+            if "refresh" not in row["scopes"].split(","):
+                raise HTTPException(403, "this token does not have the 'refresh' scope")
+            if time.time() - sync_state["last"] >= external.REFRESH_MIN_SECONDS:           # at most one real refresh per window, however often it is asked
+                do_sync()
+                refreshed = True
         if not res:
             return {"goblin": name, "token": row["name"], "resources": sorted(r for r, sc in external.RESOURCES.items() if sc in row["scopes"].split(","))}
         try:
-            return external.data(store, res, (today or date.today)(), dict(request.query_params))
+            out = external.data(store, res, (today or date.today)(), {k: v for k, v in request.query_params.items() if k != "refresh"})
         except ValueError:
             raise HTTPException(422, "bad parameter")
+        if isinstance(out, dict):
+            out["synced_at"], out["refreshed"] = sync_state["at"], refreshed
+        return out
 
     # ---------------- Opt-in summary for gateway / Orb ----------------
     @app.get("/summary")
@@ -449,6 +488,9 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         if "goals" in share() or every:
             gv = plan.goals_view(store, (today or date.today)())
             out["goals"] = [{"name": g["name"], "target": g["target"], "allocated": g["allocated"], "pct": g["pct"]} for g in gv["items"] if g["status"] == "active"]
+        if "spending" in share() or every:
+            fc = ledger.spending_forecast(store, (today or date.today)())
+            out["spending"] = {"so_far": fc["spent_so_far"], "projected": fc["projected"], "income_avg": fc["income_avg"], "pct_projected": fc["pct_projected"], "left_after": fc["left_after_projected"], "confidence": fc["confidence"]}
         if "robinhood_agent" in share() or every:
             a = fetch("agent")
             out["robinhood_agent"] = a and {"as_of": a.get("as_of"), "balances": a.get("balances")}

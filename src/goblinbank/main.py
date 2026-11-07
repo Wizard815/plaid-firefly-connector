@@ -10,7 +10,7 @@ def build():
         return create_app()
     if role == "goblin":
         from goblinbank.goblin import create_app
-        return create_app()
+        return create_app(autosync=os.environ.get("GOBLIN_AUTOSYNC", "1") != "0")
     from goblinbank.connectors.base import make_connector_app
     if role == "rh-agent":
         from goblinbank.connectors.rh_agent import AgentConnector

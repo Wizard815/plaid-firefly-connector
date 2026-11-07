@@ -47,7 +47,7 @@ def main():
     # a local model for the agent
     httpx.post("http://127.0.0.1:9204/g/alice/api/agent/providers", headers={"Authorization": "Bearer login-alice"},
                json={"name": "Fake local model", "kind": "openai", "base_url": "http://127.0.0.1:9202/v1", "model": "fake", "tools": True})
-    httpx.put("http://127.0.0.1:9204/g/alice/api/settings", headers={"Authorization": "Bearer login-alice"}, json={"share": ["net_worth", "bills", "alerts", "savings", "goals"]})
+    httpx.put("http://127.0.0.1:9204/g/alice/api/settings", headers={"Authorization": "Bearer login-alice"}, json={"share": ["net_worth", "bills", "bill_list", "alerts", "alert_list", "savings", "goals", "spending"]})
     print("ready http://127.0.0.1:9204  goblin=alice token=login-alice", flush=True)
     try:
         procs[-1].wait()

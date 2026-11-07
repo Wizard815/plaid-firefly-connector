@@ -37,9 +37,9 @@ def add_place(db, name, balance, kind="savings", **kw):
 def test_ten_thousand_nine_for_the_house_one_for_the_car_then_nothing_free():
     c, db = api()
     add_place(db, "Axos HYSA", 10000)
-    house = c.post("/api/goals", headers=H, json={"name": "House", "target": 9000}).json()
+    house = c.post("/api/goals", headers=H, json={"name": "House", "target": 9000, "auto_allocate": True}).json()
     assert house["allocated"] == 9000 and house["funded"] and house["shortfall"] == 0          # free money is earmarked on creation
-    car = c.post("/api/goals", headers=H, json={"name": "Car", "target": 1000}).json()
+    car = c.post("/api/goals", headers=H, json={"name": "Car", "target": 1000, "auto_allocate": True}).json()
     assert car["allocated"] == 1000 and c.get("/api/goals", headers=H).json()["free"] == 0
     laptop = c.post("/api/goals", headers=H, json={"name": "Laptop", "target": 1500, "monthly": 250}).json()
     assert laptop["allocated"] == 0 and laptop["shortfall"] == 1500 and not laptop["funded"]   # nothing free: it just becomes a savings goal
@@ -62,7 +62,7 @@ def test_ten_thousand_nine_for_the_house_one_for_the_car_then_nothing_free():
 def test_afford_check_uses_free_money_only():
     c, db = api()
     add_place(db, "Savings", 10000)
-    c.post("/api/goals", headers=H, json={"name": "House", "target": 9000})
+    c.post("/api/goals", headers=H, json={"name": "House", "target": 9000, "auto_allocate": True})
     a = c.get("/api/afford?amount=800", headers=H).json()
     assert a["can_buy_now"] and a["free_savings"] == 1000 and "leave $200.00 free" in a["note"]
     b = c.get("/api/afford?amount=1500", headers=H).json()
@@ -91,11 +91,11 @@ def test_pinning_money_to_one_account_and_autofill_by_priority():
 def test_closing_and_deleting_goals_free_their_money():
     c, db = api()
     add_place(db, "Savings", 3000)
-    g = c.post("/api/goals", headers=H, json={"name": "TV", "target": 2000}).json()
+    g = c.post("/api/goals", headers=H, json={"name": "TV", "target": 2000, "auto_allocate": True}).json()
     assert c.get("/api/goals", headers=H).json()["free"] == 1000
     done = c.post(f"/api/goals/{g['id']}/close", headers=H, json={"status": "done"}).json()
     assert done["status"] == "done" and c.get("/api/goals", headers=H).json()["free"] == 3000 and done["closed"] == TODAY.isoformat()
-    h = c.post("/api/goals", headers=H, json={"name": "Trip", "target": 500}).json()
+    h = c.post("/api/goals", headers=H, json={"name": "Trip", "target": 500, "auto_allocate": True}).json()
     c.delete(f"/api/goals/{h['id']}", headers=H)
     assert c.get("/api/goals", headers=H).json()["free"] == 3000 and db.one("SELECT COUNT(*) n FROM allocations")["n"] == 0
     assert c.post(f"/api/goals/{g['id']}/fund", headers=H, json={"amount": 5}).status_code == 409        # closed goals take no money
@@ -116,7 +116,7 @@ def test_goal_validation_and_deadline_math():
 def test_overallocation_when_a_balance_drops():
     c, db = api()
     sid = add_place(db, "Savings", 1000)
-    c.post("/api/goals", headers=H, json={"name": "Move", "target": 1000})
+    c.post("/api/goals", headers=H, json={"name": "Move", "target": 1000, "auto_allocate": True})
     db.conn.execute("UPDATE savings SET balance=400 WHERE id=?", (sid,)); db.conn.commit()           # you spent from it
     v = c.get("/api/goals", headers=H).json()
     assert v["overallocated"] and v["free"] == -600
@@ -160,10 +160,10 @@ def test_plan_bills_sit_inside_their_budget():
     db.conn.execute("INSERT INTO goals(name,target,monthly,created) VALUES('House',9000,300,'x')"); db.conn.commit()
     p = c.get("/api/plan?month=2026-11", headers=H).json()
     by = {r["category"]: r for r in p["rows"]}
-    assert p["income_month"] == round(2000 * 30.4375 / 14, 2) == 4348.21      # 2000 every 2 weeks, 365.25/14 pays a year
+    assert p["income_month"] == 4000 and p["income_smoothed"] == round(2000 * 30.4375 / 14, 2) == 4348.21      # Nov 13 and Nov 27 land this month; the smoothed figure is 365.25/14 paydays a year
     assert by["Food"]["planned"] == 400 and by["Health"]["planned"] == 40 and by["Subscriptions"]["planned"] == 15 and by["Bills"]["planned"] == 60      # budget or bills, whichever is larger, never both
     assert p["outflow_planned"] == 400 + 40 + 15 + 60 and p["goals_month"] == 300
-    assert p["left"] == round(4348.21 - 515 - 300, 2)
+    assert p["left"] == round(4000 - 515 - 300, 2) and p["left_smoothed"] == round(4348.21 - 515 - 300, 2)
     assert any("Health budget" in w for w in p["warnings"])
     c.put("/api/budgets", headers=H, json={"category": "Food", "monthly_amount": 6000})
     p = c.get("/api/plan?month=2026-11", headers=H).json()
@@ -179,7 +179,7 @@ def test_plan_actuals_and_income_detection(monkeypatch):
     r = c.post("/api/incomes/accept", headers=H, json={"key": s["key"], "name": "My paycheck"})
     assert r.status_code == 200 and r.json()["label"] == "biweekly" and r.json()["monthly"] == pytest.approx(s["amount"] * 30.4375 / 14, abs=0.01)
     p = c.get("/api/plan?month=2026-10", headers=H).json()
-    assert not p["income_suggestions"] and p["income_month"] == r.json()["monthly"]
+    assert not p["income_suggestions"] and p["income_smoothed"] == r.json()["monthly"] and p["income_month"] == round(r.json()["amount"] * len(p["incomes"][0]["paydays"]), 2)
     cats = {x["name"]: x["kind"] for x in c.get("/api/categories", headers=H).json()}
     want = db.one("SELECT ROUND(COALESCE(SUM(amount),0),2) s FROM transactions WHERE amount>0 AND category IN (SELECT name FROM categories WHERE kind='income') AND date BETWEEN '2026-10-01' AND '2026-10-31'")["s"]
     assert p["actual"]["income"] == want
@@ -227,3 +227,85 @@ def test_allocation_invariants_hold_under_random_operations(seed_no):
         for gg in v["items"]:
             assert gg["shortfall"] == pytest.approx(max(0, gg["target"] - gg["allocated"]), abs=0.02)
             if gg["status"] != "active": assert gg["allocated"] == 0
+
+
+def test_three_paycheck_months_show_three_paychecks():
+    c, db = api()
+    db.conn.execute("INSERT INTO incomes(name,amount,every,unit,next_date) VALUES('Pay',2000,2,'week','2026-11-13')"); db.conn.commit()
+    jan = c.get("/api/plan?month=2027-01", headers=H).json()
+    apr = c.get("/api/plan?month=2027-04", headers=H).json()
+    assert jan["incomes"][0]["paydays"] == ["2027-01-08", "2027-01-22"] and jan["income_month"] == 4000 and not jan["extra_paycheck_month"]
+    assert apr["incomes"][0]["paydays"] == ["2027-04-02", "2027-04-16", "2027-04-30"] and apr["income_month"] == 6000 and apr["extra_paycheck_month"] and apr["incomes"][0]["extra_paycheck"]
+    assert apr["income_smoothed"] == jan["income_smoothed"]                                          # the steady figure does not jump
+    # over a whole year the real paydays add up to the annual pay (26 or 27 paychecks)
+    total = sum(c.get(f"/api/plan?month=2027-{m:02d}", headers=H).json()["income_month"] for m in range(1, 13))
+    assert total in (52000, 54000)
+    # weekly pay: 5 paydays in some months, and a paused income lands nothing
+    db.conn.execute("DELETE FROM incomes"); db.conn.execute("INSERT INTO incomes(name,amount,every,unit,next_date) VALUES('Side',100,1,'week','2026-11-06')"); db.conn.commit()
+    assert len(c.get("/api/plan?month=2027-01", headers=H).json()["incomes"][0]["paydays"]) == 5                # Fridays: Jan 1, 8, 15, 22, 29 (but only 4 in Nov and Dec)
+    db.conn.execute("UPDATE incomes SET active=0"); db.conn.commit()
+    assert c.get("/api/plan?month=2027-01", headers=H).json()["income_month"] == 0
+    # affordability uses the steady figure, so a 3-paycheck month does not inflate how fast you can save
+    db.conn.execute("DELETE FROM incomes"); db.conn.execute("INSERT INTO incomes(name,amount,every,unit,next_date) VALUES('Pay',2000,2,'week','2026-11-06')"); db.conn.commit()
+    assert c.get("/api/afford?amount=100000", headers=H).json()["monthly_left_in_plan"] == round(2000 * 30.4375 / 14, 2)
+
+
+def test_new_goals_start_unfunded_unless_you_say_otherwise():
+    c, db = api()
+    add_place(db, "Savings", 5000)
+    g = c.post("/api/goals", headers=H, json={"name": "Trip", "target": 2000}).json()
+    assert g["allocated"] == 0 and g["shortfall"] == 2000 and c.get("/api/goals", headers=H).json()["free"] == 5000          # free money stays in the shared pool
+    other = c.post("/api/goals", headers=H, json={"name": "Bike", "target": 800}).json()
+    assert c.get("/api/goals", headers=H).json()["free"] == 5000                                                           # two unfunded goals both see all of it
+    assert c.get("/api/afford?amount=4000", headers=H).json()["can_buy_now"]                                                # and so does an affordability check
+    t = c.post("/api/goals", headers=H, json={"name": "Take it", "target": 800, "auto_allocate": True}).json()               # the toggle
+    assert t["allocated"] == 800 and c.get("/api/goals", headers=H).json()["free"] == 4200
+    big = c.post("/api/goals", headers=H, json={"name": "Big", "target": 9000, "auto_allocate": True}).json()               # takes only what is free
+    assert big["allocated"] == 4200 and c.get("/api/goals", headers=H).json()["free"] == 0
+
+
+def test_investment_accounts_count_as_savings_only_when_switched_on():
+    c, db = api()
+    db.conn.execute("INSERT INTO accounts(id,source,institution,name,kind,balance,subtype) VALUES('rh','plaid','Robinhood','Brokerage','investment',12000,'brokerage')"); db.conn.commit()
+    names = lambda: {p["name"] for p in c.get("/api/goals", headers=H).json()["places"]}
+    assert "Brokerage" not in names()
+    c.put("/api/accounts/rh", headers=H, json={"savings_mode": "yes"})
+    assert "Brokerage" in names() and c.get("/api/goals", headers=H).json()["total"] == 12000
+
+
+# ---------------------------------------------------------------- where maturing money goes
+def test_maturity_outlook_splits_pinned_free_and_suggestions():
+    c, db = api()
+    cd = add_place(db, "12-mo CD", 10000, kind="cd", apy=5.0, maturity="2027-05-07")
+    sv = add_place(db, "HYSA", 3000, apy=4.2)
+    house = c.post("/api/goals", headers=H, json={"name": "House", "target": 9000, "priority": 1, "auto_allocate": False}).json()
+    car = c.post("/api/goals", headers=H, json={"name": "Car", "target": 3000, "priority": 2}).json()
+    lap = c.post("/api/goals", headers=H, json={"name": "Laptop", "target": 1000, "priority": 3}).json()
+    c.post(f"/api/goals/{house['id']}/allocate", headers=H, json={"place": f"s:{cd}", "amount": 9000})          # the house money is pinned to the CD
+    (m,) = c.get("/api/maturities", headers=H).json()
+    value = round(10000 * (1 + 0.05 / 365) ** 181, 2)
+    assert m["name"] == "12-mo CD" and m["days"] == 181 and m["value_at_maturity"] == value and m["interest"] == round(value - 10000, 2)
+    assert [(p["goal"], p["amount"]) for p in m["pinned"]] == [("House", 9000)] and m["free_at_maturity"] == round(value - 9000, 2)
+    sug = [(x["goal"], x["amount"]) for x in m["suggestions"]]
+    assert sug[0][0] == "Car" and sug[0][1] == min(3000, m["free_at_maturity"]) and (len(sug) == 1 or sug[1][0] == "Laptop")      # priority order: Car (2) before Laptop (3)
+    assert m["leftover"] == round(max(0, m["free_at_maturity"] - 3000 - 1000), 2)
+    assert "HYSA" in m["advice"] or m["leftover"] == 0 or "Nothing else" in m["advice"]
+    # nothing needs it -> a roll-over tip naming your best-paying place
+    for g in (car, lap):
+        c.delete(f"/api/goals/{g['id']}", headers=H)
+    (m,) = c.get("/api/maturities", headers=H).json()
+    assert m["suggestions"] == [] and m["leftover"] == m["free_at_maturity"] and "HYSA" not in m["advice"] and "Nothing else needs it" in m["advice"]      # the CD itself pays the most
+    c.delete(f"/api/goals/{house['id']}", headers=H)
+    assert c.get("/api/maturities?days=10", headers=H).json() == []                                                      # outside the window
+    assert c.get("/api/maturities", headers=H).json()[0]["pinned"] == []
+
+
+def test_maturity_outlook_hands_money_out_across_several_cds_in_date_order():
+    c, db = api()
+    add_place(db, "CD A", 2000, kind="cd", maturity="2027-01-07", apy=4.0)
+    add_place(db, "CD B", 2000, kind="cd", maturity="2027-03-07", apy=4.0)
+    c.post("/api/goals", headers=H, json={"name": "Boiler", "target": 3000, "priority": 1})
+    a, b = c.get("/api/maturities", headers=H).json()
+    assert a["name"] == "CD A" and [(x["goal"], x["amount"]) for x in a["suggestions"]] == [("Boiler", a["free_at_maturity"])]
+    assert [(x["goal"], x["amount"]) for x in b["suggestions"]] == [("Boiler", round(3000 - a["free_at_maturity"], 2))]        # the first CD covers part; the second finishes it
+    assert b["leftover"] == round(b["free_at_maturity"] - (3000 - a["free_at_maturity"]), 2)

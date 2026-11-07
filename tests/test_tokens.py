@@ -26,7 +26,7 @@ def rig():
     seed(db, 3, TODAY)
     db.conn.execute("INSERT INTO savings(name,kind,balance,apy) VALUES('HYSA','savings',4000,4)"); db.conn.commit()
     g = TestClient(goblin.create_app(db=db, today=lambda: TODAY))
-    g.post("/api/goals", headers=H, json={"name": "House", "target": 3000})
+    g.post("/api/goals", headers=H, json={"name": "House", "target": 3000, "auto_allocate": True})
 
     def to_goblin(req: httpx.Request):
         r = g.request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
@@ -128,3 +128,118 @@ def test_orb_summary_shows_only_what_was_shared():
     assert set(a) == {"goblin", "net_worth", "bills", "alerts", "savings", "goals"} and a["savings"]["free"] == 1000 and a["goals"][0]["name"] == "House"
     assert "transactions" not in str(a)
     assert g.put("/api/settings", headers=H, json={"share": ["transactions"]}).status_code == 422                          # the Orb can never be given raw transactions
+
+
+# ---------------------------------------------------------------- freshness: auto-sync and on-demand refresh
+import time as _time
+import json as _json
+
+
+def counting_plaid():
+    calls = {"sync": 0}
+
+    def h(req: httpx.Request):
+        p = req.url.path
+        if p == "/item/public_token/exchange":
+            return httpx.Response(200, json={"item_id": "i1", "access_token": "a"})
+        if p == "/accounts/get":
+            return httpx.Response(200, json={"accounts": [{"account_id": "x", "name": "Chk", "type": "depository", "balances": {"current": 10.0}}]})
+        if p == "/transactions/sync":
+            calls["sync"] += 1
+            return httpx.Response(200, json={"added": [], "modified": [], "removed": [], "next_cursor": "c", "has_more": False})
+        if p == "/transactions/recurring/get":
+            return httpx.Response(200, json={"outflow_streams": []})
+        return httpx.Response(404, json={"error_code": "X", "error_message": p})
+    return httpx.MockTransport(h), calls
+
+
+def fresh_rig(monkeypatch, **kw):
+    monkeypatch.setenv("API_RATE_PER_MIN", "100")
+    monkeypatch.setenv("PLAID_CLIENT_ID", "c"); monkeypatch.setenv("PLAID_SECRET", "s")
+    t, calls = counting_plaid()
+    db = DB(":memory:")
+    g = TestClient(goblin.create_app(db=db, today=lambda: TODAY, plaid_transport=t, **kw))
+    g.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "Bank"})
+    calls["sync"] = 0
+
+    def to_goblin(req: httpx.Request):
+        r = g.request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
+        return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
+    cfg = {"goblins": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("login")}], "orb_keys": []}
+    return g, TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_goblin))), calls
+
+
+def test_refresh_on_demand_needs_its_own_scope_and_is_rate_limited(monkeypatch):
+    g, gw, calls = fresh_rig(monkeypatch)
+    plain = {"Authorization": "Bearer " + mint(g, ["summary"])["token"]}
+    full = {"Authorization": "Bearer " + mint(g, ["summary", "bills", "refresh"], "HA full")["token"]}
+    assert gw.get("/api/v1/me/ha?refresh=1", headers=plain).status_code == 403 and calls["sync"] == 0              # no refresh scope, no sync
+    assert gw.get("/api/v1/me/ha", headers=plain).json()["refreshed"] is False and calls["sync"] == 0               # a normal poll never triggers a bank sync
+    a = gw.get("/api/v1/me/ha?refresh=1", headers=full).json()
+    assert a["refreshed"] is True and calls["sync"] == 1 and a["synced_at"] and "net_worth" in a
+    b = gw.get("/api/v1/me/ha?refresh=1", headers=full).json()
+    assert b["refreshed"] is False and calls["sync"] == 1 and b["synced_at"] == a["synced_at"]                      # asked again right away: served from the last sync
+    assert gw.get("/api/v1/me/bills?days=14&refresh=1", headers=full).json()["days"] == 14                          # the refresh flag does not leak into other parameters
+    assert "refresh" in g.get("/api/tokens", headers=H).json()["scopes"]
+
+
+def test_refresh_allowed_again_after_the_window(monkeypatch):
+    g, gw, calls = fresh_rig(monkeypatch)
+    full = {"Authorization": "Bearer " + mint(g, ["summary", "refresh"])["token"]}
+    gw.get("/api/v1/me/ha?refresh=1", headers=full)
+    assert calls["sync"] == 1
+    monkeypatch.setattr("goblinbank.external.REFRESH_MIN_SECONDS", 0)
+    gw.get("/api/v1/me/ha?refresh=1", headers=full)
+    assert calls["sync"] == 2
+
+
+def test_autosync_runs_on_its_own_and_can_be_switched_off(monkeypatch):
+    g, gw, calls = fresh_rig(monkeypatch, autosync=True, autosync_tick=0.05)
+    deadline = _time.time() + 5
+    while calls["sync"] < 3 and _time.time() < deadline:
+        _time.sleep(0.05)
+    assert calls["sync"] >= 3                                                                                       # nobody pressed Sync
+    assert g.put("/api/settings", headers=H, json={"sync_minutes": "0"}).json()["sync_minutes"] == "0"
+    _time.sleep(0.3)
+    n = calls["sync"]
+    _time.sleep(0.4)
+    assert calls["sync"] == n                                                                                       # 0 means off
+    assert g.put("/api/settings", headers=H, json={"sync_minutes": "x"}).status_code == 422
+
+
+def test_autosync_off_by_default_in_tests_and_survives_errors(monkeypatch):
+    g, gw, calls = fresh_rig(monkeypatch)
+    _time.sleep(0.2)
+    assert calls["sync"] == 0                                                                                       # no thread unless asked
+    def boom(req): raise httpx.ConnectError("down")
+    monkeypatch.setenv("PLAID_CLIENT_ID", "c"); monkeypatch.setenv("PLAID_SECRET", "s")
+    g2 = TestClient(goblin.create_app(db=DB(":memory:"), today=lambda: TODAY, plaid_transport=httpx.MockTransport(boom), autosync=True, autosync_tick=0.05))
+    _time.sleep(0.3)
+    assert g2.get("/health").status_code == 200                                                                     # the app stays up while syncs fail
+
+
+def test_spending_projection_is_shareable_with_the_orb():
+    g, gw, db = rig()
+    g.put("/api/settings", headers=H, json={"share": ["spending"]})
+    s = g.get("/summary", headers=H).json()
+    assert set(s) == {"goblin", "spending"} and set(s["spending"]) == {"so_far", "projected", "income_avg", "pct_projected", "left_after", "confidence"}
+    assert "transactions" not in str(s) and s["spending"]["projected"] >= s["spending"]["so_far"]
+
+
+def test_itemised_bill_and_alert_lists_are_separate_opt_ins_in_the_orbs_format():
+    g, gw, db = rig()
+    db.conn.execute("INSERT INTO subscriptions(name,amount,cycle,every,unit,next_date,category,created) VALUES('Netflix',15.49,'monthly',1,'month','2026-11-12','Subscriptions','x')")
+    db.conn.execute("INSERT INTO subscriptions(name,amount,cycle,every,unit,next_date,category,payer,payer_name,created) VALUES('Dads Hulu',9,'monthly',1,'month','2026-11-20','Subscriptions','other','Dad','x')")
+    db.conn.execute("INSERT INTO accounts(id,source,name,kind,balance) VALUES('neg','manual','Checking X','cash',-20)"); db.conn.commit()
+    g.put("/api/settings", headers=H, json={"share": ["bills", "alerts"]})                      # totals only
+    s = g.get("/summary", headers=H).json()
+    assert "bill_list" not in s and "alert_list" not in s and "bills" in s and "alerts" in s    # sharing the totals does not share the lists
+    g.put("/api/settings", headers=H, json={"share": ["bill_list", "alert_list"]})
+    s = g.get("/summary", headers=H).json()
+    assert set(s) == {"goblin", "bill_list", "alert_list"}
+    nf = next(b for b in s["bill_list"] if b["name"] == "Netflix")
+    assert nf == {"date": "2026-11-12", "name": "Netflix", "amount": 15.49, "category": "Subscriptions", "paid_by": "me"}
+    assert next(b for b in s["bill_list"] if b["name"] == "Dads Hulu")["paid_by"] == "Dad"
+    assert [b["date"] for b in s["bill_list"]] == sorted(b["date"] for b in s["bill_list"]) and all(b["date"] <= "2026-12-07" for b in s["bill_list"])      # the next 30 days
+    assert any(a == {"severity": "critical", "kind": "negative_balance", "title": "Checking X is overdrawn", "detail": "Balance -20.00"} for a in s["alert_list"]) and len(s["alert_list"]) <= 30
+    assert set(s["alert_list"][0]) == {"severity", "kind", "title", "detail"}

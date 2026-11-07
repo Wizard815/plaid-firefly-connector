@@ -32,12 +32,12 @@ def places(db, today: date) -> list[dict]:
         out.append({"key": f"s:{row['id']}", "id": row["id"], "name": v["name"], "institution": v["institution"], "kind": v["kind"], "balance": v["balance"], "apy": v["apy"],
                     "maturity": v.get("maturity"), "days_to_maturity": v.get("days_to_maturity"), "value_at_maturity": v.get("value_at_maturity"),
                     "origin": "linked" if v["linked"] else "manual", "account_id": row.get("account_id")})
-    for a in db.all("SELECT * FROM accounts WHERE kind='cash' ORDER BY institution, name"):
+    for a in db.all("SELECT * FROM accounts WHERE kind IN ('cash','investment') ORDER BY institution, name"):
         if a["id"] in followed or a["balance"] is None:
             continue
         pool = a.get("savings_pool")
-        auto = (a.get("subtype") or "").lower() in SAVINGS_SUBTYPES
-        if pool == 0 or not (pool == 1 or auto):
+        auto = a["kind"] == "cash" and (a.get("subtype") or "").lower() in SAVINGS_SUBTYPES
+        if pool == 0 or not (pool == 1 or auto):                  # investment accounts count only when you switch them on
             continue
         out.append({"key": f"a:{a['id']}", "id": a["id"], "name": a["name"], "institution": a["institution"], "kind": (a.get("subtype") or "savings").replace(" ", "_"),
                     "balance": round(a["balance"], 2), "apy": None, "maturity": None, "days_to_maturity": None, "value_at_maturity": None, "origin": "account", "account_id": a["id"]})
@@ -138,7 +138,7 @@ def release(db, gid: int, today: date, amount: float | None = None, place: str |
     return next(i for i in goals_view(db, today)["items"] if i["id"] == gid)
 
 
-def add_goal(db, name: str, target: float, today: date, deadline: str | None = None, priority: int = 2, monthly: float = 0.0, note: str = "", auto_allocate: bool = True) -> dict:
+def add_goal(db, name: str, target: float, today: date, deadline: str | None = None, priority: int = 2, monthly: float = 0.0, note: str = "", auto_allocate: bool = False) -> dict:
     if not name.strip():
         raise PlanError("name required")
     if not target > 0:
@@ -156,7 +156,7 @@ def add_goal(db, name: str, target: float, today: date, deadline: str | None = N
         raise PlanError("monthly must be >= 0")
     with db.tx() as c:
         gid = c.execute("INSERT INTO goals(name,target,deadline,priority,monthly,note,created) VALUES(?,?,?,?,?,?,?)", (name.strip(), round(target, 2), deadline, priority, monthly, note, today.isoformat())).lastrowid
-    if auto_allocate:                                     # use whatever is free; with none free the goal simply starts unfunded
+    if auto_allocate:                                     # only when asked: free savings are shared by everything until you assign them
         free = goals_view(db, today)["free"]
         if free > 0.005:
             set_allocation(db, gid, "", min(free, target), today)
@@ -240,6 +240,11 @@ def incomes(db, today: date) -> list[dict]:
     return [income_view(r, today) for r in db.all("SELECT * FROM incomes ORDER BY active DESC, name")]
 
 
+def paydays(row: dict, first: date, last: date) -> list[str]:
+    """The dates this income actually lands in [first, last]. A biweekly paycheck lands three times in two months of the year."""
+    return [x.isoformat() for x in recur.occurrences(d(row["next_date"]), row["every"], row["unit"], first, last)] if row["active"] else []
+
+
 def income_suggestions(db, today: date) -> list[dict]:
     have = db.all("SELECT name FROM incomes")
     hidden = {r["key"] for r in db.all("SELECT key FROM dismissed")} | {r["match_key"] for r in db.all("SELECT match_key FROM incomes WHERE match_key IS NOT NULL")}
@@ -255,7 +260,14 @@ def monthly_plan(db, month: str, today: date) -> dict:
     start = f"{month}-01"
     end = (date(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1)).isoformat()
     inc = incomes(db, today)
-    income_month = round(sum(i["monthly"] for i in inc), 2)
+    first_day, last_day = date(y, m, 1), date.fromisoformat(end)
+    for i in inc:
+        i["paydays"] = paydays(i, first_day, last_day)
+        i["in_month"] = round(len(i["paydays"]) * i["amount"], 2)
+        usual = round(30.4375 / (recur.shift(date(2001, 1, 1), i["every"], i["unit"], 1) - date(2001, 1, 1)).days) if i["unit"] in ("day", "week") else 1
+        i["extra_paycheck"] = len(i["paydays"]) > max(1, usual) if i["unit"] in ("day", "week") else False
+    income_month = round(sum(i["in_month"] for i in inc), 2)            # what really lands this month (3 paychecks in a 3-payday month)
+    income_smooth = round(sum(i["monthly"] for i in inc), 2)           # the steady monthly equivalent, for budgeting and "can I afford"
     bills = {}
     for s in ledger.subscriptions(db, today):
         if s["active"] and s["payer"] == "me":
@@ -274,11 +286,12 @@ def monthly_plan(db, month: str, today: date) -> dict:
     active = [g for g in db.all("SELECT * FROM goals WHERE status='active'")]
     goals_month = round(sum(g["monthly"] or 0 for g in active), 2)
     left = round(income_month - outflow - goals_month, 2)
+    left_smooth = round(income_smooth - outflow - goals_month, 2)
     if income_month and left < 0:
         warnings.append(f"The plan spends ${-left:,.2f} more than your expected income.")
     got = db.one("SELECT COALESCE(SUM(t.amount),0) s FROM transactions t JOIN categories c ON c.name=t.category WHERE t.amount>0 AND c.kind='income' AND t.date BETWEEN ? AND ?", (start, end))["s"]
     other_spent = round(sum(v for k, v in spent.items() if k not in {r["category"] for r in rows}), 2)
-    return {"month": month, "income_month": income_month, "incomes": inc, "outflow_planned": outflow, "goals_month": goals_month, "left": left, "rows": rows, "warnings": warnings,
+    return {"month": month, "income_month": income_month, "income_smoothed": income_smooth, "left_smoothed": left_smooth, "extra_paycheck_month": any(i["extra_paycheck"] for i in inc), "incomes": inc, "outflow_planned": outflow, "goals_month": goals_month, "left": left, "rows": rows, "warnings": warnings,
             "actual": {"income": round(got, 2), "spent": round(sum(spent.values()), 2), "unbudgeted_spent": other_spent},
             "income_suggestions": income_suggestions(db, today)}
 
@@ -288,7 +301,7 @@ def afford(db, amount: float, today: date) -> dict:
     v = goals_view(db, today)
     free = max(0.0, v["free"])
     plan = monthly_plan(db, today.strftime("%Y-%m"), today)
-    surplus = plan["left"]
+    surplus = plan["left_smoothed"]            # a three-paycheck month is a bonus, not the pace you can count on
     short = round(max(0.0, amount - free), 2)
     out = {"amount": round(amount, 2), "free_savings": round(free, 2), "earmarked": v["allocated"], "total_savings": v["total"], "can_buy_now": short == 0, "shortfall": short, "monthly_left_in_plan": surplus}
     if short:
@@ -299,4 +312,43 @@ def afford(db, amount: float, today: date) -> dict:
             out["note"] = "The monthly plan has nothing left over, so there is no saving pace to measure. Raise income or trim a budget, or set a monthly amount on the goal."
     else:
         out["note"] = "Free savings cover it. Buying it would leave $%.2f free." % (free - amount)
+    return out
+
+
+def maturity_outlook(db, today: date, horizon_days: int = 365) -> list[dict]:
+    """For every CD / bond / savings item with a maturity date: what it is worth then, what is already pinned to goals,
+    what is free (interest plus unpinned principal), and which goals that free money would reach, in priority order."""
+    v = goals_view(db, today)
+    goals = [g for g in v["items"] if g["status"] == "active"]
+    order = sorted(goals, key=lambda g: (g["priority"], g["deadline"] or "9999-12-31", g["id"]))
+    short = {g["id"]: g["shortfall"] for g in goals}
+    names = {g["id"]: g["name"] for g in goals}
+    pin = {}
+    for a in _allocs(db):
+        if a["place"]:
+            pin.setdefault(a["place"], []).append({"goal_id": a["goal_id"], "goal": names.get(a["goal_id"], "?"), "amount": a["amount"]})
+    best = max((p for p in v["places"] if p.get("apy")), key=lambda p: p["apy"], default=None)
+    out = []
+    for p in sorted((p for p in v["places"] if p.get("maturity") and p["days_to_maturity"] is not None and 0 <= p["days_to_maturity"] <= horizon_days), key=lambda p: p["maturity"]):
+        value = p["value_at_maturity"] or p["balance"]
+        pinned = pin.get(p["key"], [])
+        free_at = round(max(0.0, value - sum(x["amount"] for x in pinned)), 2)
+        rest, sugg = free_at, []
+        for g in order:
+            if rest <= 0.005:
+                break
+            if short.get(g["id"], 0) > 0.005:
+                put = round(min(rest, short[g["id"]]), 2)
+                sugg.append({"goal_id": g["id"], "goal": g["name"], "amount": put})
+                short[g["id"]] -= put
+                rest -= put
+        rest = round(rest, 2)
+        if rest > 0.005:
+            tip = f"Nothing else needs it. Roll it into a new CD or move it to {best['name']} ({best['apy']}% APY)." if best and best["key"] != p["key"] else "Nothing else needs it. Roll it into a new CD or a high-yield savings account."
+        elif sugg:
+            tip = "All of the free money is spoken for by your goals."
+        else:
+            tip = "Everything on it is already pinned to goals."
+        out.append({"key": p["key"], "name": p["name"], "institution": p["institution"], "maturity": p["maturity"], "days": p["days_to_maturity"], "balance": p["balance"], "value_at_maturity": round(value, 2),
+                    "interest": round(value - p["balance"], 2), "pinned": pinned, "free_at_maturity": free_at, "suggestions": sugg, "leftover": rest, "advice": tip})
     return out

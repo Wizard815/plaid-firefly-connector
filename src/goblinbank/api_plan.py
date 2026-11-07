@@ -14,7 +14,7 @@ class GoalIn(BaseModel):
     priority: int = 2
     monthly: float = 0
     note: str = ""
-    auto_allocate: bool = True          # earmark whatever savings are free; with none free the goal starts unfunded
+    auto_allocate: bool = False         # tick to set aside whatever savings are free right now; otherwise the goal starts unfunded
 
 
 class GoalPatch(BaseModel):
@@ -125,6 +125,11 @@ def register(app, ctx):
     def goal_autofill(request: Request):
         auth(request)
         return plan.autofill(store, ctx.today())
+
+    @app.get("/api/maturities")
+    def maturities(request: Request, days: int = 365):
+        auth(request)
+        return plan.maturity_outlook(store, ctx.today(), max(1, min(days, 3650)))
 
     @app.get("/api/afford")
     def afford(request: Request, amount: float):

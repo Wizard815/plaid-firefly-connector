@@ -18,7 +18,9 @@ SCOPES = {
     "goals": "Savings goals and their progress",
     "budgets": "The monthly plan: income, bills, budgets, goal contributions",
     "transactions": "Individual transactions (sensitive: every purchase)",
+    "refresh": "May add ?refresh=1 to ask for a fresh bank sync first (at most once every 5 minutes)",
 }
+REFRESH_MIN_SECONDS = 300
 RESOURCES = {"summary": "summary", "ha": "summary", "bills": "bills", "alerts": "alerts", "savings": "savings", "goals": "goals", "budgets": "budgets", "transactions": "transactions"}
 
 
