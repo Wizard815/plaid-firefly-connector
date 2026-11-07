@@ -1,29 +1,7 @@
-"""Money-movement Atom feed and subscription iCalendar / CalDAV output."""
+"""Subscription iCalendar and CalDAV output."""
 from datetime import date, datetime, timedelta, timezone
-from xml.etree import ElementTree as ET
 
 import httpx
-
-ATOM = "http://www.w3.org/2005/Atom"
-
-
-def atom(events: list[dict], title: str, self_url: str = "") -> bytes:
-    ET.register_namespace("", ATOM)
-    f = ET.Element(f"{{{ATOM}}}feed")
-    ET.SubElement(f, f"{{{ATOM}}}title").text = title
-    ET.SubElement(f, f"{{{ATOM}}}id").text = f"urn:goblin-bank:{title}"
-    ET.SubElement(f, f"{{{ATOM}}}updated").text = events[0]["ts"] if events else datetime.now(timezone.utc).isoformat(timespec="seconds")
-    if self_url:
-        ET.SubElement(f, f"{{{ATOM}}}link", rel="self", href=self_url)
-    for e in events:
-        en = ET.SubElement(f, f"{{{ATOM}}}entry")
-        ET.SubElement(en, f"{{{ATOM}}}title").text = e["title"]
-        ET.SubElement(en, f"{{{ATOM}}}id").text = f"urn:goblin-bank:event:{e['id']}"
-        ET.SubElement(en, f"{{{ATOM}}}updated").text = e["ts"]
-        ET.SubElement(en, f"{{{ATOM}}}category", term=e["kind"])
-        ET.SubElement(en, f"{{{ATOM}}}summary").text = e.get("detail") or ""
-    return ET.tostring(f, encoding="utf-8", xml_declaration=True)
-
 
 CYCLE_RRULE = {"weekly": "FREQ=WEEKLY", "biweekly": "FREQ=WEEKLY;INTERVAL=2", "monthly": "FREQ=MONTHLY", "yearly": "FREQ=YEARLY"}
 

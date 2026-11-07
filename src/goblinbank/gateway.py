@@ -9,6 +9,7 @@ from pathlib import Path
 
 import httpx
 import yaml
+from fastapi.concurrency import run_in_threadpool
 from fastapi import FastAPI, HTTPException, Request, Response
 
 from goblinbank.security import bearer, check_token, require_internal
@@ -45,9 +46,11 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     async def proxy(name: str, path: str, request: Request):
         """A signed-in person reaches only their own goblin."""
         g = user_goblin(request, name)
-        r = client.request(request.method, f"{g['url']}/{path}", params=dict(request.query_params),
-                           content=await request.body(),
-                           headers={**goblin_headers(g), "Content-Type": request.headers.get("content-type", "application/octet-stream")})
+        body = await request.body()
+        # Blocking call goes to a worker thread: the goblin may call back into this gateway
+        # (item registration) while we wait, and a blocked event loop would deadlock.
+        r = await run_in_threadpool(client.request, request.method, f"{g['url']}/{path}", params=dict(request.query_params), content=body,
+                                    headers={**goblin_headers(g), "Content-Type": request.headers.get("content-type", "application/octet-stream")})
         return Response(r.content, r.status_code, media_type=r.headers.get("content-type"))
 
     @app.get("/api/v1/summary")
@@ -93,29 +96,10 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         if not name:
             return {"ignored": True}
         g = goblins[name]
-        r = client.post(f"{g['url']}/plaid/webhook", content=raw,
-                        headers={**goblin_headers(g), "Plaid-Verification": request.headers.get("plaid-verification", ""),
-                                 "Content-Type": "application/json"})
+        r = await run_in_threadpool(client.post, f"{g['url']}/plaid/webhook", content=raw,
+                                    headers={**goblin_headers(g), "Plaid-Verification": request.headers.get("plaid-verification", ""),
+                                             "Content-Type": "application/json"})
         return Response(r.content, r.status_code, media_type="application/json")
-
-    def feed_goblin(name: str, token: str) -> dict:
-        g = goblins.get(name)
-        if not g or not check_token(token, g.get("feed_token_sha256", "")):
-            raise HTTPException(404, "not found")   # 404, not 401: don't reveal the feed exists
-        return g
-
-    @app.get("/feed/{name}/{token}/money.atom")
-    def money_feed(name: str, token: str, request: Request):
-        """Subscribe in any RSS/Atom reader. The token in the URL is the credential: treat it like a password."""
-        g = feed_goblin(name, token)
-        r = client.get(f"{g['url']}/feed.atom", params=dict(request.query_params), headers=goblin_headers(g))
-        return Response(r.content, r.status_code, media_type="application/atom+xml")
-
-    @app.get("/feed/{name}/{token}/subscriptions.ics")
-    def subs_calendar(name: str, token: str):
-        g = feed_goblin(name, token)
-        r = client.get(f"{g['url']}/subscriptions.ics", headers=goblin_headers(g))
-        return Response(r.content, r.status_code, media_type="text/calendar")
 
     ui = Path(os.environ.get("UI_DIR", Path(__file__).resolve().parents[2] / "ui"))
 

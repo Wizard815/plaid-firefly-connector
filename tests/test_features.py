@@ -88,7 +88,7 @@ def test_balance_change_emits_event():
 
 def test_requires_internal_secret():
     c = TestClient(mk())
-    for path in ("/api/accounts", "/api/subscriptions", "/feed.atom", "/api/overview"):
+    for path in ("/api/accounts", "/api/subscriptions", "/subscriptions.ics", "/api/overview"):
         assert c.get(path).status_code == 401
 
 
@@ -130,14 +130,7 @@ def test_csv_import_paypal_venmo_cashapp():
     assert c.post("/import/csv", headers=H, content="a,b\n1,2\n").status_code == 422
 
 
-def test_atom_feed_is_valid_and_escaped():
-    out = feed.atom([{"id": "1", "ts": "2026-11-01T00:00:00+00:00", "kind": "transaction", "title": "A & <B> -$5.00", "detail": "x"}], "t")
-    from xml.etree import ElementTree as ET
-    root = ET.fromstring(out)
-    assert root.find("{http://www.w3.org/2005/Atom}entry/{http://www.w3.org/2005/Atom}title").text == "A & <B> -$5.00"
-
-
-def test_gateway_feed_token_and_webhook_relay(monkeypatch):
+def test_gateway_webhook_relay(monkeypatch):
     db = DB(":memory:")
     g = mk(db=db, plaid_transport=plaid_mock())
     gtc = TestClient(g)
@@ -148,17 +141,13 @@ def test_gateway_feed_token_and_webhook_relay(monkeypatch):
         return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
 
     cfg = {"goblins": [{"name": "alice", "url": "http://alice", "internal_secret": "isec",
-                        "user_token_sha256": sha256("tok"), "feed_token_sha256": sha256("feedtok")}], "orb_keys": []}
+                        "user_token_sha256": sha256("tok")}], "orb_keys": []}
     gw = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_goblin)))
-    ok = gw.get("/feed/alice/feedtok/money.atom")
-    assert ok.status_code == 200 and b"Netflix" in ok.content
-    assert gw.get("/feed/alice/wrong/money.atom").status_code == 404
-    assert gw.get("/feed/alice/tok/money.atom").status_code == 404   # login token is NOT the feed token
-    assert b"BEGIN:VCALENDAR" in gw.get("/feed/alice/feedtok/subscriptions.ics").content
     # webhook: unknown item ignored; known item relayed but rejected without a valid signature
     assert gw.post("/webhooks/plaid", json={"item_id": "nope"}).json() == {"ignored": True}
     gw.post("/internal/items", json={"item_id": "item-1"}, headers={"X-Internal-Secret": "isec", "X-Goblin": "alice"})
     assert gw.post("/webhooks/plaid", json={"item_id": "item-1", "webhook_type": "TRANSACTIONS"}).status_code == 401
+    assert gw.get("/feed/alice/x/money.atom").status_code == 404 and gw.get("/g/alice/feed.atom", headers={"Authorization": "Bearer tok"}).status_code == 404
 
 
 def b64(b: bytes) -> str:

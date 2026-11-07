@@ -8,6 +8,7 @@ import os
 from datetime import date, timedelta
 
 import httpx
+from fastapi.concurrency import run_in_threadpool
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
@@ -190,7 +191,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         import json
         body = json.loads(raw)
         if body.get("item_id") and body.get("webhook_type") == "TRANSACTIONS":
-            return {"synced": sync.sync_item(store, plaid, body["item_id"])}
+            return {"synced": await run_in_threadpool(sync.sync_item, store, plaid, body["item_id"])}
         return {"ignored": body.get("webhook_code")}
 
     @app.post("/sync")
@@ -346,14 +347,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             raise HTTPException(503, "CalDAV is not set up yet (Settings > Calendar)")
         return feed.push_caldav(store.all("SELECT * FROM subscriptions"), url, user, pw, caldav_transport)
 
-    # ---------------- Outputs: Atom money-movement feed + .ics ----------------
-    @app.get("/feed.atom")
-    def atom(request: Request, limit: int = 50, min_amount: float = 0):
-        auth(request)
-        evs = store.all("SELECT * FROM events ORDER BY ts DESC LIMIT ?", (max(1, min(limit, 500)),))
-        evs = [e for e in evs if e["amount"] is None or abs(e["amount"]) >= min_amount]
-        return Response(feed.atom(evs, f"Goblin Bank: {name}"), media_type="application/atom+xml")
-
+    # ---------------- Calendar export ----------------
     @app.get("/subscriptions.ics")
     def subs_ics(request: Request):
         auth(request)

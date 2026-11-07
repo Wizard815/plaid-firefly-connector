@@ -168,7 +168,7 @@ function demoBackend() {
 }
 
 /* ---------- API: real gateway (/g/<name>/...) or sample backend ---------- */
-const S = { demo: false, name: "", token: "", feedToken: store.get("gb_feed") || "", tab: "overview", cache: {}, call: null };
+const S = { demo: false, name: "", token: "", tab: "overview", cache: {}, call: null };
 async function api(path, opts = {}) {
   if (S.demo) return S.call(path, opts);
   const r = await fetch(`/g/${S.name}${path}`, { ...opts, headers: { Authorization: "Bearer " + S.token, ...(opts.headers || {}) } });
@@ -216,12 +216,7 @@ async function viewOverview(root) {
 
 async function viewMovement(root) {
   const ev = await api("/api/events?limit=100");
-  const base = location.origin + `/feed/${S.name}/${S.feedToken || "<feed-token>"}`;
-  const url = (p) => (S.demo ? "https://bank.example/feed/alice/<feed-token>/" + p : base + "/" + p);
   root.append(
-    h("div", { class: "panel" }, h("h3", {}, "Subscribe in any RSS reader"), h("p", { class: "muted small" }, "Every posted transaction and balance change becomes an Atom entry. The token in the URL is the password. Anyone with the link can read your amounts."),
-      h("div", { class: "url" }, h("code", {}, url("money.atom")), h("button", { class: "btn", onclick: () => copy(url("money.atom")) }, "Copy")),
-      h("p", { class: "muted small" }, "Add ", h("code", { class: "mono" }, "?min_amount=50"), " to hide small stuff, or ", h("code", { class: "mono" }, "?limit=20"), " to trim it.")),
     h("div", { class: "panel" }, h("h3", {}, "Money movement"), ev.length ? ev.map(evRow) : h("p", { class: "muted" }, "Nothing yet. Run a sync after linking an account.")));
 }
 
@@ -248,16 +243,19 @@ async function viewSubs(root, rerender) {
       h("td", { class: "r", style: "white-space:nowrap" },
         h("button", { class: "btn sm", onclick: async () => { await api(`/api/subscriptions/${s.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...s, active: !s.active }) }); rerender(); } }, s.active ? "Pause" : "Resume"), " ",
         h("button", { class: "btn sm danger", onclick: async (ev) => { if (s.pendingDelete) { await api(`/api/subscriptions/${s.id}`, { method: "DELETE" }); rerender(); } else { s.pendingDelete = true; ev.target.textContent = "Sure?"; } } }, "Delete")))))));
-  const url = (p) => (S.demo ? "webcal://bank.example/feed/alice/<feed-token>/" + p : location.origin.replace(/^http/, "webcal") + `/feed/${S.name}/${S.feedToken || "<feed-token>"}/${p}`);
+  const download = async () => {
+    if (S.demo) return toast("Download is disabled in the sample preview");
+    const r = await fetch(`/g/${S.name}/subscriptions.ics`, { headers: { Authorization: "Bearer " + S.token } });
+    const a = h("a", { href: URL.createObjectURL(await r.blob()), download: "goblin-subscriptions.ics" }); document.body.append(a); a.click(); a.remove();
+  };
   root.append(
     h("div", { class: "grid" }, kpi("Monthly", usd(d.monthly_total), "paused ones excluded"), kpi("Yearly", usd(d.yearly_total), `${d.items.filter((s) => s.active).length} active subscriptions`)),
     h("div", { class: "panel" }, h("h3", {}, "Add a subscription"), subForm(null, () => { toast("Added"); rerender(); })),
     h("div", { class: "panel" }, h("h3", {}, "By category, per month"), h("div", { style: "display:grid;gap:6px;margin-top:8px" }, Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([c, v]) =>
       h("div", { style: "display:grid;grid-template-columns:110px 1fr 90px;gap:10px;align-items:center" }, h("span", { class: "small muted" }, c), h("div", { style: `height:10px;border-radius:5px;background:var(--teal);width:${(v / top) * 100}%` }), h("span", { class: "num small", style: "text-align:right" }, usd(v)))))),
     table,
-    h("div", { class: "panel" }, h("h3", {}, "Put them on your calendar"), h("p", { class: "muted small" }, "Each subscription becomes a repeating all-day event titled with its amount."),
-      h("div", { class: "url" }, h("code", {}, url("subscriptions.ics")), h("button", { class: "btn", onclick: () => copy(url("subscriptions.ics")) }, "Copy")),
-      h("p", { style: "margin:12px 0 0" }, h("button", { class: "btn primary", onclick: async (e) => { try { const r = await api("/api/subscriptions/export/caldav", { method: "POST" }); toast(`Pushed ${r.pushed} to CalDAV` + (r.failed.length ? `, ${r.failed.length} failed` : "")); } catch (err) { toast(err.message); } } }, "Push to CalDAV now"))));
+    h("div", { class: "panel" }, h("h3", {}, "Put them on your calendar"), h("p", { class: "muted small" }, "Each subscription becomes a repeating all-day event titled with its amount. Push them to your CalDAV calendar (set it up in Settings), or download a file to import into any calendar app."),
+      h("p", { style: "margin:12px 0 0;display:flex;gap:8px;flex-wrap:wrap" }, h("button", { class: "btn", onclick: download }, "Download .ics"), h("button", { class: "btn primary", onclick: async (e) => { try { const r = await api("/api/subscriptions/export/caldav", { method: "POST" }); toast(`Pushed ${r.pushed} to CalDAV` + (r.failed.length ? `, ${r.failed.length} failed` : "")); } catch (err) { toast(err.message); } } }, "Push to CalDAV now"))));
 }
 
 async function viewAccounts(root) {
@@ -352,12 +350,6 @@ async function viewSettings(root, rerender) {
       h("form", { onsubmit: (e) => { e.preventDefault(); save({ share: [...document.querySelectorAll(".sharebox:checked")].map((x) => x.value) }); }, style: "display:grid;gap:8px" },
         Object.entries(SHARE_LABELS).map(([k, t]) => h("label", { style: "display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-size:.95rem;color:var(--fg)" }, h("input", { type: "checkbox", class: "sharebox", value: k, checked: cfg.share.includes(k), style: "width:auto" }), t)),
         h("div", {}, h("button", { class: "btn primary", type: "submit" }, "Save sharing")))),
-
-    /* Feed token */
-    h("div", { class: "panel" }, h("h3", {}, "Feed token"),
-      h("p", { class: "muted small" }, "Your RSS reader and calendar app cannot sign in, so their links carry a secret in the address instead. That secret is the feed token. Anyone holding a link can read the amounts in it, and nothing else. It cannot log in or change anything. It is separate from your login token."),
-      h("p", { class: "muted small" }, "It was printed once when this goblin was created. Paste it here so this page can build your links. It stays in this browser only. If a link leaks, rotate it on the server with ", h("code", { class: "mono" }, "python3 scripts/gen_compose.py --rotate-feed " + (S.name || "<name>")), " and restart the gateway."),
-      h("div", { class: "url" }, h("input", { id: "feedtok", value: S.feedToken, placeholder: "feed token", autocomplete: "off" }), h("button", { class: "btn", onclick: () => { S.feedToken = val("feedtok"); store.set("gb_feed", S.feedToken); toast("Saved in this browser"); } }, "Save"))),
 
     /* Plaid usage and cost */
     h("div", { class: "panel" }, h("h3", {}, "Plaid usage and cost"),

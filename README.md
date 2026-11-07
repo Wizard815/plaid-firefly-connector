@@ -21,10 +21,10 @@ One image, many roles (`ROLE=`), so the repo stays small.
 ## What each goblin does
 * **Plaid** (Huntington, Discover, Axos, Capital One, IRA): link via the UI, tokens Fernet-encrypted at rest (`FIELD_KEY`),
   `transactions/sync`, balances, auto-detected recurring bills, webhook JWT verification, relink mode for the Discover migration.
-* **Subscriptions** (Wallos-style): manual + Plaid-detected, monthly/yearly totals, pause, `.ics` calendar feed, and push to CalDAV.
-* **Money movement feed**: Atom feed of every transaction and balance change at `/feed/<name>/<feed-token>/money.atom`.
+* **Subscriptions** (Wallos-style): manual + Plaid-detected, monthly/yearly totals, pause, `.ics` download, and push to CalDAV.
+* **Money movement**: every transaction and balance change is logged and shown on the Money movement tab.
 * **PayPal / Venmo / Cash App**: CSV import (no personal-account APIs exist). PayPal Credit may link via Plaid; check its directory.
-* **Settings page**: Robinhood source + CSV upload + agent MCP config, CalDAV, what the Orb may see, feed token help, relink/unlink banks.
+* **Settings page**: Robinhood source + CSV upload + agent MCP config, CalDAV, what the Orb may see, relink/unlink banks.
 * **Plaid Investments** holdings feed the Robinhood main panel when a Robinhood item is linked (check Plaid's coverage first).
 * **Plaid usage + cost guard**: per-endpoint call counts, an estimate from the rate you enter, a monthly budget warning, and a daily call cap.
 * **Drop folder**: put CSVs in `data/<name>/imports/` (Cash App, PayPal, Venmo auto-detected); picked up on sync and moved to `done/`.
@@ -33,13 +33,20 @@ One image, many roles (`ROLE=`), so the repo stays small.
 ## Run
 ```bash
 cp goblins.example.yaml goblins.yaml        # edit names / share / rh_agent / rh_live
-python3 scripts/gen_compose.py               # prints login tokens, feed tokens, Orb key ONCE
+python3 scripts/gen_compose.py               # prints login tokens and the Orb key ONCE
 # fill .secrets/plaid.env, <name>.integrations.env (CalDAV), <name>.rh-agent.env
 docker compose -f docker-compose.generated.yml up --build
 ```
 Gateway listens on `127.0.0.1:8080`; put Tailscale / a Cloudflare Tunnel in front, never the open internet.
 Back up `.secrets/<name>.env`: losing `FIELD_KEY` means re-linking banks. Plaid webhooks need a public HTTPS URL
 (`PLAID_WEBHOOK_URL` -> `/webhooks/plaid`); without it, use Sync now.
+
+## Test without a Plaid account
+```bash
+python3 -m pytest                     # unit tests
+python3 scripts/synthetic_e2e.py      # real processes + a synthetic Plaid server (devtools/fake_plaid.py), 31 checks
+```
+The synthetic server follows Plaid's documented response shapes. It proves our services work together; it cannot prove real Plaid agrees. Get free sandbox keys from Plaid before trusting it with real banks.
 
 ## Not done yet
 * Plaid is untested against the real API (tests use mocks); try `PLAID_ENV=sandbox` first.

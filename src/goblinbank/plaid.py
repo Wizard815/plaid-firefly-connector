@@ -28,7 +28,7 @@ class Plaid:
         self.usage = usage   # object with before(path) -> may raise PlaidError, and record(path)
         self.client_id = os.environ.get("PLAID_CLIENT_ID", "")
         self.secret = os.environ.get("PLAID_SECRET", "")
-        self.base = HOSTS.get(os.environ.get("PLAID_ENV", "sandbox"), HOSTS["sandbox"])
+        self.base = os.environ.get("PLAID_BASE_URL") or HOSTS.get(os.environ.get("PLAID_ENV", "sandbox"), HOSTS["sandbox"])   # PLAID_BASE_URL: test servers only
         self.webhook_url = os.environ.get("PLAID_WEBHOOK_URL", "")
         self.http = httpx.Client(timeout=30, transport=transport)
         self._keys: dict[str, dict] = {}

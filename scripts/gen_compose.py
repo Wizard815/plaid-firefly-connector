@@ -33,17 +33,6 @@ def _stub(path, text):
         print(f"created {path.name}: fill in before starting")
 
 
-def rotate_feed(name):
-    f = SEC / f"{name}.env"
-    if not f.exists():
-        sys.exit(f"no such goblin: {name}")
-    kv = dict(l.split("=", 1) for l in f.read_text().splitlines() if "=" in l)
-    ft = secrets.token_urlsafe(24)
-    kv["FEED_TOKEN_SHA256"] = sha256(ft)
-    f.write_text("".join(f"{k}={v}\n" for k, v in kv.items()))
-    print(f"[{name}] NEW feed token (shown once): {ft}\nOld feed links stop working after you rerun gen_compose.py and restart the gateway.")
-
-
 def main(src="goblins.yaml"):
     spec = yaml.safe_load((ROOT / src).read_text())
     SEC.mkdir(exist_ok=True, mode=0o700)
@@ -67,18 +56,13 @@ def main(src="goblins.yaml"):
         if "FIELD_KEY" not in kv:          # encrypts Plaid tokens at rest; LOSE THIS AND LINKS MUST BE REDONE
             kv["FIELD_KEY"] = Fernet.generate_key().decode()
             changed = True
-        if "FEED_TOKEN_SHA256" not in kv:
-            ft = secrets.token_urlsafe(24)
-            kv["FEED_TOKEN_SHA256"] = sha256(ft)
-            print(f"[{n}] feed token (shown once). Atom: /feed/{n}/{ft}/money.atom  Calendar: /feed/{n}/{ft}/subscriptions.ics")
-            changed = True
         if changed:
             f.write_text("".join(f"{k}={v}\n" for k, v in kv.items()))
             f.chmod(0o600)
         internal, connector, tok_hash = kv["INTERNAL_SECRET"], kv["CONNECTOR_SECRET"], kv["USER_TOKEN_SHA256"]
         _stub(SEC / f"{n}.integrations.env", "CALDAV_URL=\nCALDAV_USER=\nCALDAV_PASSWORD=\n")
         _stub(SEC / "plaid.env", "PLAID_CLIENT_ID=\nPLAID_SECRET=\nPLAID_ENV=sandbox\nPLAID_WEBHOOK_URL=\n")
-        gw_goblins.append({"name": n, "url": f"http://goblin-{n}:8000", "internal_secret": internal, "user_token_sha256": tok_hash, "feed_token_sha256": kv["FEED_TOKEN_SHA256"]})
+        gw_goblins.append({"name": n, "url": f"http://goblin-{n}:8000", "internal_secret": internal, "user_token_sha256": tok_hash})
         for sub in ("db", "robinhood-csv", "rh-live-session", "imports"):
             d = ROOT / "data" / n / sub
             d.mkdir(parents=True, exist_ok=True)
@@ -130,7 +114,4 @@ def main(src="goblins.yaml"):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 3 and sys.argv[1] == "--rotate-feed":
-        rotate_feed(sys.argv[2])
-    else:
-        main(*sys.argv[1:])
+    main(*sys.argv[1:])
