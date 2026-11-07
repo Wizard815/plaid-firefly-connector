@@ -109,6 +109,19 @@ def register(app, ctx):
         auth(request)
         return ledger.alerts(store, ctx.today())
 
+    class AlertKey(BaseModel):
+        key: str
+
+    @app.post("/api/alerts/dismiss")
+    def alert_dismiss(request: Request, b: AlertKey):
+        """Mark an alert handled (for example a matured CD you have rolled over). It stays quiet; a new situation gets a new key."""
+        auth(request)
+        if not any(a["key"] == b.key for a in ledger.alerts(store, ctx.today())):
+            bad("that alert is not active", 404)
+        with store.tx() as c:
+            c.execute("INSERT OR IGNORE INTO dismissed VALUES(?)", (f"alert:{b.key}",))
+        return {"dismissed": b.key}
+
     @app.get("/api/projection")
     def projection(request: Request, days: int = 30, account_id: str | None = None, income: bool = True):
         auth(request)

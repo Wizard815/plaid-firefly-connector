@@ -45,3 +45,18 @@ async def chat(request: Request):
             elif "weighted_apy" in o: bits.append(f"you have ${o['total']:,.2f} saved at {o['weighted_apy']}% average APY")
         elif isinstance(o, list): bits.append(f"found {len(o)} items")
     return {"choices": [{"message": {"role": "assistant", "content": "Here is what I found: " + "; ".join(bits) + "." if bits else "Done."}}]}
+
+
+# a stand-in Mattermost incoming webhook, so the notification path can be clicked through
+HOOKS: list = []
+
+
+@app.post("/hook")
+async def hook(request: Request):
+    HOOKS.append(await request.json())
+    return "ok"
+
+
+@app.get("/hook/_log")
+async def hook_log():
+    return HOOKS

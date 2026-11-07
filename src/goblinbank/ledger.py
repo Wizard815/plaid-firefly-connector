@@ -298,6 +298,18 @@ def suggestions(db, today: date) -> list[dict]:
 
 
 def alerts(db, today: date) -> list[dict]:
+    """Everything that needs attention, most urgent first. Each alert has a stable `key`: the same situation keeps the same key,
+    which is how notifications avoid telling you twice."""
+    out = _alerts(db, today)
+    gone = {r["key"] for r in db.all("SELECT key FROM dismissed WHERE key LIKE 'alert:%'")}
+    for a in out:
+        a.setdefault("key", f"{a['kind']}:{a.get('account_id') or a.get('sub_id') or ''}:{a.get('date') or ''}")
+    out = [a for a in out if f"alert:{a['key']}" not in gone]
+    rank = {"critical": 0, "warning": 1, "info": 2}
+    return sorted(out, key=lambda a: rank[a["severity"]])
+
+
+def _alerts(db, today: date) -> list[dict]:
     out = []
     for a in db.all("SELECT * FROM accounts"):
         bal = a["balance"]
@@ -342,12 +354,17 @@ def alerts(db, today: date) -> list[dict]:
             out.append({"kind": "maturing", "severity": "warning" if m["days"] <= 7 else "info", "date": m["maturity"],
                         "title": f"{m['name']} matures " + ("today" if m["days"] == 0 else f"in {m['days']} day{'s' if m['days'] != 1 else ''} ({m['maturity']})"),
                         "detail": f"Worth about {m['value_at_maturity']:,.2f}; {m['free_at_maturity']:,.2f} free{where}. {m['advice']}"})
+    for m in plan.matured_idle(db, today):
+        where = (" Free money would go → " + ", then ".join(f"{x['goal']} {x['amount']:,.2f}" for x in m["suggestions"]) + ".") if m["suggestions"] else ""
+        pinned = (" Already pinned: " + ", ".join(f"{x['goal']} {x['amount']:,.2f}" for x in m["pinned"]) + ".") if m["pinned"] else ""
+        out.append({"kind": "matured_idle", "severity": "warning", "date": m["maturity"], "key": f"matured_idle:{m['key']}:{m['maturity']}",
+                    "title": f"{m['name']} matured {m['days_ago']} day{'s' if m['days_ago'] != 1 else ''} ago and is still sitting there",
+                    "detail": f"{m['balance']:,.2f} on it, {m['free']:,.2f} free.{pinned}{where} Roll it over, move it, or mark it handled."})
     for s in db.all("SELECT * FROM subscriptions WHERE active=1 AND coalesce(payer,'me')='me'"):
         nd = sub_view(s, today)["next_due"]
         if nd and 0 <= (d(nd) - today).days <= (s["notify_days"] if s["notify_days"] is not None else 3):
             out.append({"kind": "due_soon", "severity": "info", "title": f"{s['name']} due {nd}", "detail": f"{s['amount']:,.2f}", "sub_id": s["id"], "date": nd})
-    rank = {"critical": 0, "warning": 1, "info": 2}
-    return sorted(out, key=lambda a: rank[a["severity"]])
+    return out
 
 
 # ------------------------------------------------------------------ budgets, overview

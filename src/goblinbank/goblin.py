@@ -14,7 +14,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from goblinbank import agent, api_money, api_plan, external, plan, crypto, feed, importers, ledger, settings as cfg, sync
+from goblinbank import agent, api_money, api_plan, external, notify, plan, crypto, feed, importers, ledger, settings as cfg, sync
 from goblinbank.db import DB
 from goblinbank.plaid import Plaid, PlaidError
 from goblinbank.security import require_internal
@@ -33,7 +33,7 @@ def _equity(bal) -> float | None:
     return None
 
 
-def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: DB | None = None, today=None, llm_transport=None, autosync: bool = False, autosync_tick: float | None = None) -> FastAPI:
+def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: DB | None = None, today=None, llm_transport=None, autosync: bool = False, autosync_tick: float | None = None, notify_transport=None) -> FastAPI:
     name = os.environ.get("GOBLIN_NAME", "goblin")
     secret = os.environ.get("INTERNAL_SECRET", "")
     connector_secret = os.environ.get("CONNECTOR_SECRET", secret)
@@ -191,7 +191,8 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                 except PlaidError as e:
                     out["plaid_error"] = str(e)
             sync_state["last"], sync_state["at"] = time.time(), sync.now()
-            return out
+        out["notify"] = notify.run(store, (today or date.today)(), name, notify_transport)
+        return out
 
     @app.post("/sync")
     def sync_now(request: Request):
@@ -206,11 +207,13 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             except ValueError:
                 mins = 15.0
             time.sleep(autosync_tick if autosync_tick is not None else max(60.0, mins * 60))        # autosync_tick: tests only
-            if mins > 0 and (autosync_tick is not None or time.time() - sync_state["last"] >= mins * 60 - 5):
-                try:
-                    do_sync()
-                except Exception:           # a failed round must never kill the loop
-                    pass
+            try:
+                if mins > 0 and (autosync_tick is not None or time.time() - sync_state["last"] >= mins * 60 - 5):
+                    do_sync()                                     # also checks alerts
+                else:
+                    notify.run(store, (today or date.today)(), name, notify_transport)                     # alerts change with the calendar even without new data
+            except Exception:                                     # a failed round must never kill the loop
+                pass
 
     if autosync:
         threading.Thread(target=autosync_loop, daemon=True, name="autosync").start()
@@ -273,6 +276,33 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     def subs_ics(request: Request):
         auth(request)
         return Response(feed.ics(store.all("SELECT * FROM subscriptions")), media_type="text/calendar")
+
+    # ---------------- Notifications (Mattermost incoming webhook) ----------------
+    @app.get("/api/notify/status")
+    def notify_status(request: Request):
+        auth(request)
+        last = store.one("SELECT MAX(sent) s, COUNT(*) n FROM notified")
+        return {"configured": bool(cfg.get(store, "notify_url")), "min_severity": cfg.get(store, "notify_min_severity") or "warning", "last_sent": last["s"], "tracked": last["n"]}
+
+    @app.post("/api/notify/test")
+    def notify_test(request: Request):
+        auth(request)
+        url = cfg.get(store, "notify_url")
+        if not url:
+            raise HTTPException(503, "Add your Mattermost webhook address first")
+        try:
+            notify.post(url, {"text": f":coin: **Goblin Bank ({name})**: notifications are working.", "username": f"Goblin Bank ({name})", "icon_emoji": ":coin:"}, notify_transport)
+        except httpx.HTTPStatusError as e:
+            return {"ok": False, "detail": f"the webhook answered {e.response.status_code}" + (" (is the address right?)" if e.response.status_code in (400, 404) else "")}
+        except httpx.HTTPError as e:
+            return {"ok": False, "detail": f"could not reach it ({type(e).__name__})"}
+        return {"ok": True}
+
+    @app.post("/api/notify/run")
+    def notify_run(request: Request):
+        """Check the alerts now and send anything new."""
+        auth(request)
+        return notify.run(store, (today or date.today)(), name, notify_transport)
 
     # ---------------- Settings ----------------
     @app.get("/api/settings")

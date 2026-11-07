@@ -217,7 +217,8 @@ const val = (id, root = document) => $("#" + id, root)?.value.trim();
 const num = (id, root) => { const v = val(id, root); return v === "" || v == null ? null : parseFloat(v); };
 const bar = (pct, color = "var(--teal)") => h("div", { class: "meter" }, h("i", { style: `width:${Math.min(100, Math.max(0, pct * 100))}%;background:${color}` }));
 const barList = (rows, fmt = usd) => { const top = Math.max(...rows.map((r) => r[1]), 1); return h("div", { class: "bars" }, rows.map(([l, v], i) => h("div", { class: "barrow" }, h("span", { class: "small muted" }, l), h("div", { class: "meter" }, h("i", { style: `width:${(v / top) * 100}%;background:${CAT_COLORS[i % CAT_COLORS.length]}` })), h("span", { class: "num small" }, fmt(v))))); };
-const alertRow = (a) => h("div", { class: "alert " + a.severity }, h("b", {}, a.title), a.detail ? h("span", { class: "muted small" }, " " + a.detail) : null);
+const alertRow = (a) => h("div", { class: "alert " + a.severity }, h("b", {}, a.title), a.detail ? h("span", { class: "muted small" }, " " + a.detail) : null,
+  a.kind === "matured_idle" && a.key ? h("div", { style: "margin-top:6px" }, h("button", { class: "btn sm", onclick: async () => { try { await api("/api/alerts/dismiss", send("POST", { key: a.key })); toast("Marked handled"); render(); } catch (e) { fail(e); } } }, "Handled, stop reminding me")) : null);
 const evRow = (e) => h("div", { class: "ev" }, h("span", { class: "when" }, ago(e.ts)), h("span", {}, e.title.replace(/ [+−-]\$[\d,.]+$/, "")), h("span", { class: "num " + (e.amount > 0 ? "pos" : e.amount < 0 ? "neg" : "") }, e.amount == null ? "" : usd(e.amount, true)));
 function spark(points, w = 560, ht = 120, key = "net_worth", xkey = "date") {
   if (points.length < 2) return h("p", { class: "muted small" }, "Needs a few days of balance snapshots.");
@@ -724,8 +725,15 @@ async function tabCategories(root, rerender) {
       rules.length ? rules.map((r) => h("div", { class: "ev", style: "grid-template-columns:1fr auto auto" }, h("span", { class: "mono" }, `"${r.pattern}"`), h("span", { class: "pill b" }, r.category), h("button", { class: "btn sm", onclick: async () => { await api("/api/category-rules/" + r.id, { method: "DELETE" }); rerender(); } }, "Delete"))) : h("p", { class: "muted" }, "No rules yet.")));
 }
 async function tabAlerts(root, rerender) {
-  const cfg = await api("/api/settings");
-  add(root, h("div", { class: "panel" }, h("h3", {}, "What should I flag?"), h("p", { class: "muted small" }, "Always on: overdrawn accounts and accounts below the minimum you set on them."),
+  const [cfg, ns] = await Promise.all([api("/api/settings"), api("/api/notify/status").catch(() => ({ configured: false, min_severity: "warning" }))]);
+  add(root, h("div", { class: "panel" }, h("h3", {}, "Phone notifications (Mattermost)"),
+    h("p", { class: "muted small" }, "In Mattermost: Integrations, Incoming Webhooks, Add Incoming Webhook, pick a channel, copy the URL, paste it here. Each new alert is sent once, a critical one is repeated after a day if it is still there, and an alert that clears and returns is announced again. The address must be reachable from this server (a LAN address or host.docker.internal works)."),
+    h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); saveCfg(withSecret({ notify_min_severity: val("nt-sev") }, "notify_url", "nt-url"), rerender); } },
+      secretField("nt-url", "Mattermost webhook URL", cfg.notify_url.set), select("nt-sev", "Send me", [["critical", "Only critical"], ["warning", "Warnings and critical"], ["info", "Everything"]], cfg.notify_min_severity || "warning"), h("button", { class: "btn primary", type: "submit" }, "Save")),
+    h("div", { class: "chips", style: "margin-top:10px" }, h("button", { class: "btn", disabled: !ns.configured, onclick: async () => { try { const r = await api("/api/notify/test", { method: "POST" }); toast(r.ok ? "Test message sent" : "Failed: " + r.detail); } catch (e) { fail(e); } } }, "Send a test message"),
+      h("button", { class: "btn", disabled: !ns.configured, onclick: async () => { try { const r = await api("/api/notify/run", { method: "POST" }); toast(r.error ? "Failed: " + r.error : r.sent ? `Sent ${r.sent} alert${r.sent === 1 ? "" : "s"}` : "Nothing new to send"); } catch (e) { fail(e); } } }, "Check and send now"),
+      h("span", { class: "muted small" }, ns.configured ? (ns.last_sent ? `last sent ${ago(ns.last_sent)}` : "nothing sent yet") : "not set up"))),
+    h("div", { class: "panel" }, h("h3", {}, "What should I flag?"), h("p", { class: "muted small" }, "Always on: overdrawn accounts and accounts below the minimum you set on them."),
     h("form", { onsubmit: (e) => { e.preventDefault(); saveCfg({ alert_untracked: $("#al-un").checked ? "on" : "off", alert_missed: $("#al-mi").checked ? "on" : "off", alert_maturity_days: val("al-mat") }, rerender); }, style: "display:grid;gap:12px" },
       h("label", { class: "check" }, h("input", { type: "checkbox", id: "al-un", checked: cfg.alert_untracked !== "off" }), "Repeating payments that are not in Subscriptions yet (same payee, same amount, same timing)"),
       h("label", { class: "check" }, h("input", { type: "checkbox", id: "al-mi", checked: cfg.alert_missed !== "off" }), "A subscription bound to an account whose charge did not show up when expected (a failed payment, a cancelled card, a price change)"),

@@ -362,3 +362,35 @@ def maturity_outlook(db, today: date, horizon_days: int = 365) -> list[dict]:
         out.append({"key": p["key"], "name": p["name"], "institution": p["institution"], "maturity": p["maturity"], "days": p["days_to_maturity"], "balance": p["balance"], "value_at_maturity": round(value, 2),
                     "interest": round(value - p["balance"], 2), "pinned": pinned, "free_at_maturity": free_at, "suggestions": sugg, "leftover": rest, "advice": tip})
     return out
+
+
+def matured_idle(db, today: date, within_days: int = 60) -> list[dict]:
+    """CDs and bonds whose maturity date has passed but which are still listed with a balance: the money is sitting there with no new plan.
+    Shows what is pinned to goals and where the free part would reach, so the alert says what to do."""
+    v = goals_view(db, today)
+    goals = [g for g in v["items"] if g["status"] == "active"]
+    order = sorted(goals, key=lambda g: (g["priority"], g["deadline"] or "9999-12-31", g["id"]))
+    short = {g["id"]: g["shortfall"] for g in goals}
+    names = {g["id"]: g["name"] for g in goals}
+    pin = {}
+    for a in _allocs(db):
+        if a["place"]:
+            pin.setdefault(a["place"], []).append({"goal": names.get(a["goal_id"], "?"), "amount": a["amount"]})
+    out = []
+    for p in sorted((p for p in v["places"] if p.get("maturity")), key=lambda p: p["maturity"]):
+        ago = (today - d(p["maturity"])).days
+        if ago < 0 or ago > within_days or p["balance"] <= 0.005:
+            continue
+        pinned = pin.get(p["key"], [])
+        free = round(max(0.0, p["balance"] - sum(x["amount"] for x in pinned)), 2)
+        rest, sugg = free, []
+        for g in order:
+            if rest <= 0.005:
+                break
+            if short.get(g["id"], 0) > 0.005:
+                put = round(min(rest, short[g["id"]]), 2)
+                sugg.append({"goal": g["name"], "amount": put})
+                short[g["id"]] -= put
+                rest -= put
+        out.append({"key": p["key"], "name": p["name"], "maturity": p["maturity"], "days_ago": ago, "balance": p["balance"], "pinned": pinned, "free": free, "suggestions": sugg, "leftover": round(rest, 2)})
+    return out
