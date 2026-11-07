@@ -436,6 +436,14 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             out["bills"] = {"next_7d": ext["bills_7d"], "next_30d": ext["bills_30d"], "next": ext["next_bill"]}
         if "alerts" in share() or every:
             out["alerts"] = {"total": ext["alerts_total"], "critical": ext["alerts_critical"], "warning": ext["alerts_warning"]}
+        # The itemised lists are separate opt-ins: sharing totals doesn't share these.
+        if "bill_list" in share() or every:
+            up = ledger.upcoming(store, 30, (today or date.today)())["items"][:60]
+            out["bill_list"] = [{"date": i["date"], "name": i["name"], "amount": i["amount"], "category": i["category"],
+                                 "paid_by": "me" if i["payer"] == "me" else (i["payer_name"] or "someone else")} for i in up]
+        if "alert_list" in share() or every:
+            out["alert_list"] = [{"severity": a["severity"], "kind": a["kind"], "title": a["title"], "detail": a.get("detail", "")}
+                                 for a in ledger.alerts(store, (today or date.today)())][:30]
         if "savings" in share() or every:
             out["savings"] = {"total": ext["savings_total"], "free": ext["savings_free"], "earmarked": ext["savings_earmarked"]}
         if "goals" in share() or every:

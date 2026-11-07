@@ -10,6 +10,8 @@ Pondering Orb ──(read-only key)──► CoinGateway ──► goblin-alice 
 * **CoinGateway** (`ROLE=gateway`): login + routing, Plaid webhook relay (item_id → goblin map only),
   and `/api/v1/summary` for Pondering Orb. Stores no tokens, balances or transactions.
 * **Goblin** (`ROLE=goblin`): one person's data. Shares with the gateway/Orb only what `share:` allows.
+  Shareable: `net_worth`, `subscriptions`, `bills` (totals), `bill_list` (each bill for the next 30 days), `alerts` (counts),
+  `alert_list` (each alert), `savings`, `goals`, `robinhood_main`, `robinhood_agent`. The lists are separate opt-ins from the totals.
 * **Connectors** (one container each, read-only, GET-only, secret-protected):
   * `rh-agent` – official Robinhood MCP (agent account). Fails closed: only tools in `RH_MCP_READ_TOOLS` are callable.
   * `rh-csv` – parses Robinhood activity CSVs dropped in `data/<name>/robinhood-csv/`. No account access. Deduped.

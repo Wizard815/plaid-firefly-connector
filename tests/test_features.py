@@ -1,3 +1,4 @@
+from datetime import date
 import base64
 import hashlib
 import json
@@ -238,6 +239,20 @@ def test_share_setting_controls_summary():
     assert "net_worth" in c.get("/summary", headers=H).json()         # env default from the fixture
     c.put("/api/settings", headers=H, json={"share": []})
     assert c.get("/summary", headers=H).json() == {"goblin": "alice"}
+
+
+def test_bill_and_alert_lists_are_separate_opt_ins():
+    c = TestClient(mk())
+    c.post("/api/subscriptions", headers=H, json={"name": "Netflix", "amount": 15.49, "cycle": "monthly", "next_date": date.today().isoformat()})
+    c.put("/api/settings", headers=H, json={"share": ["bills", "alerts"]})
+    s = c.get("/summary", headers=H).json()
+    assert "bills" in s and "alerts" in s and "bill_list" not in s and "alert_list" not in s      # totals don't share the lists
+    c.put("/api/settings", headers=H, json={"share": ["bill_list", "alert_list"]})
+    s = c.get("/summary", headers=H).json()
+    assert s["bill_list"][0] == {"date": date.today().isoformat(), "name": "Netflix", "amount": 15.49, "category": "Subscriptions", "paid_by": "me"}
+    assert any(a["kind"] == "due_soon" and "Netflix" in a["title"] for a in s["alert_list"])
+    assert set(s["alert_list"][0]) == {"severity", "kind", "title", "detail"}
+    assert "bills" not in s and "net_worth" not in s
 
 
 def test_caldav_from_settings_and_test_button():

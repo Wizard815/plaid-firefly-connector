@@ -4,7 +4,7 @@ import os
 from goblinbank import crypto
 
 SOURCES = ("auto", "plaid", "csv", "live")
-SHAREABLE = ("net_worth", "subscriptions", "bills", "alerts", "savings", "goals", "robinhood_main", "robinhood_agent")
+SHAREABLE = ("net_worth", "subscriptions", "bills", "bill_list", "alerts", "alert_list", "savings", "goals", "robinhood_main", "robinhood_agent")
 # key -> (kind, secret, env fallback)
 SPEC = {
     "share": ("list", False, "SHARE"),
