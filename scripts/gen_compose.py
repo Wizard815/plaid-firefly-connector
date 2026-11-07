@@ -33,6 +33,17 @@ def _stub(path, text):
         print(f"created {path.name}: fill in before starting")
 
 
+def rotate_feed(name):
+    f = SEC / f"{name}.env"
+    if not f.exists():
+        sys.exit(f"no such goblin: {name}")
+    kv = dict(l.split("=", 1) for l in f.read_text().splitlines() if "=" in l)
+    ft = secrets.token_urlsafe(24)
+    kv["FEED_TOKEN_SHA256"] = sha256(ft)
+    f.write_text("".join(f"{k}={v}\n" for k, v in kv.items()))
+    print(f"[{name}] NEW feed token (shown once): {ft}\nOld feed links stop working after you rerun gen_compose.py and restart the gateway.")
+
+
 def main(src="goblins.yaml"):
     spec = yaml.safe_load((ROOT / src).read_text())
     SEC.mkdir(exist_ok=True, mode=0o700)
@@ -81,16 +92,16 @@ def main(src="goblins.yaml"):
         env = {"ROLE": "goblin", "GOBLIN_NAME": n, "SHARE": ",".join(g.get("share", [])),
                "GATEWAY_URL": "http://gateway:8000", "RH_CSV_URL": f"http://{n}-rh-csv:8000"}
         services[f"goblin-{n}"] = {"build": ".", "env_file": [f".secrets/{n}.env", f".secrets/{n}.integrations.env", ".secrets/plaid.env"], "environment": env,
-                                   "volumes": [f"./data/{n}/db:/data"], "user": "10001",
+                                   "volumes": [f"./data/{n}/db:/data", f"./data/{n}/robinhood-csv:/data/robinhood-csv"], "user": "10001",
                                    "networks": ["edge", net, "egress"], "restart": "unless-stopped"}
         conn_env = {"INTERNAL_SECRET": connector}
         services[f"{n}-rh-csv"] = {"build": ".", "environment": {"ROLE": "rh-csv", "CSV_DIR": "/csv", **conn_env},
                                    "volumes": [f"./data/{n}/robinhood-csv:/csv:ro"], "networks": [net], "restart": "unless-stopped"}
         if g.get("rh_agent"):
-            _stub(SEC / f"{n}.rh-agent.env", "RH_MCP_URL=\nRH_MCP_TOKEN=\nRH_MCP_READ_TOOLS=\nRH_MCP_TOOL_BALANCES=\nRH_MCP_TOOL_POSITIONS=\nRH_MCP_TOOL_HISTORY=\n")
+            _stub(SEC / f"{n}.rh-agent.env", "# Optional. Leave empty and set these on the Settings page instead.\n")
             env["RH_AGENT_URL"] = f"http://{n}-rh-agent:8000"
             services[f"{n}-rh-agent"] = {"build": ".", "env_file": [f".secrets/{n}.rh-agent.env"],
-                                         "environment": {"ROLE": "rh-agent", **conn_env}, "networks": [net, "egress"], "restart": "unless-stopped"}
+                                         "environment": {"ROLE": "rh-agent", "CONFIG_URL": f"http://goblin-{n}:8000/internal/connector-config/rh-agent", **conn_env}, "networks": [net, "egress"], "restart": "unless-stopped"}
             networks["egress"] = {}
         if g.get("rh_live"):
             _stub(SEC / f"{n}.rh-live.env", "RH_USERNAME=\nRH_PASSWORD=\n")
@@ -119,4 +130,7 @@ def main(src="goblins.yaml"):
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:])
+    if len(sys.argv) == 3 and sys.argv[1] == "--rotate-feed":
+        rotate_feed(sys.argv[2])
+    else:
+        main(*sys.argv[1:])

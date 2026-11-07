@@ -41,12 +41,13 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     def health():
         return {"ok": True}
 
-    @app.api_route("/g/{name}/{path:path}", methods=["GET", "POST"])
+    @app.api_route("/g/{name}/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
     async def proxy(name: str, path: str, request: Request):
         """A signed-in person reaches only their own goblin."""
         g = user_goblin(request, name)
         r = client.request(request.method, f"{g['url']}/{path}", params=dict(request.query_params),
-                           content=await request.body(), headers=goblin_headers(g))
+                           content=await request.body(),
+                           headers={**goblin_headers(g), "Content-Type": request.headers.get("content-type", "application/octet-stream")})
         return Response(r.content, r.status_code, media_type=r.headers.get("content-type"))
 
     @app.get("/api/v1/summary")

@@ -127,6 +127,8 @@ function demoBackend() {
   ].map(([title, amount, hrs], i) => ({ id: "e" + i, ts: new Date(Date.now() - hrs * 36e5).toISOString(), kind: i === 3 ? "balance" : "transaction", title, amount, detail: "sample" }));
   const history = Array.from({ length: 30 }, (_, i) => ({ date: addDays(t, i - 29), net_worth: 76000 + i * 120 + Math.sin(i / 3) * 900 }));
   const mo = (s) => (s.active ? s.amount * { weekly: 52 / 12, biweekly: 26 / 12, monthly: 1, yearly: 1 / 12 }[s.cycle] : 0);
+  const demoSettings = { share: ["net_worth", "robinhood_agent"], rh_main_source: "auto", caldav_url: "https://dav.example/calendars/me/bills/", caldav_user: "me", caldav_password: { set: true },
+    rh_mcp_url: "https://mcp.example/robinhood", rh_mcp_token: { set: true }, rh_mcp_read_tools: "get_account,get_positions", rh_mcp_tool_balances: "get_account", rh_mcp_tool_positions: "get_positions", rh_mcp_tool_history: "" };
   const rh = (positions, eq) => ({ source: "sample", as_of: new Date().toISOString(), balances: { equity: eq }, positions });
   return async (path, opts = {}) => {
     const m = opts.method || "GET";
@@ -147,6 +149,13 @@ function demoBackend() {
     if (path.includes("export/caldav")) return { pushed: subs.filter((s) => s.active).length, failed: [] };
     if (path === "/robinhood/main") return rh([{ symbol: "VTI", quantity: 62.4, net_cost: 14900 }, { symbol: "AAPL", quantity: 40, net_cost: 6120 }, { symbol: "MSFT", quantity: 18, net_cost: 6480 }], 38902.55);
     if (path === "/robinhood/agent") return rh([{ symbol: "NVDA", quantity: 4, net_cost: 540 }, { symbol: "SPY", quantity: 1.2, net_cost: 610 }], 1204.1);
+    if (path === "/api/settings" && m === "GET") return JSON.parse(JSON.stringify(demoSettings));
+    if (path === "/api/settings" && m === "PUT") { for (const [k, v] of Object.entries(JSON.parse(opts.body))) demoSettings[k] = typeof demoSettings[k] === "object" && !Array.isArray(demoSettings[k]) ? { set: !!v } : v; return JSON.parse(JSON.stringify(demoSettings)); }
+    if (path === "/api/status") return { plaid: { configured: true, env: "sandbox", items: [{ item_id: "item-1", institution: "Huntington" }, { item_id: "item-2", institution: "Axos" }, { item_id: "item-3", institution: "Capital One" }] },
+      robinhood: { agent: "up", csv: "up", live: "not deployed", csv_files: ["import-2026-11-01T0000Z.csv"], agent_configured: true }, caldav_configured: true };
+    if (path === "/api/settings/test-caldav") return { ok: true, status: 207 };
+    if (path.startsWith("/api/plaid/items/")) return { removed: true };
+    if (path === "/robinhood/csv-upload") throw new Error("Upload is disabled in the sample preview");
     if (path === "/sync") return { plaid: [], robinhood: {} };
     if (path.startsWith("/plaid/link-token")) throw new Error("Plaid Link is disabled in the sample preview");
     if (path.startsWith("/import/csv")) throw new Error("CSV import is disabled in the sample preview");
@@ -270,8 +279,7 @@ async function viewRobinhood(root) {
 }
 
 async function viewConnect(root) {
-  const feedIn = h("input", { id: "feedtok", value: S.feedToken, placeholder: "paste the feed token printed by gen_compose.py", autocomplete: "off" });
-  const dis = S.demo;
+    const dis = S.demo;
   root.append(
     h("div", { class: "panel" }, h("h3", {}, "Banks, cards, savings and IRA (Plaid)"), h("p", { class: "muted small" }, "Huntington, Discover, Axos and Capital One link through Plaid. Tokens are encrypted in your own container; the gateway never sees them."),
       h("button", { class: "btn primary", disabled: dis, onclick: async () => {
@@ -281,19 +289,78 @@ async function viewConnect(root) {
           Plaid.create({ token: link_token, onSuccess: async (pt, meta) => { const r = await api("/plaid/exchange", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ public_token: pt, institution: meta.institution?.name || "" }) }); toast(`Linked. ${r.sync.added} transactions pulled.`); } }).open();
         } catch (e) { toast(e.message); }
       } }, "Link an account"), " ", h("button", { class: "btn", disabled: dis, onclick: async () => { try { await api("/sync", { method: "POST" }); toast("Synced"); } catch (e) { toast(e.message); } } }, "Sync now")),
-    h("div", { class: "panel" }, h("h3", {}, "PayPal, Venmo, Cash App"), h("p", { class: "muted small" }, "None of these offer a personal-account API, so export the CSV from each app and import it here. The format is detected automatically, and re-importing never double counts."),
+    h("div", { class: "panel" }, h("h3", {}, "Cash App, PayPal, Venmo by CSV"), h("p", { class: "muted small" }, "Cash App has no Plaid support, so export its CSV and import it here. Use the same route for PayPal or Venmo if Plaid cannot link them. The format is detected automatically, and re-importing never double counts."),
       h("input", { type: "file", id: "csvfile", accept: ".csv,text/csv", disabled: dis }), " ", h("button", { class: "btn", disabled: dis, onclick: async () => {
         const f = $("#csvfile").files[0]; if (!f) return toast("Choose a CSV first");
         try { const r = await api("/import/csv", { method: "POST", headers: { "Content-Type": "text/csv" }, body: await f.text() }); toast(`${r.provider}: ${r.added} new of ${r.rows} rows`); } catch (e) { toast(e.message); }
       } }, "Import")),
-    h("div", { class: "panel" }, h("h3", {}, "Robinhood"), h("p", { class: "muted small" }, "Agent account: official MCP connector, read tools only. Main account: drop activity-report CSVs in ", h("code", { class: "mono" }, "data/<you>/robinhood-csv/"), ", or turn on the live connector (unofficial, off by default).")),
-    h("div", { class: "panel" }, h("h3", {}, "Feed token"), h("p", { class: "muted small" }, "Needed to show your RSS and calendar links. Stored only in this browser."),
-      h("div", { class: "url" }, feedIn, h("button", { class: "btn", onclick: () => { S.feedToken = feedIn.value.trim(); store.set("gb_feed", S.feedToken); toast("Saved"); } }, "Save"))),
+    h("div", { class: "panel" }, h("h3", {}, "Robinhood"), h("p", { class: "muted small" }, "Set up the agent account, the CSV upload and which source feeds your main account under Settings.")),
     dis ? h("p", { class: "muted small" }, "Buttons are disabled because this preview runs on sample data.") : null);
 }
 
+
+const SHARE_LABELS = { net_worth: "Net worth", subscriptions: "Monthly subscription total", robinhood_main: "Robinhood main balance", robinhood_agent: "Robinhood agent balance" };
+const dot = (st) => h("span", { class: "pill " + (st === "up" ? "t" : st === "down" || st === "error" ? "r" : "") }, st);
+
+async function viewSettings(root, rerender) {
+  const [cfg, st] = await Promise.all([api("/api/settings"), api("/api/status")]);
+  const save = async (body, msg = "Saved") => { try { await api("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); toast(msg); rerender(); } catch (e) { toast(e.message); } };
+  const field = (id, label, value, o = {}) => h("label", {}, label, h("input", { id, value: value ?? "", autocomplete: "off", ...o }));
+  const secret = (id, label, isSet) => field(id, label, "", { type: "password", placeholder: isSet ? "saved, leave blank to keep" : "not set", autocomplete: "new-password" });
+  const val = (id) => $("#" + id).value.trim();
+  const withSecret = (body, key, id) => { if (val(id)) body[key] = val(id); return body; };
+
+  const rh = st.robinhood;
+  root.append(
+    /* Robinhood */
+    h("div", { class: "panel" }, h("h3", {}, "Robinhood"),
+      h("p", { class: "muted small" }, "Two accounts, two routes. The agent account always uses Robinhood's official MCP. The main account uses whichever source you pick below. Nothing here can place a trade."),
+      h("div", { class: "legend", style: "margin:8px 0 14px" }, h("span", {}, "Agent connector ", dot(rh.agent)), h("span", {}, "CSV connector ", dot(rh.csv)), h("span", {}, "Live connector (unofficial) ", dot(rh.live))),
+      h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); save({ rh_main_source: val("s-src") }); } },
+        h("label", {}, "Main account source", h("select", { id: "s-src" }, [["auto", "Automatic (Plaid, then live, then CSV)"], ["plaid", "Plaid only"], ["csv", "CSV only"], ["live", "Live only (unofficial)"]].map(([v, t]) => h("option", { value: v, selected: v === cfg.rh_main_source }, t)))),
+        h("button", { class: "btn primary", type: "submit" }, "Save source")),
+      h("p", { class: "muted small" }, "Live uses an unofficial library that breaks Robinhood's terms and can get a login locked. It stays off until you enable it in the container's env file."),
+      h("h3", { style: "margin-top:18px" }, "Main account CSV"),
+      h("p", { class: "muted small" }, rh.csv_files.length ? `${rh.csv_files.length} file(s) imported. Latest: ${rh.csv_files.at(-1)}` : "No files yet. In Robinhood, download the account activity report as CSV and upload it here."),
+      h("input", { type: "file", id: "rhcsv", accept: ".csv,text/csv", disabled: S.demo }), " ", h("button", { class: "btn", disabled: S.demo, onclick: async () => {
+        const f = $("#rhcsv").files[0]; if (!f) return toast("Choose a CSV first");
+        try { const r = await api("/robinhood/csv-upload", { method: "POST", headers: { "Content-Type": "text/csv" }, body: await f.text() }); toast("Saved " + r.saved); rerender(); } catch (e) { toast(e.message); }
+      } }, "Upload"),
+      h("h3", { style: "margin-top:18px" }, "Agent account (official MCP)"),
+      h("p", { class: "muted small" }, "Only the tools you list under allowed read tools can ever be called. Leave trade tools out. Until each of the three reads below names an allowed tool, that read is refused."),
+      h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); save(withSecret({ rh_mcp_url: val("s-mcp"), rh_mcp_read_tools: val("s-allow"), rh_mcp_tool_balances: val("s-tb"), rh_mcp_tool_positions: val("s-tp"), rh_mcp_tool_history: val("s-th") }, "rh_mcp_token", "s-tok")); } },
+        field("s-mcp", "MCP server URL", cfg.rh_mcp_url, { type: "url" }), secret("s-tok", "Access token", cfg.rh_mcp_token.set), field("s-allow", "Allowed read tools (comma separated)", cfg.rh_mcp_read_tools),
+        field("s-tb", "Tool for balances", cfg.rh_mcp_tool_balances), field("s-tp", "Tool for positions", cfg.rh_mcp_tool_positions), field("s-th", "Tool for history", cfg.rh_mcp_tool_history),
+        h("button", { class: "btn primary", type: "submit" }, "Save agent settings"))),
+
+    /* Calendar */
+    h("div", { class: "panel" }, h("h3", {}, "Calendar (CalDAV)"), h("p", { class: "muted small" }, "Where \"Push to CalDAV\" sends your subscription events. Use the full address of one calendar, not the server root."),
+      h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); save(withSecret({ caldav_url: val("s-dav"), caldav_user: val("s-du") }, "caldav_password", "s-dp")); } },
+        field("s-dav", "Calendar URL", cfg.caldav_url, { type: "url" }), field("s-du", "Username", cfg.caldav_user), secret("s-dp", "Password", cfg.caldav_password.set),
+        h("button", { class: "btn primary", type: "submit" }, "Save"), h("button", { class: "btn", type: "button", onclick: async () => { try { const r = await api("/api/settings/test-caldav", { method: "POST" }); toast(r.ok ? "Connected" : "Failed: " + (r.status || r.detail)); } catch (e) { toast(e.message); } } }, "Test connection"))),
+
+    /* Sharing */
+    h("div", { class: "panel" }, h("h3", {}, "Share with Pondering Orb"), h("p", { class: "muted small" }, "The Orb can only see what is ticked here, and only totals. Transactions and account names are never shared."),
+      h("form", { onsubmit: (e) => { e.preventDefault(); save({ share: [...document.querySelectorAll(".sharebox:checked")].map((x) => x.value) }); }, style: "display:grid;gap:8px" },
+        Object.entries(SHARE_LABELS).map(([k, t]) => h("label", { style: "display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-size:.95rem;color:var(--fg)" }, h("input", { type: "checkbox", class: "sharebox", value: k, checked: cfg.share.includes(k), style: "width:auto" }), t)),
+        h("div", {}, h("button", { class: "btn primary", type: "submit" }, "Save sharing")))),
+
+    /* Feed token */
+    h("div", { class: "panel" }, h("h3", {}, "Feed token"),
+      h("p", { class: "muted small" }, "Your RSS reader and calendar app cannot sign in, so their links carry a secret in the address instead. That secret is the feed token. Anyone holding a link can read the amounts in it, and nothing else. It cannot log in or change anything. It is separate from your login token."),
+      h("p", { class: "muted small" }, "It was printed once when this goblin was created. Paste it here so this page can build your links. It stays in this browser only. If a link leaks, rotate it on the server with ", h("code", { class: "mono" }, "python3 scripts/gen_compose.py --rotate-feed " + (S.name || "<name>")), " and restart the gateway."),
+      h("div", { class: "url" }, h("input", { id: "feedtok", value: S.feedToken, placeholder: "feed token", autocomplete: "off" }), h("button", { class: "btn", onclick: () => { S.feedToken = val("feedtok"); store.set("gb_feed", S.feedToken); toast("Saved in this browser"); } }, "Save"))),
+
+    /* Plaid */
+    h("div", { class: "panel" }, h("h3", {}, "Linked banks"), h("p", { class: "muted small" }, st.plaid.configured ? `Plaid is set up (${st.plaid.env}).` : "Plaid is not configured. Add your client ID and secret to .secrets/plaid.env and restart."),
+      st.plaid.items.length ? st.plaid.items.map((it) => h("div", { class: "ev", style: "grid-template-columns:1fr auto auto" }, h("span", {}, it.institution || "Bank"),
+        h("button", { class: "btn sm", disabled: S.demo, onclick: async () => { try { const { link_token } = await api("/plaid/link-token?item_id=" + encodeURIComponent(it.item_id), { method: "POST" }); await new Promise((ok, no) => { const sc = document.createElement("script"); sc.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js"; sc.onload = ok; sc.onerror = no; document.head.append(sc); }); Plaid.create({ token: link_token, onSuccess: () => toast("Relinked") }).open(); } catch (e) { toast(e.message); } } }, "Relink"),
+        h("button", { class: "btn sm danger", onclick: async (ev) => { if (ev.target.dataset.sure) { await api("/api/plaid/items/" + encodeURIComponent(it.item_id), { method: "DELETE" }); toast("Unlinked"); rerender(); } else { ev.target.dataset.sure = 1; ev.target.textContent = "Sure? Deletes its data"; } } }, "Unlink"))) : h("p", { class: "muted" }, "Nothing linked yet. Use Connect.")),
+    S.demo ? h("p", { class: "muted small" }, "Sample preview: you can try the forms, but changes only live until you reload.") : null);
+}
+
 /* ---------- shell ---------- */
-const TABS = [["overview", "Overview", viewOverview], ["movement", "Money movement", viewMovement], ["subs", "Subscriptions", viewSubs], ["accounts", "Accounts", viewAccounts], ["robinhood", "Robinhood", viewRobinhood], ["connect", "Connect", viewConnect]];
+const TABS = [["overview", "Overview", viewOverview], ["movement", "Money movement", viewMovement], ["subs", "Subscriptions", viewSubs], ["accounts", "Accounts", viewAccounts], ["robinhood", "Robinhood", viewRobinhood], ["connect", "Connect", viewConnect], ["settings", "Settings", viewSettings]];
 async function render() {
   const [, title, view] = TABS.find((t) => t[0] === S.tab);
   const main = h("main", {}, h("div", { class: "bar" }, h("h2", {}, title), S.demo ? h("span", { class: "banner" }, "Sample data. Nothing here is a real account.") : h("span", { class: "muted small" }, S.name)));

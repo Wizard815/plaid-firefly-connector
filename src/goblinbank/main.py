@@ -14,7 +14,7 @@ def build():
     from goblinbank.connectors.base import make_connector_app
     if role == "rh-agent":
         from goblinbank.connectors.rh_agent import AgentConnector
-        return make_connector_app(AgentConnector(), secret)
+        return make_connector_app(AgentConnector(config_url=os.environ.get("CONFIG_URL", ""), config_secret=secret), secret)
     if role == "rh-csv":
         from goblinbank.connectors.rh_csv import CsvConnector
         return make_connector_app(CsvConnector(os.environ.get("CSV_DIR", "/csv")), secret)

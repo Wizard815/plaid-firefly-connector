@@ -11,12 +11,11 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from goblinbank import crypto, feed, importers, sync
+from goblinbank import crypto, feed, importers, settings as cfg, sync
 from goblinbank.db import DB
 from goblinbank.plaid import Plaid, PlaidError
 from goblinbank.security import require_internal
 
-SHAREABLE = {"robinhood_agent", "robinhood_main", "net_worth", "subscriptions"}
 MONTHLY_FACTOR = {"weekly": 52 / 12, "biweekly": 26 / 12, "monthly": 1, "yearly": 1 / 12}
 CYCLES = set(MONTHLY_FACTOR)
 
@@ -55,12 +54,15 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     connector_secret = os.environ.get("CONNECTOR_SECRET", secret)
     urls = {"agent": os.environ.get("RH_AGENT_URL", ""), "csv": os.environ.get("RH_CSV_URL", ""),
             "live": os.environ.get("RH_LIVE_URL", "")}
-    share = {s for s in os.environ.get("SHARE", "").split(",") if s in SHAREABLE}
     gateway_url = os.environ.get("GATEWAY_URL", "")
     client = httpx.Client(timeout=20, transport=transport)
     store = db or DB()
     plaid = Plaid(plaid_transport)
+    csv_dir = os.environ.get("RH_CSV_DIR", "/data/robinhood-csv")
     app = FastAPI(title=f"goblin:{name}")
+
+    def share() -> set[str]:
+        return set(cfg.get_list(store, "share"))
 
     def auth(request: Request):
         require_internal(request, secret)
@@ -83,11 +85,25 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                 out.setdefault("errors", []).append(f"{ep}: {type(e).__name__}")
         return out
 
+    def plaid_portfolio():
+        """Robinhood positions as reported by Plaid Investments, if a Robinhood item is linked."""
+        accts = store.all("SELECT * FROM accounts WHERE source='plaid' AND kind='investment' AND lower(institution) LIKE '%robinhood%'")
+        if not accts:
+            return None
+        ids = [a["id"] for a in accts]
+        rows = store.all(f"SELECT * FROM holdings WHERE account_id IN ({','.join('?' * len(ids))})", ids)
+        return {"source": "plaid", "as_of": max(a["updated"] or "" for a in accts), "balances": {"equity": sum(a["balance"] or 0 for a in accts)},
+                "positions": [{"symbol": r["symbol"], "quantity": r["quantity"], "equity": r["value"]} for r in rows]}
+
     def main_portfolio():
-        live = fetch("live")      # live preferred when enabled and answering; CSV is the fallback
-        if live and live.get("positions") is not None:
-            return live
-        return fetch("csv")
+        """rh_main_source: auto = plaid -> live (if enabled and answering) -> csv. Or force one."""
+        pref = cfg.get(store, "rh_main_source") or "auto"
+        order = {"auto": ["plaid", "live", "csv"], "plaid": ["plaid"], "live": ["live"], "csv": ["csv"]}[pref]
+        for src in order:
+            d = plaid_portfolio() if src == "plaid" else fetch(src)
+            if d and d.get("positions") is not None:
+                return d
+        return None
 
     @app.get("/health")
     def health():
@@ -286,9 +302,9 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     def subs_caldav(request: Request):
         """Push subscriptions into your CalDAV calendar (CALDAV_URL / CALDAV_USER / CALDAV_PASSWORD)."""
         auth(request)
-        url, user, pw = (os.environ.get(k, "") for k in ("CALDAV_URL", "CALDAV_USER", "CALDAV_PASSWORD"))
+        url, user, pw = (cfg.get(store, k) for k in ("caldav_url", "caldav_user", "caldav_password"))
         if not url:
-            raise HTTPException(503, "CALDAV_URL not configured")
+            raise HTTPException(503, "CalDAV is not set up yet (Settings > Calendar)")
         return feed.push_caldav(store.all("SELECT * FROM subscriptions"), url, user, pw, caldav_transport)
 
     # ---------------- Outputs: Atom money-movement feed + .ics ----------------
@@ -304,6 +320,107 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         auth(request)
         return Response(feed.ics(store.all("SELECT * FROM subscriptions")), media_type="text/calendar")
 
+    # ---------------- Settings ----------------
+    @app.get("/api/settings")
+    def settings_get(request: Request):
+        auth(request)
+        return cfg.view(store)
+
+    @app.put("/api/settings")
+    async def settings_put(request: Request):
+        """Partial update. Secret fields: omit = unchanged, "" = clear. Secrets are never returned."""
+        auth(request)
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(422, "expected an object")
+        try:
+            for k, v in body.items():
+                cfg.validate(k, v)          # validate everything before writing anything
+            for k, v in body.items():
+                cfg.put(store, k, v)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return cfg.view(store)
+
+    @app.post("/api/settings/test-caldav")
+    def test_caldav(request: Request):
+        auth(request)
+        url, user, pw = (cfg.get(store, k) for k in ("caldav_url", "caldav_user", "caldav_password"))
+        if not url:
+            raise HTTPException(503, "CalDAV is not set up yet")
+        try:
+            r = httpx.Client(timeout=15, auth=(user, pw), transport=caldav_transport).request("PROPFIND", url, headers={"Depth": "0"})
+        except httpx.HTTPError as e:
+            return {"ok": False, "detail": type(e).__name__}
+        return {"ok": r.status_code in (200, 207), "status": r.status_code}
+
+    @app.get("/api/status")
+    def status(request: Request):
+        """What is connected, for the Settings page."""
+        auth(request)
+        def probe(kind):
+            if not urls[kind]:
+                return "not deployed"
+            try:
+                return "up" if client.get(f"{urls[kind]}/health").status_code == 200 else "error"
+            except httpx.HTTPError:
+                return "down"
+        csvs = sorted(os.listdir(csv_dir)) if os.path.isdir(csv_dir) else []
+        return {"plaid": {"configured": plaid.configured, "env": os.environ.get("PLAID_ENV", "sandbox"),
+                          "items": store.all("SELECT item_id, institution FROM plaid_items")},
+                "robinhood": {"agent": probe("agent"), "csv": probe("csv"), "live": probe("live"), "csv_files": csvs,
+                              "agent_configured": bool(cfg.get(store, "rh_mcp_url") and cfg.get(store, "rh_mcp_read_tools"))},
+                "caldav_configured": bool(cfg.get(store, "caldav_url"))}
+
+    @app.get("/internal/connector-config/rh-agent")
+    def agent_config(request: Request):
+        """The rh-agent connector pulls its (editable) config from here, authenticated with the connector secret."""
+        require_internal(request, connector_secret)
+        g = lambda k: cfg.get(store, k)
+        return {"url": g("rh_mcp_url"), "token": g("rh_mcp_token"), "read_tools": g("rh_mcp_read_tools"),
+                "balances": g("rh_mcp_tool_balances"), "positions": g("rh_mcp_tool_positions"), "history": g("rh_mcp_tool_history")}
+
+    @app.post("/robinhood/csv-upload")
+    async def csv_upload(request: Request):
+        """Save a Robinhood activity-report CSV where the rh-csv connector reads it."""
+        auth(request)
+        raw = await request.body()
+        if len(raw) > 5_000_000:
+            raise HTTPException(413, "file too large")
+        head = raw[:2000].decode("utf-8", "replace")
+        if "Trans Code" not in head or "Activity Date" not in head:
+            raise HTTPException(422, "not a Robinhood activity report (expected Activity Date and Trans Code columns)")
+        os.makedirs(csv_dir, exist_ok=True)
+        fname = f"import-{sync.now().replace(':', '').replace('+', 'Z')}.csv"
+        with open(os.path.join(csv_dir, fname), "wb") as f:
+            f.write(raw)
+        return {"saved": fname}
+
+    @app.get("/api/plaid/items")
+    def plaid_items(request: Request):
+        auth(request)
+        return store.all("SELECT item_id, institution FROM plaid_items")
+
+    @app.delete("/api/plaid/items/{item_id}")
+    def plaid_remove(request: Request, item_id: str):
+        """Unlink: tell Plaid to drop the item (best effort), then delete it and its data here."""
+        auth(request)
+        row = store.one("SELECT token_enc FROM plaid_items WHERE item_id=?", (item_id,))
+        if not row:
+            raise HTTPException(404, "not found")
+        try:
+            plaid.post("/item/remove", {"access_token": crypto.decrypt(row["token_enc"])})
+        except PlaidError:
+            pass
+        with store.tx() as c:
+            ids = [r[0] for r in c.execute("SELECT id FROM accounts WHERE item_id=?", (item_id,))]
+            for a in ids:
+                for t in ("transactions", "holdings", "snapshots"):
+                    c.execute(f"DELETE FROM {t} WHERE account_id=?", (a,))
+            c.execute("DELETE FROM accounts WHERE item_id=?", (item_id,))
+            c.execute("DELETE FROM plaid_items WHERE item_id=?", (item_id,))
+        return {"removed": item_id, "accounts": len(ids)}
+
     # ---------------- Opt-in summary for gateway / Orb ----------------
     @app.get("/summary")
     def summary(request: Request, scope: str = "shared"):
@@ -311,14 +428,14 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         auth(request)
         out = {"goblin": name}
         every = scope == "all"
-        if "net_worth" in share or every:
+        if "net_worth" in share() or every:
             out["net_worth"] = net_worth(store.all("SELECT * FROM accounts"))
-        if "subscriptions" in share or every:
+        if "subscriptions" in share() or every:
             out["subscriptions_monthly"] = round(sum(monthly(s) for s in store.all("SELECT * FROM subscriptions WHERE active=1")), 2)
-        if "robinhood_main" in share or every:
+        if "robinhood_main" in share() or every:
             m = main_portfolio()
             out["robinhood_main"] = m and {"as_of": m.get("as_of"), "source": m.get("source"), "balances": m.get("balances")}
-        if "robinhood_agent" in share or every:
+        if "robinhood_agent" in share() or every:
             a = fetch("agent")
             out["robinhood_agent"] = a and {"as_of": a.get("as_of"), "balances": a.get("balances")}
         return out

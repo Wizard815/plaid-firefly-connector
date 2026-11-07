@@ -203,3 +203,132 @@ def test_net_worth_history():
         c.executemany("INSERT INTO snapshots VALUES(?,?,?)", [("2026-11-01T00:00:00", "a", 100.0), ("2026-11-01T01:00:00", "b", 30.0), ("2026-11-02T00:00:00", "a", 150.0)])
     out = TestClient(mk(db=db)).get("/api/history", headers=H).json()
     assert out == [{"date": "2026-11-01", "net_worth": 70.0}, {"date": "2026-11-02", "net_worth": 120.0}]
+
+
+def test_gateway_proxies_json_put_delete_and_csv():
+    gtc = TestClient(mk())
+
+    def to_goblin(req: httpx.Request):
+        r = gtc.request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
+        return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
+
+    cfg = {"goblins": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("tok")}], "orb_keys": []}
+    gw = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_goblin)))
+    A = {"Authorization": "Bearer tok"}
+    sub = {"name": "Gym", "amount": 10, "cycle": "monthly", "next_date": "2026-12-01"}
+    s = gw.post("/g/alice/api/subscriptions", headers=A, json=sub)
+    assert s.status_code == 200, s.text
+    sid = s.json()["id"]
+    assert gw.put(f"/g/alice/api/subscriptions/{sid}", headers=A, json={**sub, "amount": 12}).json()["amount"] == 12
+    csv = "Transaction ID,Date,Transaction Type,Currency,Amount,Fee,Net Amount,Asset Type,Account,Notes\nCA1,2026-11-06,Sent,USD,-$8.00,$0,-$8.00,Cash,Cash,Coffee\n"
+    assert gw.post("/g/alice/import/csv", headers={**A, "Content-Type": "text/csv"}, content=csv).json()["provider"] == "cashapp"
+    assert gw.delete(f"/g/alice/api/subscriptions/{sid}", headers=A).status_code == 200
+
+
+# ---------------- settings, status, csv upload, plaid holdings ----------------
+def test_settings_secrets_never_returned_and_encrypted():
+    db = DB(":memory:")
+    c = TestClient(mk(db=db))
+    r = c.put("/api/settings", headers=H, json={"caldav_url": "https://dav.example/cal", "caldav_user": "me", "caldav_password": "hunter2",
+                                                 "share": ["net_worth", "robinhood_agent"], "rh_main_source": "csv"}).json()
+    assert r["caldav_password"] == {"set": True} and "hunter2" not in str(r)
+    assert "hunter2" not in db.one("SELECT value FROM settings WHERE key='caldav_password'")["value"]   # encrypted at rest
+    assert r["share"] == ["net_worth", "robinhood_agent"] and r["rh_main_source"] == "csv"
+    assert c.put("/api/settings", headers=H, json={"caldav_user": "you"}).json()["caldav_password"] == {"set": True}   # omitted = unchanged
+    assert c.put("/api/settings", headers=H, json={"caldav_password": ""}).json()["caldav_password"] == {"set": False}  # "" clears
+    # validation: nothing is written if any key is bad
+    assert c.put("/api/settings", headers=H, json={"caldav_user": "x", "share": ["everything"]}).status_code == 422
+    assert c.put("/api/settings", headers=H, json={"rh_main_source": "magic"}).status_code == 422
+    assert c.put("/api/settings", headers=H, json={"bogus": 1}).status_code == 422
+    assert c.put("/api/settings", headers=H, json={"caldav_url": "ftp://x"}).status_code == 422
+    assert c.get("/api/settings", headers=H).json()["caldav_user"] == "you"
+
+
+def test_share_setting_controls_summary():
+    c = TestClient(mk())
+    assert "net_worth" in c.get("/summary", headers=H).json()         # env default from the fixture
+    c.put("/api/settings", headers=H, json={"share": []})
+    assert c.get("/summary", headers=H).json() == {"goblin": "alice"}
+
+
+def test_caldav_from_settings_and_test_button():
+    dav = httpx.MockTransport(lambda r: httpx.Response(207 if r.method == "PROPFIND" else 201))
+    c = TestClient(mk(caldav_transport=dav))
+    assert c.post("/api/settings/test-caldav", headers=H).status_code == 503
+    c.put("/api/settings", headers=H, json={"caldav_url": "https://dav.example/cal", "caldav_user": "u", "caldav_password": "p"})
+    assert c.post("/api/settings/test-caldav", headers=H).json() == {"ok": True, "status": 207}
+    c.post("/api/subscriptions", headers=H, json={"name": "A", "amount": 1, "cycle": "monthly", "next_date": "2026-12-01"})
+    assert c.post("/api/subscriptions/export/caldav", headers=H).json()["pushed"] == 1
+
+
+def test_agent_config_endpoint_and_connector_fetches_it(monkeypatch):
+    from goblinbank.connectors.rh_agent import AgentConnector
+    monkeypatch.setenv("CONNECTOR_SECRET", "csec")
+    c = TestClient(mk())
+    assert c.get("/internal/connector-config/rh-agent", headers=H).status_code == 401       # internal secret is NOT enough
+    c.put("/api/settings", headers=H, json={"rh_mcp_url": "http://mcp", "rh_mcp_token": "tok", "rh_mcp_read_tools": "get_bal",
+                                             "rh_mcp_tool_balances": "get_bal"})
+    cfg = c.get("/internal/connector-config/rh-agent", headers={"X-Internal-Secret": "csec"}).json()
+    assert cfg["token"] == "tok" and cfg["read_tools"] == "get_bal"
+
+    seen = []
+
+    def t(req: httpx.Request):
+        if req.url.host == "goblin":
+            r = c.get(req.url.raw_path.decode(), headers=dict(req.headers))
+            return httpx.Response(r.status_code, json=r.json())
+        seen.append(req.headers.get("authorization"))
+        return httpx.Response(200, json={"result": {"cash": 1}})
+
+    monkeypatch.delenv("RH_MCP_URL", raising=False)
+    a = AgentConnector(transport=httpx.MockTransport(t), config_url="http://goblin/internal/connector-config/rh-agent", config_secret="csec")
+    assert a.balances() == {"cash": 1} and seen == ["Bearer tok"]
+    with pytest.raises(PermissionError):
+        a.positions()          # no positions tool configured -> refuses
+
+
+def test_csv_upload_validates_and_connector_reads_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("RH_CSV_DIR", str(tmp_path))
+    c = TestClient(mk())
+    good = "Activity Date,Instrument,Description,Trans Code,Quantity,Price,Amount\n1/2/2026,AAPL,Apple,Buy,2,$10.00,($20.00)\n"
+    r = c.post("/robinhood/csv-upload", headers=H, content=good)
+    assert r.status_code == 200 and (tmp_path / r.json()["saved"]).exists()
+    assert c.post("/robinhood/csv-upload", headers=H, content="a,b\n1,2\n").status_code == 422
+    from goblinbank.connectors.rh_csv import CsvConnector
+    assert CsvConnector(str(tmp_path)).positions()[0]["symbol"] == "AAPL"
+    assert c.get("/api/status", headers=H).json()["robinhood"]["csv_files"] == [r.json()["saved"]]
+
+
+def plaid_robinhood_mock():
+    base = plaid_mock()
+
+    def h(r: httpx.Request):
+        p = r.url.path
+        if p == "/accounts/get":
+            return httpx.Response(200, json={"accounts": [{"account_id": "rh1", "name": "Individual", "type": "investment", "balances": {"current": 5000.0}}]})
+        if p == "/investments/holdings/get":
+            return httpx.Response(200, json={"securities": [{"security_id": "s1", "ticker_symbol": "VTI", "name": "Vanguard"}],
+                                             "holdings": [{"account_id": "rh1", "security_id": "s1", "quantity": 10, "institution_price": 250.0, "institution_value": 2500.0}]})
+        return base.handle_request(r)
+    return httpx.MockTransport(h)
+
+
+def test_plaid_robinhood_holdings_feed_main_portfolio():
+    db = DB(":memory:")
+    c = TestClient(mk(db=db, plaid_transport=plaid_robinhood_mock()))
+    r = c.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "Robinhood"}).json()
+    assert r["sync"]["holdings"] == 1
+    m = c.get("/robinhood/main", headers=H).json()
+    assert m["source"] == "plaid" and m["balances"]["equity"] == 5000.0 and m["positions"][0]["symbol"] == "VTI"
+    c.put("/api/settings", headers=H, json={"rh_main_source": "csv"})                 # force another source
+    assert "error" in c.get("/robinhood/main", headers=H).json()
+
+
+def test_plaid_item_removal_deletes_data():
+    db = DB(":memory:")
+    c = TestClient(mk(db=db, plaid_transport=plaid_mock()))
+    c.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "Huntington"})
+    assert c.get("/api/plaid/items", headers=H).json() == [{"item_id": "item-1", "institution": "Huntington"}]
+    assert c.delete("/api/plaid/items/item-1", headers=H).json()["accounts"] == 2
+    assert c.get("/api/accounts", headers=H).json() == [] and c.get("/api/transactions", headers=H).json() == []
+    assert c.delete("/api/plaid/items/item-1", headers=H).status_code == 404

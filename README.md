@@ -24,6 +24,8 @@ One image, many roles (`ROLE=`), so the repo stays small.
 * **Subscriptions** (Wallos-style): manual + Plaid-detected, monthly/yearly totals, pause, `.ics` calendar feed, and push to CalDAV.
 * **Money movement feed**: Atom feed of every transaction and balance change at `/feed/<name>/<feed-token>/money.atom`.
 * **PayPal / Venmo / Cash App**: CSV import (no personal-account APIs exist). PayPal Credit may link via Plaid; check its directory.
+* **Settings page**: Robinhood source + CSV upload + agent MCP config, CalDAV, what the Orb may see, feed token help, relink/unlink banks.
+* **Plaid Investments** holdings feed the Robinhood main panel when a Robinhood item is linked (check Plaid's coverage first).
 * **UI** (`ui/index.html`, served by the gateway at `/`): sign in with goblin name + login token. Falls back to sample data when no gateway answers.
 
 ## Run

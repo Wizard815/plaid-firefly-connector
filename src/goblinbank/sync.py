@@ -45,9 +45,9 @@ def sync_item(db, plaid: Plaid, item_id: str) -> dict:
         kind = KIND.get(a["type"], "cash")
         bal = a["balances"].get("current")
         with db.tx() as c:
-            c.execute("""INSERT INTO accounts(id,source,institution,name,kind,balance,currency,updated) VALUES(?,?,?,?,?,?,?,?)
+            c.execute("""INSERT INTO accounts(id,item_id,source,institution,name,kind,balance,currency,updated) VALUES(?,?,?,?,?,?,?,?,?)
                          ON CONFLICT(id) DO UPDATE SET balance=excluded.balance,name=excluded.name,updated=excluded.updated""",
-                      (a["account_id"], "plaid", inst, a.get("official_name") or a["name"], kind, bal,
+                      (a["account_id"], item_id, "plaid", inst, a.get("official_name") or a["name"], kind, bal,
                        a["balances"].get("iso_currency_code") or "USD", now()))
         record_balance(db, a["account_id"], a["name"], bal, kind)
 
@@ -76,11 +76,30 @@ def sync_item(db, plaid: Plaid, item_id: str) -> dict:
     with db.tx() as c:
         c.execute("UPDATE plaid_items SET cursor=? WHERE item_id=?", (cursor, item_id))
 
+    if db.one("SELECT 1 FROM accounts WHERE item_id=? AND kind='investment'", (item_id,)):
+        try:
+            stats["holdings"] = sync_holdings(db, plaid, token)
+        except Exception as e:  # not every institution supports investments
+            stats["holdings_error"] = str(e)[:120]
     try:
         sync_recurring(db, plaid, token)
     except Exception as e:  # recurring needs history; don't fail the whole sync
         stats["recurring_error"] = str(e)[:120]
     return stats
+
+
+def sync_holdings(db, plaid: Plaid, token: str) -> int:
+    r = plaid.holdings(token)
+    secs = {x["security_id"]: x for x in r.get("securities", [])}
+    n = 0
+    for h in r.get("holdings", []):
+        sec = secs.get(h["security_id"], {})
+        with db.tx() as c:
+            c.execute("INSERT OR REPLACE INTO holdings VALUES(?,?,?,?,?,?)",
+                      (h["account_id"], sec.get("ticker_symbol") or sec.get("name") or h["security_id"], sec.get("name"),
+                       float(h["quantity"]), float(h.get("institution_price") or 0), float(h.get("institution_value") or 0)))
+        n += 1
+    return n
 
 
 def sync_recurring(db, plaid: Plaid, token: str):

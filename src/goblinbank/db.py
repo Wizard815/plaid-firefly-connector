@@ -7,7 +7,7 @@ from contextlib import contextmanager
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS plaid_items(item_id TEXT PRIMARY KEY, institution TEXT, token_enc TEXT NOT NULL, cursor TEXT);
 CREATE TABLE IF NOT EXISTS accounts(
-  id TEXT PRIMARY KEY, source TEXT NOT NULL, institution TEXT, name TEXT, kind TEXT,  -- kind: cash|credit|investment|loan
+  id TEXT PRIMARY KEY, item_id TEXT, source TEXT NOT NULL, institution TEXT, name TEXT, kind TEXT,  -- kind: cash|credit|investment|loan
   balance REAL, currency TEXT DEFAULT 'USD', updated TEXT);
 CREATE TABLE IF NOT EXISTS transactions(
   id TEXT PRIMARY KEY, account_id TEXT, date TEXT, name TEXT, amount REAL, currency TEXT DEFAULT 'USD',
@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS subscriptions(
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, amount REAL NOT NULL, currency TEXT DEFAULT 'USD',
   cycle TEXT NOT NULL, next_date TEXT NOT NULL, category TEXT DEFAULT '', url TEXT DEFAULT '', notes TEXT DEFAULT '',
   source TEXT DEFAULT 'manual', plaid_stream_id TEXT UNIQUE, active INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS holdings(account_id TEXT, symbol TEXT, name TEXT, quantity REAL, price REAL, value REAL, PRIMARY KEY(account_id, symbol));
+CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT, secret INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS snapshots(ts TEXT, account_id TEXT, balance REAL);
 CREATE TABLE IF NOT EXISTS events(  -- the money-movement log that feeds the Atom/RSS feed
   id TEXT PRIMARY KEY, ts TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, amount REAL, account_id TEXT, detail TEXT);
