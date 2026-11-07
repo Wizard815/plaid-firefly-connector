@@ -126,6 +126,8 @@ td.mono{white-space:nowrap}
 .badge{margin-left:8px;background:var(--brass);color:#fff;border-radius:999px;padding:0 7px;font-size:.75rem;font-weight:600}
 .snippet{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow-x:auto;font:.8rem/1.45 var(--mono);margin:0;white-space:pre}.card.done{opacity:.6}
 .ev>*{min-width:0}.ev{overflow-wrap:anywhere}
+.cmp{position:relative;height:16px;border-radius:8px;background:var(--line);overflow:hidden;margin:6px 0}.cmp i{position:absolute;left:0;top:0;bottom:0;display:block}.cmp .proj{background:var(--brass-soft);box-shadow:inset 0 0 0 1px var(--brass)}.cmp .proj.over{background:var(--red-soft);box-shadow:inset 0 0 0 1px var(--red)}.cmp .sp{background:var(--teal)}.meter.dual{position:relative}.meter.dual i{position:absolute;left:0;top:0;bottom:0}.meter.dual .proj{background:var(--brass-soft)}
+.barrow .num{white-space:nowrap}
 </style>
 
 <div id="app"></div>
@@ -232,9 +234,26 @@ function downloadText(name, text, type) { const a = h("a", { href: URL.createObj
 const sure = (btn, label, run) => (ev) => { if (ev.target.dataset.sure) run(); else { ev.target.dataset.sure = 1; ev.target.textContent = label; } };
 
 /* ================================ OVERVIEW ================================ */
+function forecastPanel(fc) {
+  const inc = fc.income_avg, pct = (v) => (inc ? Math.round((v / inc) * 100) + "%" : "–");
+  const over = inc != null && fc.projected > inc, tight = inc != null && !over && fc.projected > inc * 0.9;
+  const cmp = inc ? h("div", { class: "cmp", role: "img", "aria-label": `Spent ${pct(fc.spent_so_far)} of average income, projected ${pct(fc.projected)}` },
+    h("i", { class: "proj" + (over ? " over" : ""), style: `width:${Math.min(100, (fc.projected / inc) * 100)}%` }), h("i", { class: "sp", style: `width:${Math.min(100, (fc.spent_so_far / inc) * 100)}%` })) : null;
+  const top = Math.max(...fc.categories.map((c) => c.forecast), 1);
+  return h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Spent this month"), h("span", { class: "pill " + (fc.confidence === "high" ? "t" : fc.confidence === "medium" ? "b" : ""), title: `${fc.months_used} past month${fc.months_used === 1 ? "" : "s"} of history` }, fc.confidence + " confidence")),
+    h("div", { class: "grid", style: "margin:8px 0" }, kpi("Spent so far", usd(fc.spent_so_far), `${fc.days_left} days left in the month`), kpi("Projected by month end", usd(fc.projected), fc.typical_month != null ? `a typical month is ${usd(fc.typical_month)}` : "not enough history yet", over ? "neg" : ""),
+      kpi("Average monthly income", inc != null ? usd(inc) : "–", inc != null ? (fc.income_source === "history" ? `from your last ${fc.months_used} month${fc.months_used === 1 ? "" : "s"}` : "from the income you entered") : "add income in Budgets & notes", "pos"),
+      kpi(over ? "Over income by" : "Left after projected", fc.left_after_projected != null ? usd(Math.abs(fc.left_after_projected)) : "–", inc ? `${pct(fc.projected)} of income projected` : "", over ? "neg" : "pos")),
+    cmp, inc ? h("p", { class: "small", style: "margin:4px 0 10px" }, `So far you have spent ${pct(fc.spent_so_far)} of your average income. At this pace the month ends at ${pct(fc.projected)}`,
+      over ? h("b", { class: "neg" }, `, about ${usd(fc.projected - inc)} more than comes in.`) : tight ? h("b", { style: "color:var(--brass)" }, ", which is close to everything you earn.") : ", leaving room.") : h("p", { class: "muted small" }, "Add your income to see this against what comes in."),
+    fc.categories.length ? h("div", { class: "bars" }, fc.categories.slice(0, 8).map((c, i) => h("div", { class: "barrow", style: "grid-template-columns:110px 1fr 175px", title: `${c.method}${c.typical != null ? `, usual month ${usd(c.typical)}` : ""}${c.bills_due ? `, ${usd(c.bills_due)} in bills still due` : ""}` },
+      h("span", { class: "small muted" }, c.category), h("div", { class: "meter dual" }, h("i", { class: "proj", style: `width:${(c.forecast / top) * 100}%` }), h("i", { style: `width:${(c.spent / top) * 100}%;background:${CAT_COLORS[i % CAT_COLORS.length]}` })),
+      h("span", { class: "num small" }, `${usd(c.spent)} → ${usd(c.forecast)}`)))) : h("p", { class: "muted" }, "No spending yet this month."),
+    fc.history.length ? h("details", { style: "margin-top:12px" }, h("summary", { class: "muted small" }, "Past months"), h("table", {}, h("tbody", {}, fc.history.slice().reverse().map((m) => h("tr", {}, h("td", { class: "mono" }, m.month), h("td", { class: "num r" }, usd(m.spent)), h("td", { class: "muted small" }, "spent"), h("td", { class: "num r pos" }, usd(m.income)), h("td", { class: "muted small" }, "income"), h("td", { class: "small r" }, m.income ? Math.round((m.spent / m.income) * 100) + "%" : "–"))))) ) : null,
+    h("p", { class: "muted small" }, "An estimate from your past months, scaled by how this month is going, plus bills still due. Big one-off purchases cannot be predicted."));
+}
 async function viewOverview(root, rerender) {
-  const [o, hist, up, spend] = await Promise.all([api("/api/overview"), api("/api/history").catch(() => []), api("/api/upcoming?days=" + S.days),
-    api("/api/spending?" + qs({ start: today().slice(0, 8) + "01" })).catch(() => [])]);
+  const [o, hist, up, fc] = await Promise.all([api("/api/overview"), api("/api/history").catch(() => []), api("/api/upcoming?days=" + S.days), api("/api/forecast")]);
   const owed = (o.by_kind.credit || 0) + (o.by_kind.loan || 0), gross = Object.values(o.by_kind).reduce((s, v) => s + Math.abs(v), 0) || 1;
   const setDays = (d) => { S.days = Math.min(Math.max(parseInt(d) || 30, 1), 3650); store.set("gb_days", S.days); rerender(); };
   add(root, 
@@ -250,8 +269,8 @@ async function viewOverview(root, rerender) {
       h("div", { class: "kpi" }, h("div", { class: "value" }, usd(up.total)), h("div", { class: "sub" }, `${up.from} to ${up.to}`)),
       up.items.length ? h("div", { class: "scroll", style: "max-height:300px" }, up.items.map((i) => h("div", { class: "ev" }, h("span", { class: "when" }, i.date.slice(5)), h("span", {}, i.name, i.payer === "other" ? h("span", { class: "pill" }, i.payer_name + " pays") : null), h("span", { class: "num " + (i.payer === "me" ? "neg" : "muted") }, usd(-i.amount))))) : h("p", { class: "muted" }, "Nothing due in this window."),
       Object.keys(up.by_category).length ? barList(Object.entries(up.by_category).sort((a, b) => b[1] - a[1])) : null),
+    forecastPanel(fc),
     h("div", { class: "two" },
-      h("div", { class: "panel" }, h("h3", {}, "Spent this month"), spend.length ? barList(spend.slice(0, 8).map((r) => [r.category, r.spent])) : h("p", { class: "muted" }, "No spending yet this month.")),
       h("div", { class: "panel" }, h("h3", {}, "Latest movement"), o.events.length ? o.events.slice(0, 7).map(evRow) : h("p", { class: "muted" }, "Link a bank or import a CSV to see movement."))));
 }
 
@@ -264,10 +283,13 @@ async function txBrowser(root, fixed = {}, accounts = null) {
   const rangeBtn = (label, s, e) => h("button", { class: "chip", type: "button", onclick: () => { F.start = s; F.end = e; if ($("#f-start", out)) { $("#f-start", out).value = s; $("#f-end", out).value = e; } F.offset = 0; load(); } }, label);
   const t = new Date(), ymd = (d) => d.toISOString().slice(0, 10);
   const bind = (id, key) => ({ id, onchange: (e) => { F[key] = e.target.value; F.offset = 0; load(); } });
+  let seq = 0;
   async function load() {
+    const mine = ++seq;                                          // only the newest request may draw: a slow older answer must not overwrite it
     try {
       const r = await api("/api/transactions?" + qs({ ...F, limit: 50 }));
       const spend = await api("/api/spending?" + qs({ start: F.start, end: F.end })).catch(() => []);
+      if (mine !== seq) return;
       fill(list,
         h("div", { class: "grid", style: "margin-bottom:12px" }, kpi("Matches", String(r.total), `showing ${r.items.length}`), kpi("Money in", usd(r.sum_in), "", "pos"), kpi("Money out", usd(r.sum_out), "", "neg"), kpi("Net", usd(r.net, true), "", r.net < 0 ? "neg" : "pos")),
         r.items.length ? h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["Date", "Description", "Account", "Category", "Amount"].map((x, i) => h("th", { class: i === 4 ? "r" : "" }, x)))),
@@ -452,7 +474,7 @@ async function viewSavings(root, rerender) {
 /* ================================ BUDGETS & NOTES: the monthly plan, goals and notes ================================ */
 async function viewPlanner(root, rerender) {
   const month = S.month || today().slice(0, 7);
-  const [notes, pl, cats, gv, accts] = await Promise.all([api("/api/notes"), api("/api/plan?month=" + month), api("/api/categories"), api("/api/goals"), api("/api/accounts")]);
+  const [notes, pl, cats, gv, accts, fcs] = await Promise.all([api("/api/notes"), api("/api/plan?month=" + month), api("/api/categories"), api("/api/goals"), api("/api/accounts"), api("/api/forecast").catch(() => null)]);
   const cur = notes.find((n) => n.id === S.note) || null, activeGoals = gv.items.filter((g) => g.status === "active");
   const ask = h("input", { id: "pl-ask", placeholder: "e.g. Draft a plan to save $500 a month using my real spending", style: "flex:1;min-width:0" });
   const incomeRow = (i) => h("div", { class: "ev", style: "grid-template-columns:1fr auto auto auto" }, h("span", {}, i.name, " ", h("span", { class: "muted small" }, i.label), i.active ? null : h("span", { class: "pill" }, "paused")), h("span", { class: "muted small" }, `next ${i.next_due.slice(5)}`), h("span", { class: "num pos" }, usd(i.monthly) + "/mo"),
@@ -467,6 +489,7 @@ async function viewPlanner(root, rerender) {
       h("div", { class: "scroll", style: "margin-top:12px" }, pl.rows.length ? h("table", {}, h("thead", {}, h("tr", {}, ["Category", "Budget", "Bills", "Planned", "Spent", ""].map((x, i) => h("th", { class: i > 0 && i < 5 ? "r" : "" }, x)))),
         h("tbody", {}, pl.rows.map((r) => h("tr", {}, h("td", {}, r.category), h("td", { class: "num r" }, r.budget == null ? h("span", { class: "muted" }, "none") : usd(r.budget)), h("td", { class: "num r" }, r.bills ? usd(r.bills) : "–"), h("td", { class: "num r" }, usd(r.planned)),
           h("td", { class: "num r " + (r.left < 0 ? "neg" : "") }, usd(r.spent)), h("td", { style: "min-width:90px" }, r.planned ? bar(r.pct || 0, r.pct > 1 ? "var(--red)" : r.pct > 0.85 ? "var(--brass)" : "var(--teal)") : null))))) : h("p", { class: "muted" }, "Set a budget or add a subscription to start the plan.")),
+      fcs && month === today().slice(0, 7) && fcs.months_used ? h("p", { class: "small" }, `Your history says you will actually spend about ${usd(fcs.projected)} this month; this plan allows ${usd(pl.outflow_planned)}`, fcs.projected > pl.outflow_planned ? h("b", { class: "neg" }, ` (${usd(fcs.projected - pl.outflow_planned)} over the plan).`) : ".") : null,
       pl.actual.unbudgeted_spent ? h("p", { class: "muted small" }, `${usd(pl.actual.unbudgeted_spent)} was spent in categories with no budget or bill.`) : null,
       h("form", { class: "row", style: "margin-top:10px", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/budgets", send("PUT", { category: val("bg-cat"), monthly_amount: num("bg-amt") })); rerender(); } catch (err) { fail(err); } } },
         select("bg-cat", "Budget for", cats.filter((c) => c.kind === "expense").map((c) => [c.name, c.name]), "Food"), field("bg-amt", "Per month ($)", "", { type: "number", step: "0.01", min: "0", required: true }), h("button", { class: "btn primary", type: "submit" }, "Set budget"))),
@@ -707,7 +730,8 @@ async function tabSharing(root, rerender) {
       h("form", { onsubmit: (e) => { e.preventDefault(); saveCfg({ share: [...document.querySelectorAll(".sharebox:checked")].map((x) => x.value) }, rerender); }, style: "display:grid;gap:8px" },
         Object.entries(SHARE_LABELS).map(([k, t]) => h("label", { class: "check" }, h("input", { type: "checkbox", class: "sharebox", value: k, checked: cfg.share.includes(k) }), t)),
         h("div", { class: "chips" }, h("button", { class: "btn primary", type: "submit" }, "Save sharing"), h("button", { class: "btn", type: "button", onclick: async () => { try { const r = await api("/summary"); orbBox.textContent = JSON.stringify(r, null, 2); orbBox.hidden = false; } catch (e) { fail(e); } } }, "Preview what the Orb sees"))),
-      orbBox, h("p", { class: "muted small", style: "margin-top:10px" }, "In the Orb: Settings, Connections, Goblin Bank. Address ", h("code", { class: "mono" }, origin), ", and the Orb key in the variable it names.")),
+      orbBox, h("p", { class: "muted small", style: "margin-top:10px" }, "To connect the Orb: in the Orb go to Settings, Apps, and add this. Put the Orb key (printed once when you ran gen_compose.py) in the Orb's .env as GOBLIN_ORB_KEY."),
+      h("pre", { class: "snippet" }, `- name: Goblin-Bank\n  url: ${origin}\n  widget: { type: goblinbank, key_env: GOBLIN_ORB_KEY }`), h("button", { class: "btn sm", onclick: () => copy(`- name: Goblin-Bank\n  url: ${origin}\n  widget: { type: goblinbank, key_env: GOBLIN_ORB_KEY }`) }, "Copy for the Orb")),
     h("div", { class: "panel" }, h("h3", {}, "API tokens"), h("p", { class: "muted small" }, "For Home Assistant, scripts or anything else that should read your numbers. Each token is read-only, named, limited to the parts you tick, and can be revoked. It cannot log in or change anything."),
       fresh ? h("div", { class: "alert info", style: "display:grid;gap:8px" }, h("b", {}, `New token for ${fresh.name}. Copy it now, it is not shown again.`), h("div", { class: "url" }, h("code", {}, fresh.token), h("button", { class: "btn", onclick: () => copy(fresh.token) }, "Copy")),
         fresh.scopes.includes("summary") ? [h("div", { class: "small" }, "Home Assistant (configuration.yaml):"), h("pre", { class: "snippet" }, haYaml(origin, fresh.token)), h("button", { class: "btn sm", onclick: () => copy(haYaml(origin, fresh.token)) }, "Copy YAML")] : null,

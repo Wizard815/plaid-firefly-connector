@@ -152,6 +152,11 @@ def build_tools(ctx):
         except (KeyError, TypeError, ValueError):
             return {"error": "amount is required"}
 
+    def t_forecast(a):
+        f = ledger.spending_forecast(store, today(), int(a.get("months", 6) or 6))
+        f["categories"] = f["categories"][:12]
+        return f
+
     def t_plan(a):
         m = a.get("month") or today().strftime("%Y-%m")
         try:
@@ -239,6 +244,7 @@ def build_tools(ctx):
         ("savings_summary", "Where the savings are (accounts, CDs...), total, how much is earmarked for goals and how much is free, APY and maturities.", S({}), t_savings),
         ("list_goals", "Savings goals (things to save for): target, earmarked amount, shortfall, deadline, monthly needed. Also the free savings.", S({}), t_goals),
         ("can_i_afford", "Check whether a purchase fits in FREE savings (not earmarked) and how long saving would take at the monthly plan's leftover.", S({"amount": NUM}, ["amount"]), t_afford),
+        ("spending_forecast", "Projected spending for this month from past months (per category), what is spent so far, and how both compare to average monthly income.", S({"months": INT}), t_forecast),
         ("monthly_plan", "Monthly income vs bills, budgets and goal contributions, with what is left over. month is YYYY-MM (default this month).", S({"month": STR}), t_plan),
         ("add_goal", "Create a savings goal. ONLY when the user asks. Free savings are earmarked automatically; with none free it starts unfunded. Optional deadline (YYYY-MM-DD), priority 1 high..3 low, monthly contribution.",
          S({"name": STR, "target": NUM, "deadline": DATE, "priority": INT, "monthly": NUM, "note": STR}, ["name", "target"]), t_add_goal),

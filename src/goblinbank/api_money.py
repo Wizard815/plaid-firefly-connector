@@ -94,6 +94,11 @@ def register(app, ctx):
         auth(request)
         return ledger.overview(store, days, ctx.today())
 
+    @app.get("/api/forecast")
+    def forecast(request: Request, months: int = 6):
+        auth(request)
+        return ledger.spending_forecast(store, ctx.today(), months)
+
     @app.get("/api/upcoming")
     def upcoming(request: Request, days: int = 30):
         auth(request)

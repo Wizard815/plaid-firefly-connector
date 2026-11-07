@@ -372,3 +372,86 @@ def overview(db, days: int, today: date) -> dict:
     monthly = sum(sub_view(s, today)["monthly"] for s in subs)
     return {"net_worth": net_worth(db), "by_kind": by_kind, "accounts": accts, "subscriptions_monthly": round(monthly, 2), "upcoming": up,
             "events": db.all("SELECT * FROM events ORDER BY ts DESC LIMIT 10"), "alerts": alerts(db, today), "savings_total": gv["total"], "savings_free": gv["free"], "goals_needed": gv["needed"]}
+
+
+# ------------------------------------------------------------------ spending forecast from history
+def _months_back(today: date, n: int) -> list[str]:
+    """The n full calendar months before this one, oldest first, as YYYY-MM."""
+    y, m, out = today.year, today.month, []
+    for _ in range(n):
+        m -= 1
+        if m == 0:
+            y, m = y - 1, 12
+        out.append(f"{y}-{m:02d}")
+    return out[::-1]
+
+
+def spending_forecast(db, today: date, months: int = 6) -> dict:
+    """Where this month's spending is heading, from your own history.
+
+    Per category: take your typical month (median of the last full months with data, mean when there are fewer than 4),
+    then expect the rest of this month at that rate, nudged by how this month is tracking against the usual pace (clamped
+    to 0.5x..2x). Categories made of a few big payments (rent, insurance) are 'lumpy': they are not paced, you simply
+    expect the usual amount. A forecast never falls below what is already spent plus bills still due this month.
+    Compared against your average monthly income (from history, else the income you entered)."""
+    import statistics
+    from goblinbank import plan                                     # imported here: plan builds on this module
+    months = max(1, min(int(months), 24))
+    hist = _months_back(today, months)
+    this = today.strftime("%Y-%m")
+    first, last_day = date(today.year, today.month, 1), (date(today.year + (today.month == 12), today.month % 12 + 1, 1) - timedelta(days=1))
+    rows = db.all("SELECT substr(t.date,1,7) m, t.category, ROUND(-SUM(t.amount),2) spent, COUNT(*) n FROM transactions t JOIN categories c ON c.name=t.category "
+                  "WHERE t.amount<0 AND c.kind='expense' AND t.date >= ? AND t.date <= ? GROUP BY m, t.category", (hist[0] + "-01", last_day.isoformat()))
+    inc_rows = db.all("SELECT substr(t.date,1,7) m, ROUND(SUM(t.amount),2) income FROM transactions t JOIN categories c ON c.name=t.category "
+                      "WHERE t.amount>0 AND c.kind='income' AND t.date >= ? AND t.date <= ? GROUP BY m", (hist[0] + "-01", last_day.isoformat()))
+    any_tx = {r["m"] for r in db.all("SELECT DISTINCT substr(date,1,7) m FROM transactions WHERE date >= ?", (hist[0] + "-01",))}
+    with_data = [m for m in hist if m in any_tx]                      # a month with no transactions at all is missing data, not a month of zero spending
+    by = {}
+    for r in rows:
+        by.setdefault(r["category"], {})[r["m"]] = (r["spent"], r["n"])
+    income_by_month = {r["m"]: r["income"] for r in inc_rows}
+    f = max(1, today.day) / last_day.day                                # how much of the month has passed
+    days_left = (last_day - today).days
+    # bills still to come this month, by category (not yet paid, because their date has not arrived)
+    due = {}
+    for i in upcoming(db, max(1, days_left), today)["items"]:
+        if i["payer"] == "me" and i["date"] <= last_day.isoformat() and i["date"] > today.isoformat():
+            due[i["category"]] = due.get(i["category"], 0) + i["amount"]
+    out, total_spent, total_forecast, total_typical = [], 0.0, 0.0, 0.0
+    for cat in sorted(set(by) | set(due)):
+        spent = by.get(cat, {}).get(this, (0.0, 0))[0]
+        past = [by.get(cat, {}).get(m, (0.0, 0)) for m in with_data]
+        vals = [p[0] for p in past]
+        typical = (statistics.median(vals) if len(vals) >= 4 else statistics.fmean(vals)) if vals and any(vals) else None
+        lumpy = typical is not None and statistics.fmean(p[1] for p in past) <= 2.5
+        if typical is None:
+            fc, mode = spent, "no history"
+        elif lumpy:
+            fc, mode = max(spent, typical), "usual amount"
+        else:
+            ratio = min(2.0, max(0.5, spent / (typical * f))) if f >= 0.2 and typical > 0 else 1.0
+            fc, mode = spent + typical * (1 - f) * ratio, "pace"
+        fc = max(fc, spent + due.get(cat, 0.0))
+        out.append({"category": cat, "spent": round(spent, 2), "forecast": round(fc, 2), "typical": round(typical, 2) if typical is not None else None, "bills_due": round(due.get(cat, 0.0), 2), "method": mode})
+        total_spent += spent
+        total_forecast += fc
+        total_typical += typical or 0.0
+    inc_hist = [income_by_month[m] for m in with_data if income_by_month.get(m, 0) > 0]
+    entered = plan.monthly_plan(db, this, today)["income_month"]
+    if inc_hist:
+        income_avg, source = round(statistics.fmean(inc_hist), 2), "history"
+    elif entered:
+        income_avg, source = entered, "entered"
+    else:
+        income_avg, source = None, None
+    out.sort(key=lambda r: -r["forecast"])
+    total_forecast = round(total_forecast, 2)
+    return {"month": this, "days_left": days_left, "elapsed": round(f, 3), "spent_so_far": round(total_spent, 2), "projected": total_forecast,
+            "typical_month": round(total_typical, 2) if with_data else None, "months_used": len(with_data),
+            "confidence": "high" if len(with_data) >= 3 else "medium" if len(with_data) >= 1 else "low",
+            "income_avg": income_avg, "income_source": source, "income_so_far": round(income_by_month.get(this, 0.0), 2),
+            "pct_spent": round(total_spent / income_avg, 3) if income_avg else None, "pct_projected": round(total_forecast / income_avg, 3) if income_avg else None,
+            "left_after_projected": round(income_avg - total_forecast, 2) if income_avg is not None else None,
+            "categories": out,
+            "history": [{"month": m, "spent": round(sum(by.get(c, {}).get(m, (0.0, 0))[0] for c in by), 2), "income": round(income_by_month.get(m, 0.0), 2)} for m in with_data],
+            "note": "An estimate from your past months plus bills still due. One-off purchases are not predicted."}

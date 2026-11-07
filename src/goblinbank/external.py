@@ -89,11 +89,12 @@ def summary(db, today) -> dict:
     mine = [i for i in nxt["items"] if i["payer"] == "me"]
     al = ledger.alerts(db, today)
     subs = ledger.subscriptions(db, today)
+    fc = ledger.spending_forecast(db, today)
     return {"as_of": today.isoformat(), "net_worth": ledger.net_worth(db), "subscriptions_monthly": round(sum(s["monthly"] for s in subs), 2),
             "bills_7d": ledger.upcoming(db, 7, today)["total"], "bills_30d": ledger.upcoming(db, 30, today)["total"],
             "next_bill": ({"name": mine[0]["name"], "date": mine[0]["date"], "amount": mine[0]["amount"]} if mine else None),
             "savings_total": gv["total"], "savings_free": gv["free"], "savings_earmarked": gv["allocated"], "goals_active": sum(1 for g in gv["items"] if g["status"] == "active"), "goals_needed": gv["needed"],
-            "alerts_total": len(al), "alerts_critical": sum(1 for a in al if a["severity"] == "critical"), "alerts_warning": sum(1 for a in al if a["severity"] == "warning")}
+            "spend_month_so_far": fc["spent_so_far"], "spend_month_projected": fc["projected"], "income_avg_month": fc["income_avg"], "alerts_total": len(al), "alerts_critical": sum(1 for a in al if a["severity"] == "critical"), "alerts_warning": sum(1 for a in al if a["severity"] == "warning")}
 
 
 def flat(s: dict) -> dict:

@@ -30,7 +30,7 @@ def main():
     db.conn.execute("UPDATE accounts SET subtype='savings', name='Axos High Yield', institution='Axos' WHERE id='sav'")      # a savings account Plaid would label for us
     db.conn.commit()
     db.conn.close()
-    (tmp / "gw.yaml").write_text(yaml.safe_dump({"goblins": [{"name": "alice", "url": "http://127.0.0.1:9203", "internal_secret": "int", "user_token_sha256": sha("login-alice")}], "orb_keys": []}))
+    (tmp / "gw.yaml").write_text(yaml.safe_dump({"goblins": [{"name": "alice", "url": "http://127.0.0.1:9203", "internal_secret": "int", "user_token_sha256": sha("login-alice")}], "orb_keys": [{"sha256": sha("orb-dev"), "scopes": ["summary:read"]}]}))
     env = {**os.environ, "PYTHONPATH": f"{ROOT / 'src'}:{ROOT}"}
     procs = [subprocess.Popen([sys.executable, "-m", "uvicorn", "devtools.fake_llm_server:app", "--port", "9202", "--log-level", "warning"], env=env, cwd=ROOT),
              subprocess.Popen([sys.executable, "-m", "uvicorn", "--factory", "goblinbank.main:app", "--port", "9203", "--log-level", "warning"], cwd=ROOT,
@@ -47,6 +47,7 @@ def main():
     # a local model for the agent
     httpx.post("http://127.0.0.1:9204/g/alice/api/agent/providers", headers={"Authorization": "Bearer login-alice"},
                json={"name": "Fake local model", "kind": "openai", "base_url": "http://127.0.0.1:9202/v1", "model": "fake", "tools": True})
+    httpx.put("http://127.0.0.1:9204/g/alice/api/settings", headers={"Authorization": "Bearer login-alice"}, json={"share": ["net_worth", "bills", "alerts", "savings", "goals"]})
     print("ready http://127.0.0.1:9204  goblin=alice token=login-alice", flush=True)
     try:
         procs[-1].wait()

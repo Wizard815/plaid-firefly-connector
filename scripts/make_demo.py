@@ -114,7 +114,7 @@ def main(out: str, artifact: bool):
                    "trace": [{"tool": "upcoming_bills", "args": {"days": 60}, "ok": True, "preview": ""}, {"tool": "project_balance", "args": {"days": 30, "account_id": "chk"}, "ok": True, "preview": ""}, {"tool": "calculate", "args": {"expression": "6200 - 1200"}, "ok": True, "preview": ""}],
                    "provider": {"id": rec["chatProvider"], "name": "Ollama (this machine)", "model": "llama3.1", "local": True}, "steps": 2}
     rec["/api/budgets?month="] = rec["/api/budgets"]
-    for p in ["/api/goals", "/api/incomes", "/api/tokens", "/summary"]:
+    for p in ["/api/goals", "/api/incomes", "/api/tokens", "/summary", "/api/forecast"]:
         rec[p] = g(p)
     for k in range(4):
         y, mth = TODAY.year, TODAY.month - k
