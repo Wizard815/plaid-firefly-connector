@@ -52,6 +52,19 @@ def main(out: str, artifact: bool):
             if dt <= TODAY:
                 db.conn.execute("INSERT INTO transactions(id,account_id,date,name,amount,source,category) VALUES(?,?,?,?,?,?,?)", (f"demo-{sub['id']}-{back}", sub["account_id"], dt.isoformat(), sub["name"].upper(), -sub["amount"], "seed", sub["category"] if sub["category"] in ("Health", "Bills") else "Misc"))
     db.conn.commit()          # ...except City Water, so the sample shows one missed-payment flag
+    db.conn.execute("UPDATE accounts SET subtype='savings' WHERE id='sav'"); db.conn.commit()
+    tot = c.get("/api/goals", headers=H).json()["total"]
+    post("/api/goals", {"name": "House down payment", "target": round(tot - 1500, -1), "priority": 1, "deadline": d(400), "monthly": 600, "note": "20% of a $300k house"})
+    post("/api/goals", {"name": "Car fund", "target": 1500, "priority": 2, "monthly": 150})
+    post("/api/goals", {"name": "New laptop", "target": 1200, "priority": 3, "monthly": 250, "deadline": d(120)})      # nothing free left: starts unfunded
+    inc = c.get("/api/incomes", headers=H).json()
+    for sg in inc["suggestions"]:
+        if "payroll" in sg["name"].lower():
+            post("/api/incomes/accept", {"key": sg["key"], "name": "Acme paycheck"})
+    post("/api/incomes", {"name": "Side gig", "amount": 300, "cycle": "monthly", "next_date": d(12)})
+    post("/api/tokens", {"name": "Home Assistant", "scopes": ["summary", "bills"]})
+    post("/api/tokens", {"name": "Old script", "scopes": ["goals"]})
+    c.delete("/api/tokens/2", headers=H)
     post("/api/accounts", {"name": "Cash wallet", "kind": "cash", "balance": 140, "min_balance": 20})
     n1 = post("/api/notes", {"title": "Goals for the year", "body": "- Fund the CD ladder\n- Pay the card in full each month\n- Keep checking above $500", "pinned": True})
     ts = sync.now()
@@ -61,7 +74,7 @@ def main(out: str, artifact: bool):
     post("/api/agent/providers", {"name": "Ollama (this machine)", "kind": "openai", "base_url": "http://host.docker.internal:11434/v1", "model": "llama3.1", "tools": True})
     post("/api/agent/providers", {"name": "OpenRouter", "kind": "openai", "base_url": "https://openrouter.ai/api/v1", "model": "anthropic/claude-sonnet-4.5", "tools": True})
     c.put("/api/settings", headers=H, json={"caldav_url": "https://dav.example/calendars/me/bills/", "caldav_user": "me", "rh_mcp_url": "https://mcp.example/robinhood", "rh_mcp_read_tools": "get_account,get_positions",
-                                             "rh_mcp_tool_balances": "get_account", "rh_mcp_tool_positions": "get_positions", "share": ["net_worth", "robinhood_agent"], "plaid_rate_item_month": "1.50", "plaid_budget_month": "10"})
+                                             "rh_mcp_tool_balances": "get_account", "rh_mcp_tool_positions": "get_positions", "share": ["net_worth", "bills", "alerts", "savings", "goals", "robinhood_agent"], "plaid_rate_item_month": "1.50", "plaid_budget_month": "10"})
     for i, inst in enumerate(["Huntington", "Axos", "Capital One"]):
         db.conn.execute("INSERT INTO plaid_items VALUES(?,?,?,NULL)", (f"item-{i}", inst, "x"))
     for ep, n in {"/transactions/sync": 96, "/accounts/get": 62, "/transactions/recurring/get": 30, "/investments/holdings/get": 18}.items():
@@ -101,6 +114,14 @@ def main(out: str, artifact: bool):
                    "trace": [{"tool": "upcoming_bills", "args": {"days": 60}, "ok": True, "preview": ""}, {"tool": "project_balance", "args": {"days": 30, "account_id": "chk"}, "ok": True, "preview": ""}, {"tool": "calculate", "args": {"expression": "6200 - 1200"}, "ok": True, "preview": ""}],
                    "provider": {"id": rec["chatProvider"], "name": "Ollama (this machine)", "model": "llama3.1", "local": True}, "steps": 2}
     rec["/api/budgets?month="] = rec["/api/budgets"]
+    for p in ["/api/goals", "/api/incomes", "/api/tokens", "/summary"]:
+        rec[p] = g(p)
+    for k in range(4):
+        y, mth = TODAY.year, TODAY.month - k
+        while mth < 1:
+            y, mth = y - 1, mth + 12
+        rec[f"/api/plan?month={y}-{mth:02d}"] = g(f"/api/plan?month={y}-{mth:02d}")
+    rec["models"] = {"models": [{"id": "llama3.1:8b", "context": None}, {"id": "qwen2.5:32b", "context": None}, {"id": "mistral-nemo:12b", "context": None}], "local": True}
     rec["/api/chats"] = g("/api/chats")
     for ch in rec["/api/chats"]:
         rec[f"/api/chats/{ch['id']}"] = g(f"/api/chats/{ch['id']}")

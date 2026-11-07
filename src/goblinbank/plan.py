@@ -143,6 +143,7 @@ def add_goal(db, name: str, target: float, today: date, deadline: str | None = N
         raise PlanError("name required")
     if not target > 0:
         raise PlanError("target must be greater than 0")
+    deadline = deadline or None
     if deadline:
         try:
             if d(deadline) <= today:

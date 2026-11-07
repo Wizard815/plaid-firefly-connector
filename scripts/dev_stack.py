@@ -27,6 +27,8 @@ def main():
     from goblinbank.db import DB
     db = DB(str(tmp / "goblin.db"))
     seed(db, 11, date.today())
+    db.conn.execute("UPDATE accounts SET subtype='savings', name='Axos High Yield', institution='Axos' WHERE id='sav'")      # a savings account Plaid would label for us
+    db.conn.commit()
     db.conn.close()
     (tmp / "gw.yaml").write_text(yaml.safe_dump({"goblins": [{"name": "alice", "url": "http://127.0.0.1:9203", "internal_secret": "int", "user_token_sha256": sha("login-alice")}], "orb_keys": []}))
     env = {**os.environ, "PYTHONPATH": f"{ROOT / 'src'}:{ROOT}"}

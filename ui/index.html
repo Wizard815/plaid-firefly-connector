@@ -124,6 +124,8 @@ main>*,.stack>*{min-width:0}label{min-width:0}select,input{max-width:100%}.filte
 td.mono{white-space:nowrap}
 .ctx{display:flex;gap:10px;align-items:center;margin:6px 0}.ctx .meter{flex:1;max-width:260px}.bubble.old{opacity:.55}.added{margin-top:8px;padding:6px 10px;border-radius:8px;background:var(--teal-soft);font-size:.88rem}
 .badge{margin-left:8px;background:var(--brass);color:#fff;border-radius:999px;padding:0 7px;font-size:.75rem;font-weight:600}
+.snippet{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow-x:auto;font:.8rem/1.45 var(--mono);margin:0;white-space:pre}.card.done{opacity:.6}
+.ev>*{min-width:0}.ev{overflow-wrap:anywhere}
 </style>
 
 <div id="app"></div>
@@ -182,6 +184,9 @@ function demoChats(p, m, opts) {
 function demoApi(path, opts) {
   const m = opts.method || "GET", [p, q] = path.split("?"), P = new URLSearchParams(q || "");
   if (p.startsWith("/api/chats")) return demoChats(p, m, opts);
+  if (p === "/api/agent/models") return Promise.resolve(DEMO.models);
+  if (p === "/api/agent/model-info") return Promise.resolve({ context_tokens: 32768 });
+  if (p === "/api/afford") { const a = +P.get("amount"), g = DEMO["/api/goals"], free = Math.max(0, g.free), short = Math.max(0, a - free); return Promise.resolve({ amount: a, free_savings: free, can_buy_now: short === 0, shortfall: short, months_to_save: short ? Math.ceil(short / 900) : undefined, ready_date: short ? "soon" : undefined }); }
   if (m !== "GET") { if (path.startsWith("/api/agent/chat")) return Promise.resolve(DEMO.chat); throw new Error("Sample preview: changes are not saved"); }
   if (p === "/api/transactions") return Promise.resolve(filterTx(DEMO.transactions, P));
   if (p === "/api/upcoming") return Promise.resolve(DEMO["/api/upcoming?days=" + Math.min(Math.max(+P.get("days") || 30, 1), 120)] || DEMO["/api/upcoming?days=365"]);
@@ -234,7 +239,7 @@ async function viewOverview(root, rerender) {
   const setDays = (d) => { S.days = Math.min(Math.max(parseInt(d) || 30, 1), 3650); store.set("gb_days", S.days); rerender(); };
   add(root, 
     o.alerts.length ? h("div", { class: "panel" }, h("h3", {}, "Needs attention"), h("div", { class: "alerts" }, o.alerts.slice(0, 6).map(alertRow))) : null,
-    h("div", { class: "grid" }, kpi("Net worth", usd(o.net_worth), `${o.accounts.length} accounts${o.savings_total ? " + savings" : ""}`), kpi("Owed on cards", usd(owed), "Credit + loans", "neg"),
+    h("div", { class: "grid" }, kpi("Net worth", usd(o.net_worth), o.savings_total ? `savings ${usd(o.savings_total)}, ${usd(o.savings_free)} free` : `${o.accounts.length} accounts`), kpi("Owed on cards", usd(owed), "Credit + loans", "neg"),
       kpi("Subscriptions / month", usd(o.subscriptions_monthly), usd(o.subscriptions_monthly * 12) + " a year"), kpi(`Bills, next ${up.days} days`, usd(up.total), `${up.count} payments${up.others_total ? " · others pay " + usd(up.others_total) : ""}`)),
     h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Net worth, last 30 days")), spark(hist)),
     h("div", { class: "panel" }, h("h3", {}, "Where the money sits"), h("div", { class: "comp" }, Object.entries(o.by_kind).map(([k, v]) => h("i", { style: `width:${(Math.abs(v) / gross) * 100}%;background:${(KIND[k] || ["", "var(--muted)"])[1]}`, title: `${(KIND[k] || [k])[0]} ${usd(v)}` }))),
@@ -380,60 +385,126 @@ async function viewSubs(root, rerender) {
         h("button", { class: "btn primary", onclick: async () => { try { const r = await api("/api/subscriptions/export/caldav", { method: "POST" }); toast(`Pushed ${r.pushed} to CalDAV` + (r.failed.length ? `, ${r.failed.length} failed` : "")); } catch (err) { fail(err); } } }, "Push to CalDAV now"))));
 }
 
-/* ================================ SAVINGS ================================ */
+/* ================================ SAVINGS: where the money is, and what it is for ================================ */
 const SK = [["savings", "Savings account"], ["cd", "Certificate of deposit"], ["money_market", "Money market"], ["bond", "Bond / I-bond"], ["hsa", "HSA"], ["529", "529 plan"], ["cash", "Cash"], ["other", "Other"]];
+const PRIO = [[1, "High"], [2, "Normal"], [3, "Low"]];
+const goalCard = (g, v, rerender) => {
+  const placeOpts = [["", "Any savings"], ...v.places.filter((p) => p.free > 0.005).map((p) => [p.key, `${p.name} (${usd(p.free)} free)`])];
+  return h("div", { class: "card" + (g.status !== "active" ? " done" : "") },
+    h("div", { class: "bar" }, h("b", {}, g.name, g.status !== "active" ? h("span", { class: "pill" }, g.status) : null, g.priority === 1 ? h("span", { class: "pill b" }, "high priority") : null), h("span", { class: "num" }, usd(g.target))),
+    h("div", { style: "margin:8px 0" }, bar(g.pct, g.funded ? "var(--teal)" : "var(--brass)")),
+    h("div", { class: "small" }, g.status !== "active" ? `Closed ${g.closed || ""}` : g.funded ? `Fully set aside (${usd(g.allocated)}).` : `${usd(g.allocated)} set aside, ${usd(g.shortfall)} still needed.`),
+    g.status === "active" && !g.funded ? h("div", { class: "small muted" }, [g.deadline ? `Due ${g.deadline}: save ${usd(g.monthly_needed)} a month.` : "", g.ready_date ? ` At ${usd(g.monthly)} a month it is ready ${g.ready_date}.` : "", g.can_fund_now ? " Free savings cover the rest now." : ""].join("")) : null,
+    g.note ? h("div", { class: "small muted" }, g.note) : null,
+    g.status === "active" ? h("div", { class: "filters", style: "margin:10px 0 4px" }, field(`gf-${g.id}`, "Set aside $", "", { type: "number", min: "0", step: "0.01" }), select(`gp-${g.id}`, "From", placeOpts, "")) : null,
+    h("div", { class: "chips", style: "margin-top:8px" },
+      g.status === "active" ? [h("button", { class: "btn sm primary", onclick: async () => { const amt = num(`gf-${g.id}`); if (!amt) return toast("Enter an amount"); try { await api(`/api/goals/${g.id}/fund`, send("POST", { amount: amt, place: val(`gp-${g.id}`) })); toast("Set aside"); rerender(); } catch (e) { fail(e); } } }, "Set aside"),
+        g.allocated > 0 ? h("button", { class: "btn sm", onclick: async () => { try { await api(`/api/goals/${g.id}/release`, send("POST", {})); toast("Released to free savings"); rerender(); } catch (e) { fail(e); } } }, "Release all") : null,
+        h("button", { class: "btn sm", onclick: sure(null, "Sure? Marks it bought", async () => { await api(`/api/goals/${g.id}/close`, send("POST", { status: "done" })); rerender(); }) }, "Bought it")] :
+        h("button", { class: "btn sm", onclick: async () => { await api(`/api/goals/${g.id}/close`, send("POST", { status: "active" })); rerender(); } }, "Reopen"),
+      h("button", { class: "btn sm", onclick: () => { S.edit = { goal: g.id }; rerender(); window.scrollTo(0, 0); } }, "Edit"),
+      h("button", { class: "btn sm", onclick: () => discuss({ kind: "goal", ref_id: g.id }, `About my goal: ${g.name}`) }, "Discuss with agent"),
+      h("button", { class: "btn sm danger", onclick: sure(null, "Sure?", async () => { await api(`/api/goals/${g.id}`, { method: "DELETE" }); rerender(); }) }, "Delete")));
+};
+async function discuss(link, title) {
+  try { const c = await api("/api/chats", send("POST", { title, links: [link] })); S.chatId = c.chat.id; S.tab = "agent"; render(); } catch (e) { fail(e); }
+}
 async function viewSavings(root, rerender) {
-  const [s, accts] = await Promise.all([api("/api/savings"), api("/api/accounts")]);
-  const e = S.edit?.sv;
-  const ed = e ? s.items.find((i) => i.id === e) : null;
-  add(root, 
-    s.maturing_soon.length ? h("div", { class: "panel" }, h("div", { class: "alerts" }, s.maturing_soon.map((i) => alertRow({ severity: "info", title: `${i.name} matures in ${i.days_to_maturity} days`, detail: `about ${usd(i.value_at_maturity)}` })))) : null,
-    h("div", { class: "grid" }, kpi("Total saved", usd(s.total), `${s.items.length} items`), kpi("Average APY", s.weighted_apy.toFixed(2) + "%", "weighted by balance"), kpi("Interest per year", usd(s.yearly_interest), "at today's rates")),
-    s.items.length ? h("div", { class: "cards" }, s.items.map((i) => h("div", { class: "card" },
-      h("div", { class: "bar" }, h("b", {}, i.name), h("span", { class: "num" }, usd(i.balance))),
-      h("div", { class: "muted small" }, `${(SK.find(([k]) => k === i.kind) || [0, i.kind])[1]}${i.institution ? " · " + i.institution : ""} · ${i.apy}% APY${i.linked ? " · linked to an account" : ""}`),
-      i.maturity ? h("div", { class: "small", style: "margin-top:6px" }, i.days_to_maturity >= 0 ? `Matures ${i.maturity} (${i.days_to_maturity} days) → ${usd(i.value_at_maturity)}` : `Matured ${i.maturity}`) : null,
-      i.goal ? h("div", { style: "margin-top:8px" }, h("div", { class: "small muted" }, `Goal ${usd(i.goal)} · ${Math.round(i.goal_progress * 100)}%`), bar(i.goal_progress)) : null,
-      h("div", { class: "chips", style: "margin-top:10px" }, h("button", { class: "btn sm", onclick: () => { S.edit = { sv: i.id }; rerender(); } }, "Edit"), h("button", { class: "btn sm danger", onclick: sure(null, "Sure?", async () => { await api(`/api/savings/${i.id}`, { method: "DELETE" }); rerender(); }) }, "Delete"))))) : h("div", { class: "panel" }, h("p", { class: "muted" }, "Nothing here yet. Add CDs, savings and other accounts below.")),
-    h("div", { class: "panel" }, h("h3", {}, ed ? "Edit" : "Add a savings item"), h("p", { class: "muted small" }, "Link it to a bank account to follow that account's balance, or type a balance for things Plaid cannot see (a CD, a bond, a savings jar)."),
-      h("form", { class: "subform", onsubmit: async (ev) => { ev.preventDefault(); const body = { name: val("sv-name"), kind: val("sv-kind"), institution: val("sv-inst"), balance: num("sv-bal") ?? 0, apy: num("sv-apy") ?? 0, opened: val("sv-open") || null, maturity: val("sv-mat") || null, term_months: parseInt(val("sv-term")) || null, account_id: val("sv-acct") || null, goal: num("sv-goal"), notes: val("sv-notes"), active: true };
-        try { await api(ed ? `/api/savings/${ed.id}` : "/api/savings", send(ed ? "PUT" : "POST", body)); S.edit = null; toast("Saved"); rerender(); } catch (err) { fail(err); } } },
-        field("sv-name", "Name", ed?.name, { required: true }), select("sv-kind", "Type", SK, ed?.kind ?? "savings"), field("sv-inst", "Institution", ed?.institution), field("sv-bal", "Balance", ed?.balance, { type: "number", step: "0.01", min: "0" }),
-        field("sv-apy", "APY %", ed?.apy ?? "", { type: "number", step: "0.001", min: "0", max: "100" }), field("sv-open", "Opened", ed?.opened ?? "", { type: "date" }), field("sv-mat", "Matures (CDs)", ed?.maturity ?? "", { type: "date" }), field("sv-term", "Term (months)", ed?.term_months ?? "", { type: "number", min: "1" }),
-        select("sv-acct", "Follow account", [["", "None, I type the balance"], ...accts.map((a) => [a.id, `${a.institution} · ${a.name}`])], ed?.account_id ?? ""), field("sv-goal", "Goal ($)", ed?.goal ?? "", { type: "number", min: "0", step: "0.01" }), field("sv-notes", "Notes", ed?.notes),
-        h("div", { class: "formbtns" }, h("button", { class: "btn primary", type: "submit" }, ed ? "Save" : "Add"), ed ? h("button", { class: "btn", type: "button", onclick: () => { S.edit = null; rerender(); } }, "Cancel") : null))));
+  const [v, accts] = await Promise.all([api("/api/goals"), api("/api/accounts")]);
+  const editing = S.edit?.goal ? v.items.find((g) => g.id === S.edit.goal) : null, ep = S.edit?.place ? S.edit.place : null;
+  const active = v.items.filter((g) => g.status === "active"), closed = v.items.filter((g) => g.status !== "active");
+  const gform = h("form", { class: "subform", onsubmit: async (ev) => { ev.preventDefault();
+    const body = { name: val("gl-name"), target: num("gl-target"), deadline: editing ? val("gl-due") : val("gl-due") || null, priority: parseInt(val("gl-prio")), monthly: num("gl-monthly") || 0, note: val("gl-note") };
+    try { const r = await api(editing ? `/api/goals/${editing.id}` : "/api/goals", send(editing ? "PUT" : "POST", body)); S.edit = null;
+      toast(editing ? "Saved" : r.funded ? `Added and fully set aside from free savings` : r.allocated ? `Added. ${usd(r.allocated)} set aside, ${usd(r.shortfall)} to go` : "Added. No free savings, so it starts unfunded"); rerender(); } catch (e) { fail(e); } } },
+    field("gl-name", "What are you saving for?", editing?.name, { required: true }), field("gl-target", "Cost ($)", editing?.target, { type: "number", min: "0.01", step: "0.01", required: true, oninput: (e) => { clearTimeout(S.t); S.t = setTimeout(async () => { const a = parseFloat(e.target.value); const out = $("#gl-check"); if (!(a > 0) || editing) { out.textContent = ""; return; }
+        try { const r = await api("/api/afford?amount=" + a); out.textContent = r.can_buy_now ? `Free savings (${usd(r.free_savings)}) cover it.` : `Only ${usd(r.free_savings)} is free, so ${usd(r.shortfall)} still has to be saved` + (r.months_to_save ? `: about ${r.months_to_save} month${r.months_to_save > 1 ? "s" : ""} at your plan's leftover (${r.ready_date}).` : "."); } catch { out.textContent = ""; } }, 300); } }),
+    field("gl-due", "Needed by (optional)", editing?.deadline ?? "", { type: "date" }), select("gl-prio", "Priority", PRIO, editing?.priority ?? 2), field("gl-monthly", "I will save per month ($)", editing?.monthly ?? "", { type: "number", min: "0", step: "0.01" }), field("gl-note", "Note", editing?.note),
+    h("div", { class: "formbtns" }, h("button", { class: "btn primary", type: "submit" }, editing ? "Save goal" : "Add goal"), editing ? h("button", { class: "btn", type: "button", onclick: () => { S.edit = null; rerender(); } }, "Cancel") : null),
+    h("div", { id: "gl-check", class: "small muted", style: "grid-column:1/-1" }));
+  add(root,
+    v.overallocated ? h("div", { class: "panel" }, h("div", { class: "alerts" }, alertRow({ severity: "warning", title: "You have set aside more than you have saved", detail: `Saved ${usd(v.total)}, set aside ${usd(v.allocated)}. Release some of it.` }))) : null,
+    h("div", { class: "grid" }, kpi("Total saved", usd(v.total), `${v.places.length} account${v.places.length === 1 ? "" : "s"} and CDs`), kpi("Set aside for goals", usd(v.allocated), `${active.length} active goal${active.length === 1 ? "" : "s"}`), kpi("Free to use", usd(v.free), v.free > 0 ? "not promised to anything" : "everything is spoken for", v.free < 0 ? "neg" : v.free > 0 ? "pos" : ""), kpi("Still needed", usd(v.needed), "to fully fund every goal")),
+    h("div", { class: "panel scroll" }, h("h3", {}, "Where your savings are"), h("p", { class: "muted small" }, "Savings and CD accounts from your banks appear here by themselves. Add anything else you keep by hand, or count any account as savings."),
+      v.places.length ? h("table", {}, h("thead", {}, h("tr", {}, ["Account", "Type", "Balance", "APY", "Matures", "Set aside", "Free", ""].map((x, i) => h("th", { class: i > 1 && i < 7 ? "r" : "" }, x)))),
+        h("tbody", {}, v.places.map((p) => h("tr", {}, h("td", {}, p.name, h("div", { class: "muted small" }, p.institution)), h("td", { class: "small" }, (SK.find(([k]) => k === p.kind) || [0, p.kind.replace(/_/g, " ")])[1], p.origin === "account" ? h("span", { class: "pill t" }, "from bank") : null),
+          h("td", { class: "num r" }, usd(p.balance)), h("td", { class: "num r" }, p.apy != null ? p.apy + "%" : "–"), h("td", { class: "small r" }, p.maturity ? `${p.maturity} (${p.days_to_maturity}d)` : "–"),
+          h("td", { class: "num r" }, usd(p.earmarked)), h("td", { class: "num r " + (p.free < 0 ? "neg" : "pos") }, usd(p.free)),
+          h("td", { class: "r", style: "white-space:nowrap" }, p.origin === "manual" || p.origin === "linked" ? [h("button", { class: "btn sm", onclick: () => { S.edit = { place: p.id }; rerender(); window.scrollTo(0, 0); } }, "Edit"), " ", h("button", { class: "btn sm danger", onclick: sure(null, "Sure?", async () => { await api(`/api/savings/${p.id}`, { method: "DELETE" }); rerender(); }) }, "Remove")] :
+            h("button", { class: "btn sm", onclick: async () => { await api(`/api/accounts/${encodeURIComponent(p.account_id)}`, send("PUT", { savings_mode: "no" })); rerender(); } }, "Not savings")))))) : h("p", { class: "muted" }, "No savings yet."),
+      h("div", { class: "filters", style: "margin-top:14px" }, select("cs-acct", "Count another account as savings", [["", "Choose an account…"], ...accts.filter((a) => a.kind === "cash" && !v.places.some((p) => p.account_id === a.id)).map((a) => [a.id, `${a.institution} · ${a.name}`])], ""),
+        h("button", { class: "btn", onclick: async () => { const id = val("cs-acct"); if (!id) return toast("Choose an account"); await api(`/api/accounts/${encodeURIComponent(id)}`, send("PUT", { savings_mode: "yes" })); rerender(); } }, "Count it"))),
+    h("div", { class: "panel" }, h("h3", {}, ep ? "Edit savings item" : "Add savings or a CD by hand"), h("p", { class: "muted small" }, "For a CD, bond or savings jar your bank does not share. Type its balance, or follow a linked account's balance."),
+      (() => { const e = ep ? v.places.find((p) => p.id === ep && p.origin !== "account") : null; return h("form", { class: "subform", onsubmit: async (ev) => { ev.preventDefault();
+        const body = { name: val("sv-name"), kind: val("sv-kind"), institution: val("sv-inst"), balance: num("sv-bal") ?? 0, apy: num("sv-apy") ?? 0, opened: val("sv-open") || null, maturity: val("sv-mat") || null, term_months: parseInt(val("sv-term")) || null, account_id: val("sv-acct") || null, notes: "", active: true };
+        try { await api(e ? `/api/savings/${e.id}` : "/api/savings", send(e ? "PUT" : "POST", body)); S.edit = null; toast("Saved"); rerender(); } catch (err) { fail(err); } } },
+        field("sv-name", "Name", e?.name, { required: true }), select("sv-kind", "Type", SK, e?.kind ?? "savings"), field("sv-inst", "Institution", e?.institution), field("sv-bal", "Balance", e?.balance, { type: "number", step: "0.01", min: "0" }),
+        field("sv-apy", "APY %", e?.apy ?? "", { type: "number", step: "0.001", min: "0", max: "100" }), field("sv-open", "Opened", "", { type: "date" }), field("sv-mat", "Matures (CDs)", e?.maturity ?? "", { type: "date" }), field("sv-term", "Term (months)", "", { type: "number", min: "1" }),
+        select("sv-acct", "Follow an account's balance", [["", "None, I type the balance"], ...accts.filter((a) => a.kind === "cash").map((a) => [a.id, `${a.institution} · ${a.name}`])], e?.account_id ?? ""),
+        h("div", { class: "formbtns" }, h("button", { class: "btn primary", type: "submit" }, e ? "Save" : "Add"), e ? h("button", { class: "btn", type: "button", onclick: () => { S.edit = null; rerender(); } }, "Cancel") : null)); })()),
+    h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Goals: what the savings are for"), v.free > 0 && active.some((g) => g.shortfall > 0) ? h("button", { class: "btn sm primary", onclick: async () => { await api("/api/goals/autofill", { method: "POST" }); toast("Free savings assigned by priority"); rerender(); } }, "Fill goals from free savings") : null),
+      h("p", { class: "muted small" }, "A goal sets money aside inside your savings. Free money is what is saved minus what is set aside. A new goal takes whatever is free; when nothing is free it starts unfunded and tells you how long saving takes."),
+      active.length ? h("div", { class: "cards" }, active.map((g) => goalCard(g, v, rerender))) : h("p", { class: "muted" }, "No goals yet. Add one below."),
+      closed.length ? h("details", { style: "margin-top:14px" }, h("summary", { class: "muted" }, `${closed.length} closed goal${closed.length === 1 ? "" : "s"}`), h("div", { class: "cards" }, closed.map((g) => goalCard(g, v, rerender)))) : null),
+    h("div", { class: "panel" }, h("h3", {}, editing ? "Edit goal" : "Add a goal"), gform));
 }
 
-/* ================================ PLANNER ================================ */
+/* ================================ BUDGETS & NOTES: the monthly plan, goals and notes ================================ */
 async function viewPlanner(root, rerender) {
-  const [notes, bud, cats] = await Promise.all([api("/api/notes"), api("/api/budgets?month=" + (S.month || "")), api("/api/categories")]);
-  const cur = notes.find((n) => n.id === S.note) || null;
+  const month = S.month || today().slice(0, 7);
+  const [notes, pl, cats, gv, accts] = await Promise.all([api("/api/notes"), api("/api/plan?month=" + month), api("/api/categories"), api("/api/goals"), api("/api/accounts")]);
+  const cur = notes.find((n) => n.id === S.note) || null, activeGoals = gv.items.filter((g) => g.status === "active");
   const ask = h("input", { id: "pl-ask", placeholder: "e.g. Draft a plan to save $500 a month using my real spending", style: "flex:1;min-width:0" });
-  add(root, 
-    h("div", { class: "panel" }, h("h3", {}, "Ask the agent to write a plan"), h("p", { class: "muted small" }, "It reads your accounts, bills and spending, does the math, and saves the result as a note here marked as written by the agent."),
+  const incomeRow = (i) => h("div", { class: "ev", style: "grid-template-columns:1fr auto auto auto" }, h("span", {}, i.name, " ", h("span", { class: "muted small" }, i.label), i.active ? null : h("span", { class: "pill" }, "paused")), h("span", { class: "muted small" }, `next ${i.next_due.slice(5)}`), h("span", { class: "num pos" }, usd(i.monthly) + "/mo"),
+    h("button", { class: "btn sm danger", "aria-label": "Delete income", onclick: sure(null, "Sure?", async () => { await api(`/api/incomes/${i.id}`, { method: "DELETE" }); rerender(); }) }, "×"));
+  add(root,
+    /* ---------- the plan ---------- */
+    h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Monthly plan"), h("input", { type: "month", id: "bm", value: month, class: "tiny", style: "width:auto", onchange: (e) => { S.month = e.target.value; rerender(); } })),
+      h("p", { class: "muted small" }, "Income minus bills, budgets and what you plan to put toward goals. A budget covers everything in its category, bills included, so nothing is counted twice."),
+      pl.warnings.length ? h("div", { class: "alerts", style: "margin-bottom:10px" }, pl.warnings.map((w) => alertRow({ severity: "warning", title: w }))) : null,
+      h("div", { class: "grid" }, kpi("Expected income", usd(pl.income_month), `${pl.incomes.filter((i) => i.active).length} source${pl.incomes.filter((i) => i.active).length === 1 ? "" : "s"} · ${usd(pl.actual.income)} so far`, "pos"), kpi("Planned spending", usd(pl.outflow_planned), `${usd(pl.actual.spent)} spent so far`),
+        kpi("Toward goals", usd(pl.goals_month), `${activeGoals.length} goal${activeGoals.length === 1 ? "" : "s"}`), kpi("Left to assign", usd(pl.left), pl.left >= 0 ? "free to budget or save" : "over your income", pl.left < 0 ? "neg" : "pos")),
+      h("div", { class: "scroll", style: "margin-top:12px" }, pl.rows.length ? h("table", {}, h("thead", {}, h("tr", {}, ["Category", "Budget", "Bills", "Planned", "Spent", ""].map((x, i) => h("th", { class: i > 0 && i < 5 ? "r" : "" }, x)))),
+        h("tbody", {}, pl.rows.map((r) => h("tr", {}, h("td", {}, r.category), h("td", { class: "num r" }, r.budget == null ? h("span", { class: "muted" }, "none") : usd(r.budget)), h("td", { class: "num r" }, r.bills ? usd(r.bills) : "–"), h("td", { class: "num r" }, usd(r.planned)),
+          h("td", { class: "num r " + (r.left < 0 ? "neg" : "") }, usd(r.spent)), h("td", { style: "min-width:90px" }, r.planned ? bar(r.pct || 0, r.pct > 1 ? "var(--red)" : r.pct > 0.85 ? "var(--brass)" : "var(--teal)") : null))))) : h("p", { class: "muted" }, "Set a budget or add a subscription to start the plan.")),
+      pl.actual.unbudgeted_spent ? h("p", { class: "muted small" }, `${usd(pl.actual.unbudgeted_spent)} was spent in categories with no budget or bill.`) : null,
+      h("form", { class: "row", style: "margin-top:10px", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/budgets", send("PUT", { category: val("bg-cat"), monthly_amount: num("bg-amt") })); rerender(); } catch (err) { fail(err); } } },
+        select("bg-cat", "Budget for", cats.filter((c) => c.kind === "expense").map((c) => [c.name, c.name]), "Food"), field("bg-amt", "Per month ($)", "", { type: "number", step: "0.01", min: "0", required: true }), h("button", { class: "btn primary", type: "submit" }, "Set budget"))),
+    /* ---------- income ---------- */
+    h("div", { class: "panel" }, h("h3", {}, "Income"), h("p", { class: "muted small" }, "What comes in each month. Steady deposits in your transactions are offered here; add anything else, like side income."),
+      pl.incomes.length ? pl.incomes.map(incomeRow) : h("p", { class: "muted" }, "No income entered yet."),
+      pl.income_suggestions.length ? h("div", { class: "cards" }, pl.income_suggestions.slice(0, 4).map((s, i) => h("div", { class: "card" }, h("div", { class: "bar" }, h("b", {}, s.name), h("span", { class: "num pos" }, usd(s.amount))), h("div", { class: "muted small" }, `${s.label} · seen ${s.occurrences}×`),
+        h("div", { class: "filters", style: "margin:8px 0" }, field(`is-n${i}`, "Call it", s.name)), h("div", { class: "chips" }, h("button", { class: "btn sm primary", onclick: async () => { try { await api("/api/incomes/accept", send("POST", { key: s.key, name: val(`is-n${i}`) })); rerender(); } catch (e) { fail(e); } } }, "Add as income"),
+          h("button", { class: "btn sm", onclick: async () => { await api("/api/suggestions/dismiss", send("POST", { key: s.key })); rerender(); } }, "Not income"))))) : null,
+      h("form", { class: "subform", style: "margin-top:12px", onsubmit: async (e) => { e.preventDefault(); const preset = val("in-cycle"); try { await api("/api/incomes", send("POST", { name: val("in-name"), amount: num("in-amt"), next_date: val("in-next"), cycle: preset, account_id: val("in-acct") || null })); rerender(); } catch (err) { fail(err); } } },
+        field("in-name", "Source", "", { required: true }), field("in-amt", "Amount", "", { type: "number", step: "0.01", min: "0.01", required: true }), select("in-cycle", "Paid", PRESETS.filter(([k]) => k !== "custom"), "monthly"), field("in-next", "Next payday", today(), { type: "date", required: true }),
+        select("in-acct", "Into account", [["", "Not set"], ...accts.map((a) => [a.id, `${a.institution} · ${a.name}`])], ""), h("button", { class: "btn primary", type: "submit" }, "Add income"))),
+    /* ---------- goals ---------- */
+    h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Goals"), h("button", { class: "btn sm", onclick: () => { S.tab = "savings"; render(); } }, "Manage on Savings")),
+      h("p", { class: "muted small" }, `Free savings: ${usd(gv.free)}. A goal's monthly amount comes out of the plan above.`),
+      activeGoals.length ? activeGoals.map((g) => h("div", { class: "ev", style: "grid-template-columns:1fr 130px auto auto" }, h("span", {}, g.name, g.deadline ? h("span", { class: "muted small" }, ` by ${g.deadline}`) : null), h("div", {}, bar(g.pct, g.funded ? "var(--teal)" : "var(--brass)")),
+        h("span", { class: "num small" }, `${usd(g.allocated)} / ${usd(g.target)}`), h("button", { class: "btn sm", onclick: () => discuss({ kind: "goal", ref_id: g.id }, `About my goal: ${g.name}`) }, "Discuss"))) : h("p", { class: "muted" }, "No goals. Add one on the Savings page, or ask the agent in a chat.")),
+    /* ---------- the agent writes a note ---------- */
+    h("div", { class: "panel" }, h("h3", {}, "Ask the agent to write a plan"), h("p", { class: "muted small" }, "It reads your accounts, bills, spending, goals and this plan, does the math, and saves the result as a note marked as written by the agent."),
       h("div", { class: "url" }, ask, h("button", { class: "btn primary", id: "pl-go", onclick: async (ev) => {
         if (!val("pl-ask")) return; ev.target.disabled = true; ev.target.textContent = "Thinking…";
-        try { const r = await api("/api/agent/chat", send("POST", { provider_id: S.provider, messages: [{ role: "user", content: `Look at my real data with your tools, then save a note in the Planner (use write_note) for this request: ${val("pl-ask")}. Keep the note practical and show the numbers.` }] })); toast(r.reply.slice(0, 120) || "Done"); rerender(); } catch (err) { fail(err); ev.target.disabled = false; ev.target.textContent = "Write it"; }
+        try { const r = await api("/api/agent/chat", send("POST", { provider_id: S.provider, messages: [{ role: "user", content: `Look at my real data with your tools (monthly_plan, list_goals, savings_summary), then save a note in the Planner (use write_note) for this request: ${val("pl-ask")}. Keep the note practical and show the numbers.` }] })); toast(r.reply.slice(0, 120) || "Done"); rerender(); } catch (err) { fail(err); ev.target.disabled = false; ev.target.textContent = "Write it"; }
       } }, "Write it"))),
     h("div", { class: "split" },
       h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Notes"), h("button", { class: "btn sm", onclick: () => { S.note = "new"; rerender(); } }, "New note")),
         notes.length ? notes.map((n) => h("div", { class: "ev note" + (n.id === S.note ? " on" : ""), style: "grid-template-columns:1fr auto", tabindex: 0, onclick: () => { S.note = n.id; rerender(); } }, h("span", {}, n.pinned ? "★ " : "", n.title), h("span", { class: "pill " + (n.author === "agent" ? "b" : "") }, n.author))) : h("p", { class: "muted" }, "No notes yet.")),
       h("div", { class: "panel" }, S.note === "new" || cur ? h("form", { onsubmit: async (e) => { e.preventDefault(); const body = { title: val("nt-title"), body: $("#nt-body").value, pinned: $("#nt-pin").checked }; try { const r = await api(cur ? `/api/notes/${cur.id}` : "/api/notes", send(cur ? "PUT" : "POST", body)); S.note = r.id; toast("Saved"); rerender(); } catch (err) { fail(err); } }, style: "display:grid;gap:10px" },
         field("nt-title", "Title", cur?.title ?? "", { required: true }), h("label", {}, "Note", h("textarea", { id: "nt-body", rows: 14 }, cur?.body ?? "")), h("label", { class: "check" }, h("input", { type: "checkbox", id: "nt-pin", checked: !!cur?.pinned }), "Pin to top"),
-        h("div", { class: "chips" }, h("button", { class: "btn primary", type: "submit" }, "Save"), cur ? h("button", { class: "btn danger", type: "button", onclick: sure(null, "Sure?", async () => { await api(`/api/notes/${cur.id}`, { method: "DELETE" }); S.note = null; rerender(); }) }, "Delete") : null,
-          cur?.author === "agent" ? h("span", { class: "muted small" }, "Written by the agent. Edit freely.") : null)) : h("p", { class: "muted" }, "Pick a note, or start a new one. Write your own, or have the agent draft one above."))),
-    h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Budget, " + bud.month), h("input", { type: "month", id: "bm", value: bud.month, onchange: (e) => { S.month = e.target.value; rerender(); }, class: "tiny", style: "width:auto" })),
-      bud.items.length ? bud.items.map((b) => h("div", { class: "ev", style: "grid-template-columns:110px 1fr auto auto" }, h("span", {}, b.category), h("div", {}, bar(b.pct || 0, b.pct > 1 ? "var(--red)" : b.pct > .85 ? "var(--brass)" : "var(--teal)")),
-        h("span", { class: "num small " + (b.left < 0 ? "neg" : "") }, `${usd(b.spent)} of ${usd(b.budget)}`), h("button", { class: "btn sm", onclick: async () => { await api(`/api/budgets/${encodeURIComponent(b.category)}`, { method: "DELETE" }); rerender(); } }, "×"))) : h("p", { class: "muted" }, "No budgets yet."),
-      h("form", { class: "row", style: "margin-top:12px", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/budgets", send("PUT", { category: val("bg-cat"), monthly_amount: num("bg-amt") })); rerender(); } catch (err) { fail(err); } } },
-        select("bg-cat", "Category", cats.filter((c) => c.kind === "expense").map((c) => [c.name, c.name]), "Food"), field("bg-amt", "Monthly budget ($)", "", { type: "number", step: "0.01", min: "0", required: true }), h("button", { class: "btn primary", type: "submit" }, "Set budget"))));
+        h("div", { class: "chips" }, h("button", { class: "btn primary", type: "submit" }, "Save"), cur ? h("button", { class: "btn", type: "button", onclick: () => discuss({ kind: "note", ref_id: cur.id }, `About my note: ${cur.title}`) }, "Discuss with agent") : null,
+          cur ? h("button", { class: "btn danger", type: "button", onclick: sure(null, "Sure?", async () => { await api(`/api/notes/${cur.id}`, { method: "DELETE" }); S.note = null; rerender(); }) }, "Delete") : null,
+          cur?.author === "agent" ? h("span", { class: "muted small" }, "Written by the agent. Edit freely.") : null)) : h("p", { class: "muted" }, "Pick a note, or start a new one. Write your own, or have the agent draft one above."))));
 }
 
 /* ================================ AGENT ================================ */
 const PROMPTS = ["How much will I pay in bills over the next 60 days?", "If I spend $1,200 on the 15th, what is my lowest checking balance this month?", "Which payments look recurring but are not in my subscriptions?", "What did I spend on food and gas last month, and how does that compare to my budget?", "Which CD matures next and what will it be worth?", "Does anything on my calendar cost money in the next two weeks?"];
 const kfmt = (n) => (n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k" : String(n));
 async function viewAgent(root, rerender) {
-  const [pv, list] = await Promise.all([api("/api/agent/providers"), api("/api/chats")]);
+  const [pv, list, gl, nt] = await Promise.all([api("/api/agent/providers"), api("/api/chats"), api("/api/goals").catch(() => ({ items: [] })), api("/api/notes").catch(() => [])]);
   if (S.chatId && !list.some((c) => c.id === S.chatId)) S.chatId = null;
   if (!S.chatId && list.length) S.chatId = list[0].id;
   const view = S.chatId ? await api("/api/chats/" + S.chatId) : null, chat = view?.chat;
@@ -469,6 +540,9 @@ async function viewAgent(root, rerender) {
         h("label", { class: "check", title: "Off = the model gets a snapshot of your data instead of calling tools. Use it for small models." }, h("input", { type: "checkbox", id: "ag-tools", checked: toolsOn, onchange: (e) => { S.tools = e.target.checked; } }), "Tools")) : null),
       u ? h("div", { class: "ctx" }, bar(u.pct, u.pct > 0.75 ? "var(--red)" : u.pct > 0.5 ? "var(--brass)" : "var(--teal)"), h("span", { class: "small muted" }, `context ${kfmt(u.used)} / ${kfmt(u.limit)}`),
         h("button", { class: "btn sm", disabled: msgs.filter((m) => !m.compacted).length < 3, onclick: async () => { try { const r = await api(`/api/chats/${S.chatId}/compact`, { method: "POST" }); toast(r.compacted ? "Compacted" : "Nothing to compact yet"); rerender(); } catch (e) { fail(e); } } }, "Compact")) : null,
+      view ? h("div", { class: "chips", style: "margin:6px 0" }, h("span", { class: "small muted" }, "Linked:"), (view.links || []).map((l) => h("span", { class: "pill b" }, `${l.kind}: ${l.title}`, h("button", { class: "x", "aria-label": "Unlink " + l.title, onclick: async () => { await api(`/api/chats/${S.chatId}/links/${l.kind}/${l.ref_id}`, { method: "DELETE" }); rerender(); } }, "×"))),
+        select("lk-add", "", [["", "+ Link a goal or note…"], ...gl.items.filter((g) => g.status === "active" && !(view.links || []).some((l) => l.kind === "goal" && l.ref_id === g.id)).map((g) => [`goal:${g.id}`, `Goal: ${g.name}`]), ...nt.filter((n) => !(view.links || []).some((l) => l.kind === "note" && l.ref_id === n.id)).map((n) => [`note:${n.id}`, `Note: ${n.title}`])], "",
+          { class: "bare", "aria-label": "Link a goal or note", onchange: async (e) => { if (!e.target.value) return; const [k, i] = e.target.value.split(":"); try { await api(`/api/chats/${S.chatId}/links`, send("POST", { kind: k, ref_id: +i })); rerender(); } catch (err) { fail(err); } } })) : null,
       cur && !cur.local ? h("p", { class: "banner" }, cur.allow_cloud ? "This model runs in the cloud. Your numbers are sent to it when you ask." : "This model is in the cloud and is blocked until you tick 'allow cloud' in Settings > Models.") : null,
       log, h("div", { class: "chips", style: "margin:10px 0" }, PROMPTS.map((p) => h("button", { class: "chip", onclick: () => go(p) }, p))),
       h("div", { class: "url" }, input, h("button", { class: "btn primary", onclick: () => go() }, "Send")))));
@@ -478,6 +552,8 @@ function bubble(m) {
   const adds = (m.trace || []).filter((t) => t.tool === "add_subscription" && t.result?.added);
   return h("div", { class: "bubble " + (m.role === "user" ? "me" : "agent") + (m.error ? " err" : "") + (m.compacted ? " old" : "") }, h("div", { style: "white-space:pre-wrap" }, m.content),
     adds.map((t) => h("div", { class: "added" }, `Added subscription: ${t.result.name} ${usd(t.result.amount)} ${t.result.repeats}`, " ", h("button", { class: "btn sm", onclick: async (e) => { try { await api("/api/subscriptions/" + t.result.id, { method: "DELETE" }); e.target.replaceWith("Undone"); } catch (err) { fail(err); } } }, "Undo"))),
+    (m.trace || []).filter((t) => t.tool === "add_goal" && t.result?.added).map((t) => h("div", { class: "added" }, `Added goal: ${t.result.name}, ${usd(t.result.target)} (${usd(t.result.earmarked_now)} set aside)`, " ", h("button", { class: "btn sm", onclick: async (e) => { try { await api("/api/goals/" + t.result.id, { method: "DELETE" }); e.target.replaceWith("Undone"); } catch (err) { fail(err); } } }, "Undo"))),
+    (m.trace || []).filter((t) => t.tool === "fund_goal" && t.result?.funded).map((t) => h("div", { class: "added" }, `Set aside ${usd(t.result.added)} for ${t.result.name}`, " ", h("button", { class: "btn sm", onclick: async (e) => { try { await api(`/api/goals/${t.result.goal_id}/release`, send("POST", { amount: t.result.added, place: t.result.place })); e.target.replaceWith("Undone"); } catch (err) { fail(err); } } }, "Undo"))),
     m.trace?.length ? h("details", { class: "trace" }, h("summary", {}, `Looked at: ${[...new Set(m.trace.map((t) => t.tool))].join(", ")}`), m.trace.map((t) => h("div", { class: "small mono muted" }, `${t.ok ? "✓" : "✗"} ${t.tool}(${JSON.stringify(t.args)})`))) : null);
 }
 
@@ -548,25 +624,55 @@ async function tabCalendar(root, rerender) {
       field("s-dav", "Calendar URL", cfg.caldav_url, { type: "url" }), field("s-du", "Username", cfg.caldav_user), secretField("s-dp", "Password", cfg.caldav_password.set), h("button", { class: "btn primary", type: "submit" }, "Save"),
       h("button", { class: "btn", type: "button", onclick: async () => { try { const r = await api("/api/settings/test-caldav", { method: "POST" }); toast(r.ok ? "Connected" : "Failed: " + (r.status || r.detail)); } catch (e) { fail(e); } } }, "Test connection"))));
 }
+const SERVERS = [["ollama", "Ollama (on this machine)", "openai", "http://host.docker.internal:11434/v1", false], ["lmstudio", "LM Studio (on this machine)", "openai", "http://host.docker.internal:1234/v1", false],
+  ["llamacpp", "llama.cpp server (on this machine)", "openai", "http://host.docker.internal:8080/v1", false], ["openrouter", "OpenRouter (cloud)", "openai", "https://openrouter.ai/api/v1", true],
+  ["openai", "OpenAI (cloud)", "openai", "https://api.openai.com/v1", true], ["anthropic", "Anthropic Claude (cloud)", "anthropic", "https://api.anthropic.com", true], ["custom", "Another server (type its address)", "openai", "", false]];
+const looksCloud = (url) => { try { const u = new URL(url); return !(["localhost", "host.docker.internal"].includes(u.hostname) || /\.(local|lan|internal)$/.test(u.hostname) || /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.)/.test(u.hostname) || !u.hostname.includes(".")); } catch { return false; } };
+const blank = () => ({ server: "ollama", kind: "openai", base_url: SERVERS[0][3], model: "", models: null, tools: true, allow_cloud: false, context_tokens: 8192, api_key: "" });
 async function tabModels(root, rerender) {
-  const [pv, presets] = await Promise.all([api("/api/agent/providers"), api("/api/agent/presets")]);
-  let draft = S.draftProv || null;
+  const pv = await api("/api/agent/providers");
+  const D = S.draftProv || null;                                   // the model being added or edited
   const edit = (p) => { S.draftProv = p; rerender(); };
-  add(root, h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Models for the agent"), h("button", { class: "btn sm primary", onclick: () => edit({ name: "", kind: "openai", base_url: "", model: "", tools: true, allow_cloud: false }) }, "+ Add a model")),
-    h("p", { class: "muted small" }, "Run it on your own machine (Ollama, LM Studio, llama.cpp) so your money data never leaves it. Cloud models are blocked until you allow each one."),
-    pv.items.length ? pv.items.map((p) => h("div", { class: "ev", style: "grid-template-columns:1fr auto auto auto" }, h("span", {}, h("b", {}, p.name), h("span", { class: "muted small" }, ` ${p.model} · ${kfmt(p.context_tokens)} context · ${p.base_url}`)), h("span", { class: "pill " + (p.local ? "t" : "r") }, p.local ? "local" : "cloud"),
-      h("button", { class: "btn sm", onclick: () => edit({ ...p, api_key: null }) }, "Edit"), h("button", { class: "btn sm danger", onclick: sure(null, "Sure?", async () => { await api(`/api/agent/providers/${p.id}`, { method: "DELETE" }); rerender(); }) }, "Remove"))) : h("p", { class: "muted" }, "No models yet. Add one to use the Agent page."),
+  add(root, h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Models for the agent"), h("button", { class: "btn sm primary", onclick: () => edit(blank()) }, "+ Add a model")),
+    h("p", { class: "muted small" }, "Run it on your own machine (Ollama, LM Studio, llama.cpp) so your money data never leaves it. A cloud model is blocked until you allow it."),
+    pv.items.length ? pv.items.map((p) => h("div", { class: "ev", style: "grid-template-columns:1fr auto auto auto" }, h("span", {}, h("b", {}, p.name), h("span", { class: "muted small" }, ` ${kfmt(p.context_tokens)} context · ${p.tools ? "tools" : "no tools"}`)), h("span", { class: "pill " + (p.local ? "t" : "r") }, p.local ? "local" : "cloud"),
+      h("button", { class: "btn sm", onclick: () => edit({ id: p.id, server: "custom", kind: p.kind, base_url: p.base_url, model: p.model, models: null, tools: p.tools, allow_cloud: p.allow_cloud, context_tokens: p.context_tokens, api_key: "", has_key: p.has_key, name: p.name }) }, "Edit"),
+      h("button", { class: "btn sm danger", onclick: sure(null, "Sure?", async () => { await api(`/api/agent/providers/${p.id}`, { method: "DELETE" }); rerender(); }) }, "Remove"))) : h("p", { class: "muted" }, "No models yet. Add one to use the Agent page."),
     pv.items.length > 1 ? h("form", { class: "row", style: "margin-top:12px", onsubmit: (e) => { e.preventDefault(); saveCfg({ agent_provider: val("s-defprov") }, rerender, "Default model set"); } }, select("s-defprov", "Default model", pv.items.map((p) => [p.id, p.name]), pv.default), h("button", { class: "btn", type: "submit" }, "Set default")) : null),
-    draft ? h("div", { class: "panel" }, h("h3", {}, draft.id ? "Edit model" : "Add a model"),
-      !draft.id ? h("div", { class: "chips", style: "margin-bottom:10px" }, h("span", { class: "muted small" }, "Start from:"), presets.map((p) => h("button", { class: "chip", onclick: () => edit({ ...draft, ...p, allow_cloud: false }) }, p.name))) : null,
-      h("form", { class: "row", onsubmit: async (e) => { e.preventDefault(); const body = { name: val("pv-name"), kind: val("pv-kind"), base_url: val("pv-url"), model: val("pv-model"), tools: $("#pv-tools").checked, allow_cloud: $("#pv-cloud").checked, context_tokens: parseInt(val("pv-ctx")) || 8192 }; if (val("pv-key")) body.api_key = val("pv-key");
-        try { await api(draft.id ? `/api/agent/providers/${draft.id}` : "/api/agent/providers", send(draft.id ? "PUT" : "POST", body)); S.draftProv = null; toast("Saved"); rerender(); } catch (err) { fail(err); } } },
-        field("pv-name", "Name", draft.name, { required: true }), select("pv-kind", "API type", [["openai", "OpenAI-compatible (Ollama, LM Studio, OpenRouter…)"], ["anthropic", "Anthropic (Claude)"]], draft.kind), field("pv-url", "Address", draft.base_url, { type: "url", required: true, placeholder: "http://host.docker.internal:11434/v1" }),
-        field("pv-model", "Model name", draft.model, { required: true }), field("pv-ctx", "Context size (tokens)", draft.context_tokens ?? 8192, { type: "number", min: "1024", step: "1024" }), secretField("pv-key", "API key (cloud only)", draft.has_key),
-        h("label", { class: "check" }, h("input", { type: "checkbox", id: "pv-tools", checked: draft.tools }), "Supports tool calling (untick for small models; they get a data snapshot instead)"),
-        h("label", { class: "check" }, h("input", { type: "checkbox", id: "pv-cloud", checked: draft.allow_cloud }), "Allow cloud: I accept my financial data is sent to this address"),
-        h("div", { class: "formbtns" }, h("button", { class: "btn primary", type: "submit" }, "Save model"), h("button", { class: "btn", type: "button", onclick: () => edit(null) }, "Cancel")))) : null);
+    D ? modelForm(D, edit, rerender) : null);
 }
+function modelForm(D, edit, rerender) {
+  const cloud = looksCloud(D.base_url), needsKey = cloud || D.kind === "anthropic";
+  const draftFromForm = () => ({ ...D, kind: val("pv-kind") || D.kind, base_url: val("pv-url") ?? D.base_url, model: val("pv-model") || D.model, api_key: val("pv-key") ?? D.api_key, tools: $("#pv-tools")?.checked ?? D.tools, allow_cloud: $("#pv-cloud")?.checked ?? D.allow_cloud, context_tokens: parseInt(val("pv-ctx")) || D.context_tokens });
+  const refresh = async (btn) => {
+    const cur = draftFromForm(); btn.disabled = true; btn.textContent = "Checking…";
+    try { const r = await api("/api/agent/models", send("POST", { kind: cur.kind, base_url: cur.base_url, api_key: cur.api_key || null, provider_id: D.id || null })); edit({ ...cur, models: r.models, model: r.models.some((m) => m.id === cur.model) ? cur.model : r.models[0]?.id || "", error: null }); }
+    catch (e) { edit({ ...cur, models: null, error: e.message }); }
+  };
+  const pickModel = async (id) => {
+    const cur = { ...draftFromForm(), model: id }, found = D.models?.find((m) => m.id === id);
+    let ctxTok = found?.context;
+    if (!ctxTok && cur.kind === "openai") { try { ctxTok = (await api("/api/agent/model-info", send("POST", { kind: cur.kind, base_url: cur.base_url, model: id }))).context_tokens; } catch {} }
+    edit({ ...cur, context_tokens: ctxTok ? Math.min(ctxTok, 1000000) : cur.context_tokens });
+  };
+  const sel = D.models?.length ? h("label", {}, "Model", h("select", { id: "pv-model", onchange: (e) => e.target.value === "__other" ? edit({ ...draftFromForm(), models: null, model: "" }) : pickModel(e.target.value) },
+    [...D.models.map((m) => h("option", { value: m.id, selected: m.id === D.model }, m.id)), h("option", { value: "__other" }, "Other… (type a name)")])) : field("pv-model", "Model", D.model, { placeholder: "click Refresh to list them, or type a name", required: true });
+  return h("div", { class: "panel" }, h("h3", {}, D.id ? "Edit model" : "Add a model"),
+    h("form", { class: "subform", onsubmit: async (e) => { e.preventDefault(); const c = draftFromForm(); const body = { kind: c.kind, base_url: c.base_url, model: c.model, tools: c.tools, allow_cloud: c.allow_cloud, context_tokens: c.context_tokens, name: "" }; if (c.api_key) body.api_key = c.api_key;
+      try { await api(D.id ? `/api/agent/providers/${D.id}` : "/api/agent/providers", send(D.id ? "PUT" : "POST", body)); S.draftProv = null; toast("Saved"); rerender(); } catch (err) { fail(err); } } },
+      D.id ? null : h("label", {}, "Where it runs", h("select", { id: "pv-server", onchange: (e) => { const s = SERVERS.find((x) => x[0] === e.target.value); edit({ ...blank(), server: s[0], kind: s[2], base_url: s[3], api_key: "" }); } }, SERVERS.map(([k, t]) => h("option", { value: k, selected: k === D.server }, t)))),
+      h("label", {}, "API type", h("select", { id: "pv-kind", onchange: () => edit({ ...draftFromForm(), models: null }) }, [["openai", "OpenAI-compatible"], ["anthropic", "Anthropic"]].map(([v, t]) => h("option", { value: v, selected: v === D.kind }, t)))),
+      field("pv-url", "Address", D.base_url, { type: "url", required: true, placeholder: "http://host.docker.internal:11434/v1", onchange: () => edit({ ...draftFromForm(), models: null }) }),
+      needsKey ? secretField("pv-key", "API key", D.has_key) : null,
+      h("div", { style: "display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end" }, sel, h("button", { class: "btn", type: "button", onclick: (e) => refresh(e.target) }, "Refresh")),
+      D.error ? h("div", { class: "small neg", style: "grid-column:1/-1" }, D.error + " You can still type a model name.") : null,
+      D.models ? h("div", { class: "small muted", style: "grid-column:1/-1" }, `${D.models.length} model${D.models.length === 1 ? "" : "s"} found on that server.`) : null,
+      field("pv-ctx", "Context size (tokens)", D.context_tokens ?? 8192, { type: "number", min: "1024", step: "1024" }),
+      h("label", { class: "check" }, h("input", { type: "checkbox", id: "pv-tools", checked: D.tools }), "Supports tool calling (untick for small models; they get a data snapshot instead)"),
+      cloud ? h("label", { class: "check" }, h("input", { type: "checkbox", id: "pv-cloud", checked: D.allow_cloud }), "Allow cloud: I accept my financial data is sent to this address") : null,
+      h("div", { class: "formbtns" }, h("button", { class: "btn primary", type: "submit" }, "Save model"), h("button", { class: "btn", type: "button", onclick: () => edit(null) }, "Cancel"))));
+}
+
 async function tabCategories(root, rerender) {
   const [cats, rules] = await Promise.all([api("/api/categories"), api("/api/category-rules")]);
   add(root, h("div", { class: "panel" }, h("h3", {}, "Categories"), h("p", { class: "muted small" }, "Each category carries a tag. Tag it 'Not counted' (like Transfer or Investing) to keep it out of spending totals, budgets and charts."),
@@ -589,12 +695,30 @@ async function tabAlerts(root, rerender) {
       h("div", {}, h("button", { class: "btn primary", type: "submit" }, "Save"))),
     h("p", { class: "muted small", style: "margin-top:12px" }, "Alerts show on the Overview and the Subscriptions page. Phone notifications are not set up yet.")));
 }
-const SHARE_LABELS = { net_worth: "Net worth", subscriptions: "Monthly subscription total", robinhood_main: "Robinhood main balance", robinhood_agent: "Robinhood agent balance" };
+/* ---------- Sharing: the Pondering Orb, and API tokens for Home Assistant and scripts ---------- */
+const SHARE_LABELS = { net_worth: "Net worth", subscriptions: "Monthly subscription total", bills: "Bills due (next 7 and 30 days, next bill)", alerts: "Alert counts", savings: "Savings: total, free, set aside", goals: "Goal names and progress", robinhood_main: "Robinhood main balance", robinhood_agent: "Robinhood agent balance" };
+const haYaml = (url, tok) => `rest:\n  - resource: ${url}/api/v1/me/ha\n    scan_interval: 900\n    headers:\n      Authorization: Bearer ${tok}\n    sensor:\n      - name: "Goblin net worth"\n        value_template: "{{ value_json.net_worth }}"\n        unit_of_measurement: "USD"\n        device_class: monetary\n      - name: "Goblin bills next 7 days"\n        value_template: "{{ value_json.bills_7d }}"\n        unit_of_measurement: "USD"\n        device_class: monetary\n      - name: "Goblin free savings"\n        value_template: "{{ value_json.savings_free }}"\n        unit_of_measurement: "USD"\n        device_class: monetary\n      - name: "Goblin alerts"\n        value_template: "{{ value_json.alerts_total }}"\n      - name: "Goblin next bill"\n        value_template: "{{ value_json.next_bill_name }} {{ value_json.next_bill_date }}"\n`;
 async function tabSharing(root, rerender) {
-  const cfg = await api("/api/settings");
-  add(root, h("div", { class: "panel" }, h("h3", {}, "Share with Pondering Orb"), h("p", { class: "muted small" }, "The Orb sees only what is ticked, and only totals. Transactions and account names are never shared."),
-    h("form", { onsubmit: (e) => { e.preventDefault(); saveCfg({ share: [...document.querySelectorAll(".sharebox:checked")].map((x) => x.value) }, rerender); }, style: "display:grid;gap:8px" },
-      Object.entries(SHARE_LABELS).map(([k, t]) => h("label", { class: "check" }, h("input", { type: "checkbox", class: "sharebox", value: k, checked: cfg.share.includes(k) }), t)), h("div", {}, h("button", { class: "btn primary", type: "submit" }, "Save sharing")))));
+  const [cfg, tk] = await Promise.all([api("/api/settings"), api("/api/tokens")]);
+  const origin = S.demo ? "https://bank.example" : location.origin;
+  const orbBox = h("pre", { class: "snippet", hidden: true }), fresh = S.newToken;
+  add(root,
+    h("div", { class: "panel" }, h("h3", {}, "Pondering Orb"), h("p", { class: "muted small" }, "The Orb reads one read-only summary from your gateway, using the Orb key from setup. It sees only what you tick here, and only totals. Transactions are never shared with it."),
+      h("form", { onsubmit: (e) => { e.preventDefault(); saveCfg({ share: [...document.querySelectorAll(".sharebox:checked")].map((x) => x.value) }, rerender); }, style: "display:grid;gap:8px" },
+        Object.entries(SHARE_LABELS).map(([k, t]) => h("label", { class: "check" }, h("input", { type: "checkbox", class: "sharebox", value: k, checked: cfg.share.includes(k) }), t)),
+        h("div", { class: "chips" }, h("button", { class: "btn primary", type: "submit" }, "Save sharing"), h("button", { class: "btn", type: "button", onclick: async () => { try { const r = await api("/summary"); orbBox.textContent = JSON.stringify(r, null, 2); orbBox.hidden = false; } catch (e) { fail(e); } } }, "Preview what the Orb sees"))),
+      orbBox, h("p", { class: "muted small", style: "margin-top:10px" }, "In the Orb: Settings, Connections, Goblin Bank. Address ", h("code", { class: "mono" }, origin), ", and the Orb key in the variable it names.")),
+    h("div", { class: "panel" }, h("h3", {}, "API tokens"), h("p", { class: "muted small" }, "For Home Assistant, scripts or anything else that should read your numbers. Each token is read-only, named, limited to the parts you tick, and can be revoked. It cannot log in or change anything."),
+      fresh ? h("div", { class: "alert info", style: "display:grid;gap:8px" }, h("b", {}, `New token for ${fresh.name}. Copy it now, it is not shown again.`), h("div", { class: "url" }, h("code", {}, fresh.token), h("button", { class: "btn", onclick: () => copy(fresh.token) }, "Copy")),
+        fresh.scopes.includes("summary") ? [h("div", { class: "small" }, "Home Assistant (configuration.yaml):"), h("pre", { class: "snippet" }, haYaml(origin, fresh.token)), h("button", { class: "btn sm", onclick: () => copy(haYaml(origin, fresh.token)) }, "Copy YAML")] : null,
+        h("div", { class: "small" }, "Or test it:"), h("pre", { class: "snippet" }, `curl -H "Authorization: Bearer ${fresh.token}" ${origin}/api/v1/me/summary`), h("button", { class: "btn sm", onclick: () => { S.newToken = null; rerender(); } }, "I copied it")) : null,
+      tk.items.length ? h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["Name", "Can read", "Last used", ""].map((x) => h("th", {}, x)))), h("tbody", {}, tk.items.map((t) => h("tr", { style: t.revoked ? "opacity:.45" : "" }, h("td", {}, t.name, t.revoked ? h("span", { class: "pill r" }, "revoked") : null), h("td", { class: "small" }, t.scopes.join(", ")), h("td", { class: "small muted" }, t.last_used ? ago(t.last_used) : "never"),
+        h("td", { class: "r" }, t.revoked ? null : h("button", { class: "btn sm danger", onclick: sure(null, "Sure? Stops working now", async () => { await api(`/api/tokens/${t.id}`, { method: "DELETE" }); rerender(); }) }, "Revoke"))))))) : h("p", { class: "muted" }, "No tokens yet."),
+      h("form", { style: "display:grid;gap:10px;margin-top:12px", onsubmit: async (e) => { e.preventDefault(); const scopes = [...document.querySelectorAll(".tokscope:checked")].map((x) => x.value); if (!scopes.length) return toast("Tick at least one thing it may read");
+        try { S.newToken = await api("/api/tokens", send("POST", { name: val("tk-name"), scopes })); rerender(); } catch (err) { fail(err); } } },
+        field("tk-name", "Token name", "", { required: true, placeholder: "Home Assistant" }), h("div", { class: "small muted" }, "It may read:"),
+        Object.entries(tk.scopes).map(([k, t]) => h("label", { class: "check" }, h("input", { type: "checkbox", class: "tokscope", value: k, checked: k === "summary" }), h("span", {}, h("b", {}, k), " ", h("span", { class: "muted" }, t), k === "transactions" ? h("span", { class: "pill r" }, "sensitive") : null))),
+        h("div", {}, h("button", { class: "btn primary", type: "submit" }, "Create token")))));
 }
 
 /* ================================ SHELL ================================ */
