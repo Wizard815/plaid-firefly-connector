@@ -19,16 +19,20 @@ Pondering Orb ──(read-only key)──► CoinGateway ──► goblin-alice 
 One image, many roles (`ROLE=`), so the repo stays small.
 
 ## What each goblin does
-* **Plaid** (Huntington, Discover, Axos, Capital One, IRA): link via the UI, tokens Fernet-encrypted at rest (`FIELD_KEY`),
-  `transactions/sync`, balances, auto-detected recurring bills, webhook JWT verification, relink mode for the Discover migration.
-* **Subscriptions** (Wallos-style): manual + Plaid-detected, monthly/yearly totals, pause, `.ics` download, and push to CalDAV.
-* **Money movement**: every transaction and balance change is logged and shown on the Money movement tab.
-* **PayPal / Venmo / Cash App**: CSV import (no personal-account APIs exist). PayPal Credit may link via Plaid; check its directory.
-* **Settings page**: Robinhood source + CSV upload + agent MCP config, CalDAV, what the Orb may see, relink/unlink banks.
-* **Plaid Investments** holdings feed the Robinhood main panel when a Robinhood item is linked (check Plaid's coverage first).
-* **Plaid usage + cost guard**: per-endpoint call counts, an estimate from the rate you enter, a monthly budget warning, and a daily call cap.
-* **Drop folder**: put CSVs in `data/<name>/imports/` (Cash App, PayPal, Venmo auto-detected); picked up on sync and moved to `done/`.
-* **UI** (`ui/index.html`, served by the gateway at `/`): sign in with goblin name + login token. Falls back to sample data when no gateway answers.
+* **Plaid** (Huntington, Discover, Axos, Capital One, IRA): link in Settings, tokens encrypted at rest, transactions sync, holdings, recurring-bill detection, webhook signature checks, relink mode.
+* **Money movement**: search + filter (account, category, direction, amount range, dates, sort), totals for whatever you filtered, pagination, CSV export, per-payment categories with "remember for similar" rules and keyword auto-categorizing.
+* **Accounts**: drill into any account (history, 30-day in/out, its bills, its transactions), add accounts by hand (cash, anything Plaid can't reach), minimum-balance warnings.
+* **Subscriptions**: every interval (daily to every 2 years, or custom "every N days/weeks/months/years"), paid-by-me or someone else (with their name), bound to any account (Plaid or manual) or a free-text payment method, end dates, reminders. Detects steady payments in your history and offers them with your name/interval/account. Flags bound bills that stop showing up (counts consecutive misses).
+* **Alerts**: overdrawn / below-minimum accounts, accounts projected to run short, missed payments, CDs maturing, bills due soon.
+* **Overview**: net worth, adjustable "bills in the next N days" window (1 day to 10 years, repeats expanded), spending by category, alerts.
+* **Savings**: savings, CDs, money market, bonds, HSA, 529: APY, maturity value, goals; follow a linked account or type a balance.
+* **Planner**: your own notes, an agent that drafts notes from your real data, monthly budgets vs actual spending.
+* **Agent**: chat over your data with tools (accounts, transactions, bills, recurring detection, savings, projections, budgets, calendar, notes, exact calculator). Any OpenAI-compatible endpoint (Ollama, LM Studio, llama.cpp, OpenRouter...) or Anthropic; add as many as you like. Cloud models are blocked until you allow each one. It can only write notes and propose subscriptions; it cannot move money. Models without tool calling get a data snapshot instead.
+* **Settings** (tabs): Connect & import, Robinhood, Calendar (CalDAV), Models, Categories, Sharing with the Orb. Plaid usage + cost guard (call counts, budget warning, daily cap).
+* **Drop folder**: CSVs in `data/<name>/imports/` (Cash App, PayPal, Venmo) are imported on sync.
+* **UI** (`ui/index.html`, served by the gateway at `/`): sign in with goblin name + login token.
+
+Does the agent need embeddings? No. Your data is structured (amounts, dates, accounts), so exact queries through tools are more accurate than similarity search. Embeddings only help with free text; add them later for notes if you want.
 
 ## Run
 ```bash
@@ -45,11 +49,13 @@ Back up `.secrets/<name>.env`: losing `FIELD_KEY` means re-linking banks. Plaid 
 ```bash
 python3 -m pytest                     # unit tests
 python3 scripts/synthetic_e2e.py      # real processes + a synthetic Plaid server (devtools/fake_plaid.py), 31 checks
+python3 scripts/dev_stack.py          # gateway + goblin with random data + a fake model server, to click around (token: login-alice)
 ```
 The synthetic server follows Plaid's documented response shapes. It proves our services work together; it cannot prove real Plaid agrees. Get free sandbox keys from Plaid before trusting it with real banks.
 
 ## Not done yet
 * Plaid is untested against the real API (tests use mocks); try `PLAID_ENV=sandbox` first.
+* The agent is tested with scripted fake models. Try your real local model and see which tools it handles well.
 * rh-agent tool names/auth are unverified (Robinhood docs don't publish them); configure via env.
 * CalDAV *reading* (event -> money amount) and investments holdings via Plaid.
 

@@ -89,7 +89,7 @@ def main():
     ov = c.get("/g/alice/api/overview", headers=A).json()
     check("net worth = 1250.55 + 8000 + 5000 - 430.20", ov["net_worth"] == 13820.35, str(ov["net_worth"]))
     check("recurring streams became subscriptions", {s["name"] for s in c.get("/g/alice/api/subscriptions", headers=A).json()["items"]} == {"Netflix", "Gym Co"})
-    tx = {t["id"]: t["amount"] for t in c.get("/g/alice/api/transactions", headers=A).json()}
+    tx = {t["id"]: t["amount"] for t in c.get("/g/alice/api/transactions", headers=A).json()["items"]}
     check("signs flipped (spend negative, pay positive)", tx["t1"] == -15.49 and tx["t2"] == 2400.0, str(tx))
     check("bob sees none of alice's data", c.get("/g/bob/api/accounts", headers=B).json() == [])
     check("robinhood main from Plaid holdings", c.get("/g/alice/robinhood/main", headers=A).json().get("source") == "plaid")

@@ -293,3 +293,14 @@ def test_budget_status_matches_spending(world):
     spent = {r["category"]: r["spent"] for r in ledger.spending_by_category(db, "2026-10-01", "2026-10-31")}
     for cat, b in got.items():
         assert b["spent"] == spent.get(cat, 0.0) and b["left"] == pytest.approx(b["budget"] - b["spent"], abs=0.01)
+
+
+def test_keyword_fallback_categories():
+    db = DB(":memory:")
+    for name, amt, want in [("Kroger #1234", -40, "Groceries"), ("SHELL OIL 5522", -30, "Gas"), ("Starbucks #8497", -6, "Food"), ("Steam Games", -20, "Games"), ("ACME CORP PAYROLL", 2150, "Income"),
+                            ("Refund Target", 25, "Income"), ("Target #44", -25, "Shopping"), ("Mystery LLC", -9, "Misc"), ("Mystery LLC", 9, "Income"), ("Old Navy #3420", -50, "Clothes"),
+                            ("Shell script course", 30, "Income")]:
+        assert ledger.categorize(db, name, amt) == want, (name, amt)
+    db.conn.execute("INSERT INTO category_rules(pattern,category) VALUES('starbucks','Fun')"); db.conn.commit()
+    assert ledger.categorize(db, "Starbucks #8497", -6) == "Fun"            # your rule beats the keyword guess
+    assert ledger.categorize(db, "Kroger", -5, "GENERAL_MERCHANDISE") == "Shopping"   # the bank's category beats the keyword guess

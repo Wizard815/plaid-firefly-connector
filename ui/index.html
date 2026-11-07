@@ -25,7 +25,7 @@ h2{font-size:1.5rem} h3{font-size:1.05rem}
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer}
 :focus-visible{outline:2px solid var(--teal);outline-offset:2px}
-.shell{display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px;max-width:1180px;margin:0 auto}
+.shell{display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px;max-width:1240px;margin:0 auto}
 nav.side{display:flex;flex-direction:column;gap:4px;position:sticky;top:16px;align-self:start}
 .brand{font:700 1.35rem var(--display);padding:4px 10px 14px;display:flex;align-items:center;gap:10px}
 .coin{width:22px;height:22px;border-radius:50%;background:var(--brass);box-shadow:inset 0 0 0 4px var(--brass-soft)}
@@ -39,7 +39,7 @@ main{min-width:0;display:grid;gap:20px;align-content:start}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}
 .kpi .label{font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
-.kpi .value{font:500 1.9rem var(--mono);font-variant-numeric:tabular-nums;margin-top:2px}
+.kpi .value{white-space:nowrap;font:500 1.9rem var(--mono);font-variant-numeric:tabular-nums;margin-top:2px}
 .kpi .sub{font-size:.85rem;color:var(--muted)}
 .pos{color:var(--teal)} .neg{color:var(--red)}
 .comp{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--line);margin:10px 0 8px}
@@ -81,10 +81,51 @@ svg text{fill:var(--muted);font:11px var(--mono)}
   nav.side button[aria-current="page"]{box-shadow:inset 0 -3px 0 var(--teal)}
 }
 @media (prefers-reduced-motion:no-preference){.panel{transition:border-color .15s}.panel:hover{border-color:var(--teal-soft)}}
+
+.chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.chip{border:1px solid var(--line);background:var(--bg);border-radius:999px;padding:3px 12px;font-size:.85rem;color:var(--fg)}
+.chip:hover{border-color:var(--teal)} .chip.on{background:var(--teal);border-color:var(--teal);color:#fff}
+:root[data-theme="dark"] .chip.on{color:#062b26}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .chip.on{color:#062b26}}
+input.tiny{width:72px;padding:3px 8px}
+.meter{height:10px;border-radius:5px;background:var(--line);overflow:hidden;min-width:60px}.meter i{display:block;height:100%}
+.bars{display:grid;gap:7px;margin-top:10px}.barrow{display:grid;grid-template-columns:110px 1fr 92px;gap:10px;align-items:center}.barrow .num{text-align:right}
+.alerts{display:grid;gap:6px}
+.alert{border-radius:8px;padding:8px 12px;background:var(--brass-soft);border-left:4px solid var(--brass)}
+.alert.critical{background:var(--red-soft);border-left-color:var(--red)} .alert.info{background:var(--teal-soft);border-left-color:var(--teal)}
+.tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+.tabs button{background:none;border:0;padding:9px 14px;color:var(--muted);font-weight:500;border-bottom:3px solid transparent;margin-bottom:-1px}
+.tabs button.on{color:var(--fg);border-bottom-color:var(--teal)}
+.stack{display:grid;gap:16px;margin-top:4px}
+.split{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:16px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:12px;margin-top:10px}
+.card{border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--bg);min-width:0}
+.filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;align-items:end}
+.subform{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;align-items:end}
+.subform .custom,.subform .pname{display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:end}.subform .pname{grid-template-columns:1fr}
+.subform [hidden]{display:none!important}
+.formbtns{display:flex;gap:8px;align-items:end}
+label.check{display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-size:.9rem;color:var(--fg)}label.check input{width:auto}
+select.bare{width:auto;max-width:150px;padding:3px 6px;font-size:.88rem}
+tr.click{cursor:pointer}tr.click:hover td{background:var(--bg)}
+textarea{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%;font:inherit;resize:vertical}
+.note{cursor:pointer;padding:8px 6px;border-radius:6px}.note.on{background:var(--teal-soft)}
+.pill .x{background:none;border:0;padding:0 0 0 6px;color:inherit;cursor:pointer}
+.chat{display:grid;gap:10px;max-height:52vh;overflow-y:auto;padding:4px 2px;margin:8px 0}
+.bubble{max-width:88%;padding:9px 13px;border-radius:12px;min-width:0;overflow-wrap:anywhere}
+.bubble.me{justify-self:end;background:var(--teal);color:#fff}
+:root[data-theme="dark"] .bubble.me{color:#062b26}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .bubble.me{color:#062b26}}
+.bubble.agent{justify-self:start;background:var(--bg);border:1px solid var(--line)} .bubble.err{border-color:var(--red);color:var(--red)}
+.trace{margin-top:6px;font-size:.82rem}.trace summary{cursor:pointer;color:var(--muted)}
+#ag-in{min-height:46px}
+@media (max-width:760px){.split{grid-template-columns:minmax(0,1fr)}.barrow{grid-template-columns:80px 1fr 80px}}
+main>*,.stack>*{min-width:0}label{min-width:0}select,input{max-width:100%}.filters{grid-template-columns:repeat(auto-fit,minmax(min(130px,100%),1fr))}.subform{grid-template-columns:repeat(auto-fit,minmax(min(190px,100%),1fr))}
+td.mono{white-space:nowrap}
 </style>
 
 <div id="app"></div>
-
+<script>window.GOBLIN_DEMO = null; /*DEMO*/</script>
 <script>
 "use strict";
 /* ---------- tiny DOM helper: strings are always text nodes, so bank data can never inject HTML ---------- */
@@ -99,300 +140,440 @@ function h(tag, attrs, ...kids) {
   for (const kid of kids.flat(9)) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
   return el;
 }
-const $ = (s) => document.querySelector(s);
+const $ = (s, r = document) => r.querySelector(s);
+const fill = (el, ...kids) => el.replaceChildren(...kids.flat(9).filter((k) => k != null && k !== false));
+const add = (el, ...kids) => el.append(...kids.flat(9).filter((k) => k != null && k !== false));   // native append() would print "null"
 const usd = (n, signed) => (n == null ? "–" : (signed && n > 0 ? "+" : n < 0 ? "−" : "") + "$" + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
 const today = () => new Date().toISOString().slice(0, 10);
 const addDays = (d, n) => { const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
 const ago = (iso) => { const d = Math.round((Date.now() - new Date(iso)) / 36e5); return d < 1 ? "now" : d < 24 ? d + "h ago" : Math.round(d / 24) + "d ago"; };
-function toast(msg) { const t = h("div", { class: "toast", role: "status" }, msg); document.body.append(t); setTimeout(() => t.remove(), 2600); }
-function copy(text) { (navigator.clipboard?.writeText(text) || Promise.reject()).then(() => toast("Copied"), () => toast("Select and copy manually")); }
+const qs = (o) => Object.entries(o).filter(([, v]) => v !== "" && v != null).map(([k, v]) => k + "=" + encodeURIComponent(v)).join("&");
+const JSONH = { "Content-Type": "application/json" };
+const send = (method, body) => ({ method, headers: JSONH, body: JSON.stringify(body) });
+function toast(msg) { const t = h("div", { class: "toast", role: "status" }, msg); document.body.append(t); setTimeout(() => t.remove(), 2800); }
+const fail = (e) => toast(e.message || String(e));
 
-/* ---------- sample data (shown when no gateway answers, e.g. in the shared preview) ---------- */
-function demoBackend() {
-  const t = today();
-  const accts = [
-    ["Huntington", "Checking ••4821", "cash", 4218.37], ["Huntington", "Savings ••1190", "cash", 12840.0], ["Axos", "High Yield Savings", "cash", 22500.0],
-    ["Discover", "it Card ••7733", "credit", 612.44], ["Capital One", "Quicksilver ••0182", "credit", 1284.9], ["Robinhood", "Robinhood (main)", "investment", 38902.55],
-    ["Robinhood", "Robinhood (agent)", "investment", 1204.1], ["Axos", "Roth IRA", "investment", 17650.0], ["PayPal", "PayPal Credit", "credit", 340.0],
-  ].map(([institution, name, kind, balance], i) => ({ id: "a" + i, institution, name, kind, balance, currency: "USD", source: "demo" }));
-  const subs = [
-    ["Netflix", 15.49, "monthly", 3, "Entertainment"], ["Spotify Family", 16.99, "monthly", 9, "Entertainment"], ["iCloud 2TB", 9.99, "monthly", 14, "Software"],
-    ["Gym", 480, "yearly", 41, "Health"], ["Home insurance", 1320, "yearly", 88, "Insurance"], ["Cloudflare", 5, "monthly", 5, "Software"], ["Water bill", 62, "monthly", 11, "Utilities"],
-    ["Domain renewals", 54, "yearly", 160, "Software"], ["Paper subscription", 4.5, "weekly", 2, "News"],
-  ].map(([name, amount, cycle, d, category], i) => ({ id: i + 1, name, amount, cycle, next_date: addDays(t, d), category, url: "", notes: "", active: 1, source: i < 3 ? "plaid" : "manual", currency: "USD" }));
-  const events = [
-    ["Huntington: Payroll", 2480, 1], ["Capital One: Whole Foods", -86.12, 3], ["Discover: Shell", -41.7, 5], ["Robinhood (agent): balance", 38.2, 8],
-    ["Huntington: Netflix", -15.49, 30], ["PayPal: Etsy", -25, 50], ["Axos: Interest", 61.4, 70], ["Venmo: Pizza w/ Sam", -12.5, 90],
-  ].map(([title, amount, hrs], i) => ({ id: "e" + i, ts: new Date(Date.now() - hrs * 36e5).toISOString(), kind: i === 3 ? "balance" : "transaction", title, amount, detail: "sample" }));
-  const history = Array.from({ length: 30 }, (_, i) => ({ date: addDays(t, i - 29), net_worth: 76000 + i * 120 + Math.sin(i / 3) * 900 }));
-  const mo = (s) => (s.active ? s.amount * { weekly: 52 / 12, biweekly: 26 / 12, monthly: 1, yearly: 1 / 12 }[s.cycle] : 0);
-  const demoSettings = { share: ["net_worth", "robinhood_agent"], rh_main_source: "auto", caldav_url: "https://dav.example/calendars/me/bills/", caldav_user: "me", caldav_password: { set: true },
-    rh_mcp_url: "https://mcp.example/robinhood", rh_mcp_token: { set: true }, rh_mcp_read_tools: "get_account,get_positions", rh_mcp_tool_balances: "get_account", rh_mcp_tool_positions: "get_positions", rh_mcp_tool_history: "", plaid_rate_item_month: "1.50", plaid_budget_month: "10", plaid_daily_cap: "500" };
-  const rh = (positions, eq) => ({ source: "sample", as_of: new Date().toISOString(), balances: { equity: eq }, positions });
-  return async (path, opts = {}) => {
-    const m = opts.method || "GET";
-    if (path === "/api/overview") {
-      const sg = { credit: -1, loan: -1 };
-      return { net_worth: accts.reduce((s, a) => s + a.balance * (sg[a.kind] || 1), 0), accounts: accts, subscriptions_monthly: subs.reduce((s, x) => s + mo(x), 0),
-        upcoming: subs.filter((s) => s.active && s.next_date <= addDays(t, 30)).sort((a, b) => a.next_date.localeCompare(b.next_date)), events: events.slice(0, 8) };
-    }
-    if (path === "/api/history") return history;
-    if (path.startsWith("/api/events")) return events;
-    if (path.startsWith("/api/transactions")) return events.filter((e) => e.kind === "transaction").map((e) => ({ id: e.id, date: e.ts.slice(0, 10), name: e.title, amount: e.amount, account_id: "a0" }));
-    if (path === "/api/accounts") return accts;
-    if (path === "/api/subscriptions" && m === "GET") { const items = subs.map((s) => ({ ...s, monthly: mo(s) })); const tot = items.reduce((a, s) => a + s.monthly, 0); return { items, monthly_total: tot, yearly_total: tot * 12 }; }
-    if (path === "/api/subscriptions" && m === "POST") { const b = JSON.parse(opts.body); subs.push({ ...b, id: Date.now(), active: 1, source: "manual" }); return {}; }
-    const sm = path.match(/^\/api\/subscriptions\/(\d+)$/);
-    if (sm && m === "PUT") { const i = subs.findIndex((s) => s.id == sm[1]); subs[i] = { ...subs[i], ...JSON.parse(opts.body), active: JSON.parse(opts.body).active ? 1 : 0 }; return {}; }
-    if (sm && m === "DELETE") { subs.splice(subs.findIndex((s) => s.id == sm[1]), 1); return {}; }
-    if (path.includes("export/caldav")) return { pushed: subs.filter((s) => s.active).length, failed: [] };
-    if (path === "/robinhood/main") return rh([{ symbol: "VTI", quantity: 62.4, net_cost: 14900 }, { symbol: "AAPL", quantity: 40, net_cost: 6120 }, { symbol: "MSFT", quantity: 18, net_cost: 6480 }], 38902.55);
-    if (path === "/robinhood/agent") return rh([{ symbol: "NVDA", quantity: 4, net_cost: 540 }, { symbol: "SPY", quantity: 1.2, net_cost: 610 }], 1204.1);
-    if (path === "/api/settings" && m === "GET") return JSON.parse(JSON.stringify(demoSettings));
-    if (path === "/api/settings" && m === "PUT") { for (const [k, v] of Object.entries(JSON.parse(opts.body))) demoSettings[k] = typeof demoSettings[k] === "object" && !Array.isArray(demoSettings[k]) ? { set: !!v } : v; return JSON.parse(JSON.stringify(demoSettings)); }
-    if (path === "/api/status") return { plaid: { configured: true, env: "sandbox", items: [{ item_id: "item-1", institution: "Huntington" }, { item_id: "item-2", institution: "Axos" }, { item_id: "item-3", institution: "Capital One" }] },
-      robinhood: { agent: "up", csv: "up", live: "not deployed", csv_files: ["import-2026-11-01T0000Z.csv"], agent_configured: true }, caldav_configured: true,
-      imports: [{ provider: "cashapp", transactions: 41, last_transaction: addDays(t, -38) }, { provider: "paypal", transactions: 12, last_transaction: addDays(t, -6) }] };
-    if (path === "/api/plaid/usage") return { month: t.slice(0, 7), calls_month: 214, calls_today: 9, daily_cap: 500, items: 3, est_monthly_cost: 4.5, budget: 10, over_budget: false,
-      by_endpoint: { "/transactions/sync": 96, "/accounts/get": 62, "/transactions/recurring/get": 30, "/investments/holdings/get": 18, "/link/token/create": 8 } };
-    if (path === "/import/scan") return { imports: [] };
-    if (path === "/api/settings/test-caldav") return { ok: true, status: 207 };
-    if (path.startsWith("/api/plaid/items/")) return { removed: true };
-    if (path === "/robinhood/csv-upload") throw new Error("Upload is disabled in the sample preview");
-    if (path === "/sync") return { plaid: [], robinhood: {} };
-    if (path.startsWith("/plaid/link-token")) throw new Error("Plaid Link is disabled in the sample preview");
-    if (path.startsWith("/import/csv")) throw new Error("CSV import is disabled in the sample preview");
-    throw new Error("not in sample: " + path);
-  };
-}
-
-/* ---------- API: real gateway (/g/<name>/...) or sample backend ---------- */
-const S = { demo: false, name: "", token: "", tab: "overview", cache: {}, call: null };
+/* ---------- API: the gateway (/g/<name>/...) or a recorded sample (shared preview) ---------- */
+const S = { authed: false, demo: false, name: "", token: "", tab: "overview", settingsTab: "connect", acct: null, edit: null, days: +store.get("gb_days") || 30, chat: [], provider: null };
+let DEMO = null;
+const CAT_COLORS = ["#17766b", "#a8741a", "#4a6fa5", "#b3372f", "#7a5c99", "#5d8a3c", "#c46a2d", "#2f8f9d", "#8a6d3b", "#6b7a8f"];
 async function api(path, opts = {}) {
-  if (S.demo) return S.call(path, opts);
+  if (S.demo) return demoApi(path, opts);
   const r = await fetch(`/g/${S.name}${path}`, { ...opts, headers: { Authorization: "Bearer " + S.token, ...(opts.headers || {}) } });
-  if (r.status === 401) { sessionStorage.removeItem("gb_tok"); location.reload(); }
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "HTTP " + r.status);
-  return r.json();
+  if (r.status === 401) { if (S.authed) { sessionStorage.removeItem("gb_tok"); location.reload(); } throw new Error("Sign-in failed"); }   // a rejected login must say so, not silently reload
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof body.detail === "string" ? body.detail : Array.isArray(body.detail) ? body.detail.map((d) => d.msg).join("; ") : "HTTP " + r.status);
+  return body;
+}
+function demoApi(path, opts) {
+  const m = opts.method || "GET", [p, q] = path.split("?"), P = new URLSearchParams(q || "");
+  if (m !== "GET") { if (path.startsWith("/api/agent/chat")) return Promise.resolve(DEMO.chat); throw new Error("Sample preview: changes are not saved"); }
+  if (p === "/api/transactions") return Promise.resolve(filterTx(DEMO.transactions, P));
+  if (p === "/api/upcoming") return Promise.resolve(DEMO["/api/upcoming?days=" + Math.min(Math.max(+P.get("days") || 30, 1), 120)] || DEMO["/api/upcoming?days=365"]);
+  if (p.startsWith("/api/accounts/")) return Promise.resolve(DEMO["/api/accounts/" + p.split("/")[3]]);
+  const hit = DEMO[path] ?? DEMO[p];
+  return hit === undefined ? Promise.reject(new Error("not in sample: " + path)) : Promise.resolve(hit);
+}
+function filterTx(all, P) {
+  const g = (k) => P.get(k) || "", q = g("q").toLowerCase().split(" ").filter(Boolean), cats = g("category").split(",").filter(Boolean);
+  let rows = all.items.filter((t) => (!g("account_id") || t.account_id === g("account_id")) && (!cats.length || cats.includes(t.category)) && q.every((w) => t.name.toLowerCase().includes(w))
+    && (!g("min_amount") || Math.abs(t.amount) >= +g("min_amount")) && (!g("max_amount") || Math.abs(t.amount) <= +g("max_amount")) && (!g("start") || t.date >= g("start")) && (!g("end") || t.date <= g("end"))
+    && (!g("direction") || (t.amount > 0) === (g("direction") === "in")));
+  const sort = g("sort") || "date_desc";
+  rows.sort((a, b) => sort === "date_asc" ? a.date.localeCompare(b.date) : sort.startsWith("amount") ? (sort.endsWith("desc") ? 1 : -1) * (Math.abs(b.amount) - Math.abs(a.amount)) : b.date.localeCompare(a.date));
+  const sum = (f) => Math.round(rows.filter(f).reduce((s, t) => s + t.amount, 0) * 100) / 100, off = +g("offset") || 0, lim = +g("limit") || 50;
+  return { items: rows.slice(off, off + lim), total: rows.length, sum_in: sum((t) => t.amount > 0), sum_out: sum((t) => t.amount < 0), net: sum(() => true) };
 }
 
-/* ---------- views ---------- */
-const KIND = { cash: ["Cash", "var(--teal)"], investment: ["Investments", "var(--brass)"], credit: ["Credit owed", "var(--red)"], loan: ["Loans", "#8a5a7a"] };
-const CYCLES = ["weekly", "biweekly", "monthly", "yearly"];
-
-function kpi(label, value, sub, cls) { return h("div", { class: "panel kpi" }, h("div", { class: "label" }, label), h("div", { class: "value " + (cls || "") }, value), h("div", { class: "sub" }, sub)); }
-function spark(points, w = 560, ht = 120) {
+/* ---------- shared bits ---------- */
+const KIND = { cash: ["Cash", "var(--teal)"], investment: ["Investments", "var(--brass)"], credit: ["Credit owed", "var(--red)"], loan: ["Loans", "#8a5a7a"], "savings (manual)": ["Savings (manual)", "#4a6fa5"] };
+const kpi = (label, value, sub, cls) => h("div", { class: "panel kpi" }, h("div", { class: "label" }, label), h("div", { class: "value " + (cls || "") }, value), h("div", { class: "sub" }, sub));
+const field = (id, label, value, o = {}) => h("label", {}, label, h("input", { id, value: value ?? "", autocomplete: "off", ...o }));
+const select = (id, label, options, value, o = {}) => h("label", {}, label, h("select", { id, ...o }, options.map(([v, t]) => h("option", { value: v, selected: String(v) === String(value ?? "") }, t))));
+const val = (id, root = document) => $("#" + id, root)?.value.trim();
+const num = (id, root) => { const v = val(id, root); return v === "" || v == null ? null : parseFloat(v); };
+const bar = (pct, color = "var(--teal)") => h("div", { class: "meter" }, h("i", { style: `width:${Math.min(100, Math.max(0, pct * 100))}%;background:${color}` }));
+const barList = (rows, fmt = usd) => { const top = Math.max(...rows.map((r) => r[1]), 1); return h("div", { class: "bars" }, rows.map(([l, v], i) => h("div", { class: "barrow" }, h("span", { class: "small muted" }, l), h("div", { class: "meter" }, h("i", { style: `width:${(v / top) * 100}%;background:${CAT_COLORS[i % CAT_COLORS.length]}` })), h("span", { class: "num small" }, fmt(v))))); };
+const alertRow = (a) => h("div", { class: "alert " + a.severity }, h("b", {}, a.title), a.detail ? h("span", { class: "muted small" }, " " + a.detail) : null);
+const evRow = (e) => h("div", { class: "ev" }, h("span", { class: "when" }, ago(e.ts)), h("span", {}, e.title.replace(/ [+−-]\$[\d,.]+$/, "")), h("span", { class: "num " + (e.amount > 0 ? "pos" : e.amount < 0 ? "neg" : "") }, e.amount == null ? "" : usd(e.amount, true)));
+function spark(points, w = 560, ht = 120, key = "net_worth", xkey = "date") {
   if (points.length < 2) return h("p", { class: "muted small" }, "Needs a few days of balance snapshots.");
-  const ys = points.map((p) => p.net_worth), lo = Math.min(...ys), hi = Math.max(...ys), pad = 28, span = hi - lo || 1;
+  const ys = points.map((p) => p[key]), lo = Math.min(...ys), hi = Math.max(...ys), pad = 34, span = hi - lo || 1;
   const X = (i) => pad + (i * (w - pad - 8)) / (points.length - 1), Y = (v) => ht - 18 - ((v - lo) / span) * (ht - 34);
-  const line = points.map((p, i) => (i ? "L" : "M") + X(i).toFixed(1) + " " + Y(p.net_worth).toFixed(1)).join("");
+  const line = points.map((p, i) => (i ? "L" : "M") + X(i).toFixed(1) + " " + Y(p[key]).toFixed(1)).join("");
   const ns = "http://www.w3.org/2000/svg", mk = (t, a) => { const e = document.createElementNS(ns, t); for (const k in a) e.setAttribute(k, a[k]); return e; };
-  const svg = mk("svg", { viewBox: `0 0 ${w} ${ht}`, width: "100%", role: "img", "aria-label": "Net worth over time" });
-  for (const v of [lo, hi]) { svg.append(mk("line", { x1: pad, x2: w - 8, y1: Y(v), y2: Y(v), stroke: "var(--line)", "stroke-dasharray": "3 4" })); const t = mk("text", { x: 0, y: Y(v) + 4 }); t.textContent = "$" + Math.round(v / 1000) + "k"; svg.append(t); }
-  svg.append(mk("path", { d: line + `L${X(points.length - 1)} ${ht - 18}L${pad} ${ht - 18}Z`, fill: "var(--teal-soft)", stroke: "none" }), mk("path", { d: line, fill: "none", stroke: "var(--teal)", "stroke-width": 2 }),
-    mk("circle", { cx: X(points.length - 1), cy: Y(ys.at(-1)), r: 4, fill: "var(--teal)" }));
-  for (const [i, anchor] of [[0, "start"], [points.length - 1, "end"]]) { const t = mk("text", { x: X(i), y: ht - 3, "text-anchor": anchor }); t.textContent = points[i].date.slice(5); svg.append(t); }
+  const svg = mk("svg", { viewBox: `0 0 ${w} ${ht}`, width: "100%", role: "img", "aria-label": "History" });
+  for (const v of [lo, hi]) { svg.append(mk("line", { x1: pad, x2: w - 8, y1: Y(v), y2: Y(v), stroke: "var(--line)", "stroke-dasharray": "3 4" })); const t = mk("text", { x: 0, y: Y(v) + 4 }); t.textContent = Math.abs(v) >= 1000 ? "$" + Math.round(v / 1000) + "k" : "$" + Math.round(v); svg.append(t); }
+  svg.append(mk("path", { d: line + `L${X(points.length - 1)} ${ht - 18}L${pad} ${ht - 18}Z`, fill: "var(--teal-soft)", stroke: "none" }), mk("path", { d: line, fill: "none", stroke: "var(--teal)", "stroke-width": 2 }), mk("circle", { cx: X(points.length - 1), cy: Y(ys.at(-1)), r: 4, fill: "var(--teal)" }));
+  for (const [i, anchor] of [[0, "start"], [points.length - 1, "end"]]) { const t = mk("text", { x: X(i), y: ht - 3, "text-anchor": anchor }); t.textContent = String(points[i][xkey]).slice(5, 10); svg.append(t); }
   return svg;
 }
-function evRow(e) { return h("div", { class: "ev" }, h("span", { class: "when" }, ago(e.ts)), h("span", {}, e.title.replace(/ [+−-]\$[\d,.]+$/, "")), h("span", { class: "num " + (e.amount > 0 ? "pos" : e.amount < 0 ? "neg" : "") }, e.amount == null ? "" : usd(e.amount, true))); }
+function downloadText(name, text, type) { const a = h("a", { href: URL.createObjectURL(new Blob([text], { type })), download: name }); document.body.append(a); a.click(); a.remove(); }
+const sure = (btn, label, run) => (ev) => { if (ev.target.dataset.sure) run(); else { ev.target.dataset.sure = 1; ev.target.textContent = label; } };
 
-async function viewOverview(root) {
-  const [o, hist] = await Promise.all([api("/api/overview"), api("/api/history").catch(() => [])]);
-  const by = {}; for (const a of o.accounts) by[a.kind] = (by[a.kind] || 0) + (a.balance || 0);
-  const gross = Object.values(by).reduce((s, v) => s + v, 0) || 1;
-  const owed = (by.credit || 0) + (by.loan || 0);
-  root.append(
-    h("div", { class: "grid" }, kpi("Net worth", usd(o.net_worth), `${o.accounts.length} accounts linked`), kpi("Owed on cards", usd(owed), "Credit + loans", "neg"),
-      kpi("Subscriptions / month", usd(o.subscriptions_monthly), usd(o.subscriptions_monthly * 12) + " a year"), kpi("Next 30 days", String(o.upcoming.length) + " bills", o.upcoming[0] ? `${o.upcoming[0].name} on ${o.upcoming[0].next_date.slice(5)}` : "Nothing due")),
-    h("div", { class: "panel" }, h("h3", {}, "Net worth, last 30 days"), spark(hist)),
-    h("div", { class: "panel" }, h("h3", {}, "Where the money sits"),
-      h("div", { class: "comp" }, Object.entries(by).map(([k, v]) => h("i", { style: `width:${(Math.abs(v) / gross) * 100}%;background:${(KIND[k] || ["", "var(--muted)"])[1]}`, title: `${(KIND[k] || [k])[0]} ${usd(v)}` }))),
-      h("div", { class: "legend" }, Object.entries(by).map(([k, v]) => h("span", {}, h("b", { style: "background:" + (KIND[k] || ["", "var(--muted)"])[1] }), `${(KIND[k] || [k])[0]} ${usd(v)}`)))),
+/* ================================ OVERVIEW ================================ */
+async function viewOverview(root, rerender) {
+  const [o, hist, up, spend] = await Promise.all([api("/api/overview"), api("/api/history").catch(() => []), api("/api/upcoming?days=" + S.days),
+    api("/api/spending?" + qs({ start: today().slice(0, 8) + "01" })).catch(() => [])]);
+  const owed = (o.by_kind.credit || 0) + (o.by_kind.loan || 0), gross = Object.values(o.by_kind).reduce((s, v) => s + Math.abs(v), 0) || 1;
+  const setDays = (d) => { S.days = Math.min(Math.max(parseInt(d) || 30, 1), 3650); store.set("gb_days", S.days); rerender(); };
+  add(root, 
+    o.alerts.length ? h("div", { class: "panel" }, h("h3", {}, "Needs attention"), h("div", { class: "alerts" }, o.alerts.slice(0, 6).map(alertRow))) : null,
+    h("div", { class: "grid" }, kpi("Net worth", usd(o.net_worth), `${o.accounts.length} accounts${o.savings_total ? " + savings" : ""}`), kpi("Owed on cards", usd(owed), "Credit + loans", "neg"),
+      kpi("Subscriptions / month", usd(o.subscriptions_monthly), usd(o.subscriptions_monthly * 12) + " a year"), kpi(`Bills, next ${up.days} days`, usd(up.total), `${up.count} payments${up.others_total ? " · others pay " + usd(up.others_total) : ""}`)),
+    h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Net worth, last 30 days")), spark(hist)),
+    h("div", { class: "panel" }, h("h3", {}, "Where the money sits"), h("div", { class: "comp" }, Object.entries(o.by_kind).map(([k, v]) => h("i", { style: `width:${(Math.abs(v) / gross) * 100}%;background:${(KIND[k] || ["", "var(--muted)"])[1]}`, title: `${(KIND[k] || [k])[0]} ${usd(v)}` }))),
+      h("div", { class: "legend" }, Object.entries(o.by_kind).map(([k, v]) => h("span", {}, h("b", { style: "background:" + (KIND[k] || ["", "var(--muted)"])[1] }), `${(KIND[k] || [k])[0]} ${usd(v)}`)))),
+    h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, `Bills in the next ${up.days} days`),
+      h("div", { class: "chips" }, [7, 14, 30, 60, 90, 365].map((d) => h("button", { class: "chip" + (d === S.days ? " on" : ""), onclick: () => setDays(d) }, d === 365 ? "1 yr" : d + "d")),
+        h("input", { id: "days", type: "number", min: "1", max: "3650", value: S.days, class: "tiny", "aria-label": "Number of days", onchange: (e) => setDays(e.target.value) }), h("span", { class: "muted small" }, "days"))),
+      h("div", { class: "kpi" }, h("div", { class: "value" }, usd(up.total)), h("div", { class: "sub" }, `${up.from} to ${up.to}`)),
+      up.items.length ? h("div", { class: "scroll", style: "max-height:300px" }, up.items.map((i) => h("div", { class: "ev" }, h("span", { class: "when" }, i.date.slice(5)), h("span", {}, i.name, i.payer === "other" ? h("span", { class: "pill" }, i.payer_name + " pays") : null), h("span", { class: "num " + (i.payer === "me" ? "neg" : "muted") }, usd(-i.amount))))) : h("p", { class: "muted" }, "Nothing due in this window."),
+      Object.keys(up.by_category).length ? barList(Object.entries(up.by_category).sort((a, b) => b[1] - a[1])) : null),
     h("div", { class: "two" },
-      h("div", { class: "panel" }, h("h3", {}, "Coming up"), o.upcoming.length ? o.upcoming.slice(0, 6).map((s) => h("div", { class: "ev" }, h("span", { class: "when" }, s.next_date.slice(5)), h("span", {}, s.name), h("span", { class: "num neg" }, usd(-s.amount)))) : h("p", { class: "muted" }, "No bills in the next 30 days.")),
-      h("div", { class: "panel" }, h("h3", {}, "Latest movement"), o.events.length ? o.events.slice(0, 6).map(evRow) : h("p", { class: "muted" }, "Link a bank or import a CSV to see movement."))));
+      h("div", { class: "panel" }, h("h3", {}, "Spent this month"), spend.length ? barList(spend.slice(0, 8).map((r) => [r.category, r.spent])) : h("p", { class: "muted" }, "No spending yet this month.")),
+      h("div", { class: "panel" }, h("h3", {}, "Latest movement"), o.events.length ? o.events.slice(0, 7).map(evRow) : h("p", { class: "muted" }, "Link a bank or import a CSV to see movement."))));
 }
 
-async function viewMovement(root) {
-  const ev = await api("/api/events?limit=100");
-  root.append(
-    h("div", { class: "panel" }, h("h3", {}, "Money movement"), ev.length ? ev.map(evRow) : h("p", { class: "muted" }, "Nothing yet. Run a sync after linking an account.")));
+/* ================================ TRANSACTION BROWSER (Money movement + account detail) ================================ */
+async function txBrowser(root, fixed = {}, accounts = null) {
+  const [cats, accts] = await Promise.all([api("/api/categories"), accounts || api("/api/accounts")]);
+  const F = { q: "", account_id: fixed.account_id || "", category: "", direction: "", min_amount: "", max_amount: "", start: "", end: "", sort: "date_desc", offset: 0 };
+  let remember = false;
+  const out = h("div", {}), list = h("div", {}), foot = h("div", { class: "bar" });
+  const rangeBtn = (label, s, e) => h("button", { class: "chip", type: "button", onclick: () => { F.start = s; F.end = e; if ($("#f-start", out)) { $("#f-start", out).value = s; $("#f-end", out).value = e; } F.offset = 0; load(); } }, label);
+  const t = new Date(), ymd = (d) => d.toISOString().slice(0, 10);
+  const bind = (id, key) => ({ id, onchange: (e) => { F[key] = e.target.value; F.offset = 0; load(); } });
+  async function load() {
+    try {
+      const r = await api("/api/transactions?" + qs({ ...F, limit: 50 }));
+      const spend = await api("/api/spending?" + qs({ start: F.start, end: F.end })).catch(() => []);
+      fill(list,
+        h("div", { class: "grid", style: "margin-bottom:12px" }, kpi("Matches", String(r.total), `showing ${r.items.length}`), kpi("Money in", usd(r.sum_in), "", "pos"), kpi("Money out", usd(r.sum_out), "", "neg"), kpi("Net", usd(r.net, true), "", r.net < 0 ? "neg" : "pos")),
+        r.items.length ? h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["Date", "Description", "Account", "Category", "Amount"].map((x, i) => h("th", { class: i === 4 ? "r" : "" }, x)))),
+          h("tbody", {}, r.items.map((tx) => h("tr", {}, h("td", { class: "mono muted" }, tx.date), h("td", {}, tx.name, tx.pending ? h("span", { class: "pill" }, "pending") : null), h("td", { class: "muted small" }, tx.account_name || ""),
+            h("td", {}, h("select", { class: "bare", "aria-label": "Category", onchange: async (e) => { try { const x = await api(`/api/transactions/${encodeURIComponent(tx.id)}/category`, send("PUT", { category: e.target.value, make_rule: remember })); toast(remember ? `Set, and ${x.updated - 1} similar updated` : "Category set"); load(); } catch (err) { fail(err); } } },
+              cats.map((c) => h("option", { value: c.name, selected: c.name === tx.category }, c.name)))),
+            h("td", { class: "num r " + (tx.amount > 0 ? "pos" : "") }, usd(tx.amount, true))))))) : h("p", { class: "muted" }, "Nothing matches these filters."),
+        spend.length && !fixed.account_id ? h("div", { style: "margin-top:14px" }, h("h3", {}, "Spending by category (these dates)"), barList(spend.slice(0, 8).map((x) => [x.category, x.spent]))) : null);
+      fill(foot, h("span", { class: "muted small" }, r.total ? `${F.offset + 1}–${Math.min(F.offset + 50, r.total)} of ${r.total}` : ""),
+        h("div", { class: "chips" }, h("button", { class: "btn sm", disabled: F.offset === 0, onclick: () => { F.offset = Math.max(0, F.offset - 50); load(); } }, "Previous"), h("button", { class: "btn sm", disabled: F.offset + 50 >= r.total, onclick: () => { F.offset += 50; load(); } }, "Next"),
+          h("button", { class: "btn sm", onclick: async () => { const all = await api("/api/transactions?" + qs({ ...F, limit: 500, offset: 0 })); downloadText("transactions.csv", "date,description,account,category,amount\n" + all.items.map((x) => [x.date, x.name, x.account_name || "", x.category, x.amount].map((c) => '"' + String(c).replace(/"/g, '""') + '"').join(",")).join("\n"), "text/csv"); } }, "Export CSV")));
+    } catch (e) { list.replaceChildren(h("p", { class: "neg" }, e.message)); }
+  }
+  add(out, h("div", { class: "panel" },
+    h("div", { class: "filters" }, field("f-q", "Search", "", { placeholder: "e.g. starbucks", oninput: (e) => { clearTimeout(F.t); F.t = setTimeout(() => { F.q = e.target.value; F.offset = 0; load(); }, 250); } }),
+      fixed.account_id ? null : select("f-acct", "Account", [["", "All accounts"], ...accts.map((a) => [a.id, `${a.institution} · ${a.name}`])], "", bind("f-acct", "account_id")),
+      select("f-cat", "Category", [["", "All categories"], ...cats.map((c) => [c.name, c.name])], "", bind("f-cat", "category")),
+      select("f-dir", "Direction", [["", "In and out"], ["out", "Money out"], ["in", "Money in"]], "", bind("f-dir", "direction")),
+      field("f-min", "Min $", "", { type: "number", min: "0", step: "0.01", ...bind("f-min", "min_amount") }), field("f-max", "Max $", "", { type: "number", min: "0", step: "0.01", ...bind("f-max", "max_amount") }),
+      field("f-start", "From", "", { type: "date", ...bind("f-start", "start") }), field("f-end", "To", "", { type: "date", ...bind("f-end", "end") }),
+      select("f-sort", "Sort", [["date_desc", "Newest"], ["date_asc", "Oldest"], ["amount_desc", "Largest"], ["amount_asc", "Smallest"]], "date_desc", bind("f-sort", "sort"))),
+    h("div", { class: "chips", style: "margin-top:10px" }, rangeBtn("This month", ymd(new Date(t.getFullYear(), t.getMonth(), 1)), ymd(t)), rangeBtn("Last 30 days", addDays(ymd(t), -30), ymd(t)), rangeBtn("Last 90 days", addDays(ymd(t), -90), ymd(t)), rangeBtn("This year", `${t.getFullYear()}-01-01`, ymd(t)), rangeBtn("All time", "", ""),
+      h("label", { class: "check" }, h("input", { type: "checkbox", id: "remember", onchange: (e) => (remember = e.target.checked) }), "When I change a category, remember it for similar payments"))),
+    h("div", { class: "panel" }, list, foot));
+  add(root, out);
+  load();
+}
+async function viewMovement(root) { await txBrowser(root); }
+
+/* ================================ ACCOUNTS ================================ */
+async function viewAccounts(root, rerender) {
+  if (S.acct) return accountDetail(root, rerender);
+  const acc = await api("/api/accounts");
+  const groups = {}; for (const a of acc) (groups[a.kind] ||= []).push(a);
+  add(root, 
+    ...Object.entries(groups).map(([k, list]) => h("div", { class: "panel scroll" }, h("div", { class: "bar" }, h("h3", {}, (KIND[k] || [k])[0]), h("span", { class: "num " + (k === "credit" || k === "loan" ? "neg" : "") }, usd(list.reduce((s, a) => s + (a.balance || 0), 0)))),
+      h("table", {}, h("tbody", {}, list.map((a) => h("tr", { class: "click", tabindex: 0, onclick: () => { S.acct = a.id; rerender(); }, onkeydown: (e) => e.key === "Enter" && (S.acct = a.id, rerender()) },
+        h("td", {}, a.name, a.source === "manual" ? h("span", { class: "pill" }, "manual") : null), h("td", { class: "muted" }, a.institution), h("td", { class: "num r" }, usd(a.balance)), h("td", { class: "r muted" }, "›"))))))),
+    h("div", { class: "panel" }, h("h3", {}, "Add an account by hand"), h("p", { class: "muted small" }, "For cash, a card Plaid cannot reach, or anything you want to track yourself. Bind subscriptions and savings to it like any other account."),
+      h("form", { class: "row", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/accounts", send("POST", { name: val("na-name"), institution: val("na-inst") || "Manual", kind: val("na-kind"), balance: num("na-bal") ?? 0, min_balance: num("na-min") })); toast("Added"); rerender(); } catch (err) { fail(err); } } },
+        field("na-name", "Name", "", { required: true }), field("na-inst", "Where it is", ""), select("na-kind", "Type", [["cash", "Cash / bank"], ["credit", "Credit card"], ["investment", "Investment"], ["loan", "Loan"]], "cash"),
+        field("na-bal", "Balance", "", { type: "number", step: "0.01" }), field("na-min", "Warn me below", "", { type: "number", step: "0.01", min: "0" }), h("button", { class: "btn primary", type: "submit" }, "Add account"))));
+}
+async function accountDetail(root, rerender) {
+  let d;
+  try { d = await api("/api/accounts/" + encodeURIComponent(S.acct)); } catch (e) { S.acct = null; return rerender(); }
+  const a = d.account, manual = a.source === "manual";
+  add(root, 
+    h("div", { class: "bar" }, h("button", { class: "btn sm", onclick: () => { S.acct = null; rerender(); } }, "‹ All accounts"), h("span", { class: "muted small" }, `${a.institution} · ${a.kind}${manual ? " · tracked by hand" : " · linked"}`)),
+    d.alerts.length ? h("div", { class: "panel" }, h("div", { class: "alerts" }, d.alerts.map(alertRow))) : null,
+    h("div", { class: "grid" }, kpi(a.name, usd(a.balance), a.updated ? "updated " + ago(a.updated) : ""), kpi("In, last 30 days", usd(d.last_30_days.in), "", "pos"), kpi("Out, last 30 days", usd(d.last_30_days.out), `${d.last_30_days.count} transactions`, "neg")),
+    h("div", { class: "panel" }, h("h3", {}, "Balance history"), spark(d.history.map((x) => ({ balance: x.balance, date: x.ts })), 560, 110, "balance", "date")),
+    h("div", { class: "panel" }, h("h3", {}, "Settings for this account"),
+      h("form", { class: "row", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/accounts/" + encodeURIComponent(a.id), send("PUT", { min_balance: num("ad-min") ?? -1, ...(manual ? { balance: num("ad-bal"), name: val("ad-name") } : {}) })); toast("Saved"); rerender(); } catch (err) { fail(err); } } },
+        manual ? field("ad-name", "Name", a.name) : null, manual ? field("ad-bal", "Balance", a.balance, { type: "number", step: "0.01" }) : null,
+        field("ad-min", "Warn me below ($)", a.min_balance ?? "", { type: "number", step: "0.01", min: "0", placeholder: "no warning" }), h("button", { class: "btn primary", type: "submit" }, "Save"),
+        manual ? h("button", { class: "btn danger", type: "button", onclick: sure(null, "Sure? Deletes its data", async () => { try { await api("/api/accounts/" + encodeURIComponent(a.id), { method: "DELETE" }); S.acct = null; rerender(); } catch (err) { fail(err); } }) }, "Delete account") : null),
+      manual ? null : h("p", { class: "muted small" }, "Balance and type come from your bank. You can still set a warning level.")),
+    d.subscriptions.length ? h("div", { class: "panel" }, h("h3", {}, "Bills paid from this account"), d.subscriptions.map((s) => h("div", { class: "ev", style: "grid-template-columns:auto 1fr auto" }, h("span", { class: "when" }, s.next_due?.slice(5) || ""), h("span", {}, s.name, " ", h("span", { class: "muted small" }, s.label)), h("span", { class: "num neg" }, usd(-s.amount))))) : null,
+    manual ? h("div", { class: "panel" }, h("h3", {}, "Add a transaction"),
+      h("form", { class: "row", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/transactions", send("POST", { account_id: a.id, date: val("at-date"), name: val("at-name"), amount: (val("at-dir") === "out" ? -1 : 1) * Math.abs(num("at-amt")) })); toast("Added"); rerender(); } catch (err) { fail(err); } } },
+        field("at-date", "Date", today(), { type: "date", required: true }), field("at-name", "Description", "", { required: true }), select("at-dir", "Direction", [["out", "Money out"], ["in", "Money in"]], "out"), field("at-amt", "Amount", "", { type: "number", step: "0.01", min: "0", required: true }), h("button", { class: "btn primary", type: "submit" }, "Add"))) : null);
+  await txBrowser(root, { account_id: a.id }, [a]);
 }
 
-function subForm(existing, done) {
-  const s = existing || { name: "", amount: "", cycle: "monthly", next_date: today(), category: "", notes: "" };
-  const f = (id, label, attrs) => h("label", {}, label, h("input", { id: "sf-" + id, value: s[id] ?? "", ...attrs }));
-  const cyc = h("select", { id: "sf-cycle" }, CYCLES.map((c) => h("option", { value: c, selected: c === s.cycle }, c)));
-  return h("form", { class: "row", onsubmit: async (e) => {
-    e.preventDefault(); const v = (id) => $("#sf-" + id).value;
-    const body = { name: v("name"), amount: parseFloat(v("amount")), cycle: v("cycle"), next_date: v("next_date"), category: v("category"), notes: v("notes"), active: existing ? !!existing.active : true };
-    try { await api(existing ? `/api/subscriptions/${existing.id}` : "/api/subscriptions", { method: existing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); done(); } catch (err) { toast(err.message); }
-  } }, f("name", "Name", { required: true }), f("amount", "Amount", { type: "number", step: "0.01", min: "0", required: true }), h("label", {}, "Repeats", cyc),
-    f("next_date", "Next payment", { type: "date", required: true }), f("category", "Category"), h("button", { class: "btn primary", type: "submit" }, existing ? "Save" : "Add subscription"));
-}
-
+/* ================================ SUBSCRIPTIONS ================================ */
+const PRESETS = [["daily", "Every day"], ["weekly", "Every week"], ["biweekly", "Every 2 weeks"], ["fourweekly", "Every 4 weeks"], ["monthly", "Every month"], ["bimonthly", "Every 2 months"], ["quarterly", "Every 3 months"], ["semiannual", "Every 6 months"], ["yearly", "Every year"], ["biennial", "Every 2 years"], ["custom", "Custom…"]];
 async function viewSubs(root, rerender) {
-  const d = await api("/api/subscriptions"), cats = {};
-  for (const s of d.items) if (s.active) cats[s.category || "Other"] = (cats[s.category || "Other"] || 0) + s.monthly;
-  const top = Math.max(...Object.values(cats), 1);
-  let editing = null;
-  const table = h("div", { class: "panel scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["Name", "Category", "Repeats", "Next", "Amount", "Per month", ""].map((x, i) => h("th", { class: i > 3 ? "r" : "" }, x)))),
-    h("tbody", {}, d.items.map((s) => h("tr", { style: s.active ? "" : "opacity:.5" }, h("td", {}, s.name, " ", s.source === "plaid" ? h("span", { class: "pill t" }, "auto") : null, s.active ? null : h("span", { class: "pill" }, "paused")),
-      h("td", { class: "muted" }, s.category), h("td", {}, s.cycle), h("td", { class: "mono" }, s.next_date), h("td", { class: "num r" }, usd(s.amount)), h("td", { class: "num r" }, usd(s.monthly)),
-      h("td", { class: "r", style: "white-space:nowrap" },
-        h("button", { class: "btn sm", onclick: async () => { await api(`/api/subscriptions/${s.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...s, active: !s.active }) }); rerender(); } }, s.active ? "Pause" : "Resume"), " ",
-        h("button", { class: "btn sm danger", onclick: async (ev) => { if (s.pendingDelete) { await api(`/api/subscriptions/${s.id}`, { method: "DELETE" }); rerender(); } else { s.pendingDelete = true; ev.target.textContent = "Sure?"; } } }, "Delete")))))));
-  const download = async () => {
-    if (S.demo) return toast("Download is disabled in the sample preview");
-    const r = await fetch(`/g/${S.name}/subscriptions.ics`, { headers: { Authorization: "Bearer " + S.token } });
-    const a = h("a", { href: URL.createObjectURL(await r.blob()), download: "goblin-subscriptions.ics" }); document.body.append(a); a.click(); a.remove();
+  const [d, sugs, accts, cats, alerts] = await Promise.all([api("/api/subscriptions"), api("/api/suggestions"), api("/api/accounts"), api("/api/categories"), api("/api/alerts")]);
+  const acctOpts = [["", "None (no account)"], ...accts.map((a) => [a.id, `${a.institution} · ${a.name}${a.source === "manual" ? " (manual)" : ""}`])];
+  const e = S.edit, label = (s) => PRESETS.find(([k]) => k === s.label) ? s.label : "custom";
+  const form = () => {
+    const f = h("form", { class: "subform", onsubmit: async (ev) => {
+      ev.preventDefault();
+      const preset = val("sf-cycle"), payer = val("sf-payer");
+      const body = { name: val("sf-name"), amount: num("sf-amount"), next_date: val("sf-next"), category: val("sf-cat"), account_id: val("sf-acct") || null, payment_method: val("sf-pm"), payer, payer_name: payer === "other" ? val("sf-pname") : "",
+        notify_days: parseInt(val("sf-notify")) || 0, end_date: val("sf-end") || null, url: val("sf-url"), notes: val("sf-notes"), active: e ? !!e.active : true, ...(preset === "custom" ? { every: parseInt(val("sf-every")), unit: val("sf-unit") } : { cycle: preset }) };
+      try { await api(e ? `/api/subscriptions/${e.id}` : "/api/subscriptions", send(e ? "PUT" : "POST", body)); S.edit = null; toast(e ? "Saved" : "Added"); rerender(); } catch (err) { fail(err); }
+    } },
+      field("sf-name", "Name", e?.name, { required: true }), field("sf-amount", "Amount", e?.amount, { type: "number", step: "0.01", min: "0", required: true }),
+      select("sf-cycle", "Repeats", PRESETS, e ? label(e) : "monthly", { onchange: (ev) => { $(".custom", f).hidden = ev.target.value !== "custom"; } }),
+      h("div", { class: "custom", hidden: !(e && label(e) === "custom") }, field("sf-every", "Every", e?.every ?? 1, { type: "number", min: "1", max: "1000" }), select("sf-unit", "Unit", [["day", "days"], ["week", "weeks"], ["month", "months"], ["year", "years"]], e?.unit ?? "month")),
+      field("sf-next", "Next payment", e?.next_date ?? today(), { type: "date", required: true }), select("sf-cat", "Category", cats.map((c) => [c.name, c.name]), e?.category ?? "Subscriptions"),
+      select("sf-payer", "Who pays", [["me", "I pay"], ["other", "Someone else pays"]], e?.payer ?? "me", { onchange: (ev) => { $(".pname", f).hidden = ev.target.value !== "other"; $("#sf-pname", f).required = ev.target.value === "other"; } }),
+      h("div", { class: "pname", hidden: (e?.payer ?? "me") !== "other" }, field("sf-pname", "Their name", e?.payer_name, { required: (e?.payer ?? "me") === "other", placeholder: "who pays?" })),
+      select("sf-acct", "Paid from (account)", acctOpts, e?.account_id ?? ""), field("sf-pm", "Or how it's paid", e?.payment_method, { placeholder: "cash, Dad's card…" }),
+      field("sf-notify", "Remind me (days before)", e?.notify_days ?? 3, { type: "number", min: "0", max: "60" }), field("sf-end", "Ends (optional)", e?.end_date ?? "", { type: "date" }),
+      field("sf-url", "Website", e?.url), field("sf-notes", "Notes", e?.notes),
+      h("div", { class: "formbtns" }, h("button", { class: "btn primary", type: "submit" }, e ? "Save changes" : "Add subscription"), e ? h("button", { class: "btn", type: "button", onclick: () => { S.edit = null; rerender(); } }, "Cancel") : null));
+    return f;
   };
-  root.append(
-    h("div", { class: "grid" }, kpi("Monthly", usd(d.monthly_total), "paused ones excluded"), kpi("Yearly", usd(d.yearly_total), `${d.items.filter((s) => s.active).length} active subscriptions`)),
-    h("div", { class: "panel" }, h("h3", {}, "Add a subscription"), subForm(null, () => { toast("Added"); rerender(); })),
-    h("div", { class: "panel" }, h("h3", {}, "By category, per month"), h("div", { style: "display:grid;gap:6px;margin-top:8px" }, Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([c, v]) =>
-      h("div", { style: "display:grid;grid-template-columns:110px 1fr 90px;gap:10px;align-items:center" }, h("span", { class: "small muted" }, c), h("div", { style: `height:10px;border-radius:5px;background:var(--teal);width:${(v / top) * 100}%` }), h("span", { class: "num small", style: "text-align:right" }, usd(v)))))),
-    table,
-    h("div", { class: "panel" }, h("h3", {}, "Put them on your calendar"), h("p", { class: "muted small" }, "Each subscription becomes a repeating all-day event titled with its amount. Push them to your CalDAV calendar (set it up in Settings), or download a file to import into any calendar app."),
-      h("p", { style: "margin:12px 0 0;display:flex;gap:8px;flex-wrap:wrap" }, h("button", { class: "btn", onclick: download }, "Download .ics"), h("button", { class: "btn primary", onclick: async (e) => { try { const r = await api("/api/subscriptions/export/caldav", { method: "POST" }); toast(`Pushed ${r.pushed} to CalDAV` + (r.failed.length ? `, ${r.failed.length} failed` : "")); } catch (err) { toast(err.message); } } }, "Push to CalDAV now"))));
+  const late = alerts.filter((a) => a.kind === "missed_payment");
+  add(root, 
+    late.length ? h("div", { class: "panel" }, h("h3", {}, "Payments that did not show up"), h("div", { class: "alerts" }, late.map(alertRow))) : null,
+    h("div", { class: "grid" }, kpi("Monthly", usd(d.monthly_total), "what you pay, paused and others' bills excluded"), kpi("Yearly", usd(d.yearly_total), `${d.items.filter((s) => s.active && s.payer === "me").length} active`)),
+    sugs.length ? h("div", { class: "panel" }, h("h3", {}, "Payments that look like subscriptions"), h("p", { class: "muted small" }, "Found in your transactions: same payee, steady amount, steady timing. Name it, check the interval and account, then add it."),
+      h("div", { class: "cards" }, sugs.slice(0, 8).map((s, i) => h("div", { class: "card" },
+        h("div", { class: "bar" }, h("b", {}, s.name), h("span", { class: "num" }, usd(s.amount))),
+        h("div", { class: "muted small" }, `${s.label}${s.occurrences ? ` · seen ${s.occurrences}×` : ""} · next ${s.next_date}${s.source === "agent" ? " · suggested by the agent" : ""}`), s.reason ? h("div", { class: "muted small" }, s.reason) : null,
+        h("div", { class: "filters", style: "margin:8px 0" }, field(`sg-n${i}`, "Name", s.name), select(`sg-a${i}`, "Account", acctOpts, s.account_id ?? "")),
+        h("div", { class: "chips" }, h("button", { class: "btn sm primary", onclick: async () => { try { await api("/api/suggestions/accept", send("POST", { key: s.key, name: val(`sg-n${i}`), account_id: val(`sg-a${i}`) || null })); toast("Added"); rerender(); } catch (err) { fail(err); } } }, "Add"),
+          h("button", { class: "btn sm", onclick: async () => { await api("/api/suggestions/dismiss", send("POST", { key: s.key })); rerender(); } }, "Not a subscription")))))) : null,
+    h("div", { class: "panel" }, h("h3", {}, e ? "Edit subscription" : "Add a subscription"), form()),
+    h("div", { class: "panel scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["Name", "Repeats", "Next", "Paid from", "Amount", "Per month", ""].map((x, i) => h("th", { class: i > 3 ? "r" : "" }, x)))),
+      h("tbody", {}, d.items.map((s) => h("tr", { style: s.active ? "" : "opacity:.5" },
+        h("td", {}, s.name, " ", s.source === "plaid" ? h("span", { class: "pill t" }, "auto") : null, s.active ? null : h("span", { class: "pill" }, "paused"), s.payer === "other" ? h("span", { class: "pill b" }, s.payer_name + " pays") : null, h("div", { class: "muted small" }, s.category)),
+        h("td", {}, s.label), h("td", { class: "mono" }, s.next_due || "ended"), h("td", { class: "small" }, s.account_name ? `${s.account_institution} · ${s.account_name}` : s.payment_method || h("span", { class: "muted" }, "not set")),
+        h("td", { class: "num r" }, usd(s.amount)), h("td", { class: "num r" }, s.monthly ? usd(s.monthly) : "–"),
+        h("td", { class: "r", style: "white-space:nowrap" }, h("button", { class: "btn sm", onclick: () => { S.edit = s; rerender(); window.scrollTo(0, 0); } }, "Edit"), " ",
+          h("button", { class: "btn sm", onclick: async () => { await api(`/api/subscriptions/${s.id}`, send("PUT", { ...s, cycle: undefined, every: s.every, unit: s.unit, active: !s.active })); rerender(); } }, s.active ? "Pause" : "Resume"), " ",
+          h("button", { class: "btn sm danger", onclick: sure(null, "Sure?", async () => { await api(`/api/subscriptions/${s.id}`, { method: "DELETE" }); rerender(); }) }, "Delete"))))))),
+    Object.keys(d.by_category).length ? h("div", { class: "panel" }, h("h3", {}, "By category, per month"), barList(Object.entries(d.by_category).sort((a, b) => b[1] - a[1]))) : null,
+    h("div", { class: "panel" }, h("h3", {}, "Put them on your calendar"), h("p", { class: "muted small" }, "Each subscription becomes a repeating all-day event titled with its amount. Set up CalDAV in Settings to push them straight in."),
+      h("div", { class: "chips" }, h("button", { class: "btn", onclick: async () => { if (S.demo) return toast("Sample preview: download is off"); const r = await fetch(`/g/${S.name}/subscriptions.ics`, { headers: { Authorization: "Bearer " + S.token } }); downloadText("goblin-subscriptions.ics", await r.text(), "text/calendar"); } }, "Download .ics"),
+        h("button", { class: "btn primary", onclick: async () => { try { const r = await api("/api/subscriptions/export/caldav", { method: "POST" }); toast(`Pushed ${r.pushed} to CalDAV` + (r.failed.length ? `, ${r.failed.length} failed` : "")); } catch (err) { fail(err); } } }, "Push to CalDAV now"))));
 }
 
-async function viewAccounts(root) {
-  const acc = await api("/api/accounts"), tx = await api("/api/transactions?limit=60");
-  const names = Object.fromEntries(acc.map((a) => [a.id, a.name]));
-  root.append(h("div", { class: "panel scroll" }, h("h3", {}, "Accounts"), h("table", {}, h("thead", {}, h("tr", {}, ["Institution", "Account", "Type", "Balance"].map((x, i) => h("th", { class: i === 3 ? "r" : "" }, x)))),
-    h("tbody", {}, acc.map((a) => h("tr", {}, h("td", {}, a.institution), h("td", {}, a.name), h("td", {}, h("span", { class: "pill " + (a.kind === "credit" || a.kind === "loan" ? "r" : a.kind === "investment" ? "b" : "t") }, (KIND[a.kind] || [a.kind])[0])), h("td", { class: "num r" }, usd(a.balance))))))),
-    h("div", { class: "panel scroll" }, h("h3", {}, "Recent transactions"), tx.length ? h("table", {}, h("tbody", {}, tx.map((t) => h("tr", {}, h("td", { class: "mono muted" }, t.date), h("td", {}, t.name), h("td", { class: "muted small" }, names[t.account_id] || ""), h("td", { class: "num r " + (t.amount > 0 ? "pos" : "") }, usd(t.amount, true)))))) : h("p", { class: "muted" }, "No transactions yet.")));
+/* ================================ SAVINGS ================================ */
+const SK = [["savings", "Savings account"], ["cd", "Certificate of deposit"], ["money_market", "Money market"], ["bond", "Bond / I-bond"], ["hsa", "HSA"], ["529", "529 plan"], ["cash", "Cash"], ["other", "Other"]];
+async function viewSavings(root, rerender) {
+  const [s, accts] = await Promise.all([api("/api/savings"), api("/api/accounts")]);
+  const e = S.edit?.sv;
+  const ed = e ? s.items.find((i) => i.id === e) : null;
+  add(root, 
+    s.maturing_soon.length ? h("div", { class: "panel" }, h("div", { class: "alerts" }, s.maturing_soon.map((i) => alertRow({ severity: "info", title: `${i.name} matures in ${i.days_to_maturity} days`, detail: `about ${usd(i.value_at_maturity)}` })))) : null,
+    h("div", { class: "grid" }, kpi("Total saved", usd(s.total), `${s.items.length} items`), kpi("Average APY", s.weighted_apy.toFixed(2) + "%", "weighted by balance"), kpi("Interest per year", usd(s.yearly_interest), "at today's rates")),
+    s.items.length ? h("div", { class: "cards" }, s.items.map((i) => h("div", { class: "card" },
+      h("div", { class: "bar" }, h("b", {}, i.name), h("span", { class: "num" }, usd(i.balance))),
+      h("div", { class: "muted small" }, `${(SK.find(([k]) => k === i.kind) || [0, i.kind])[1]}${i.institution ? " · " + i.institution : ""} · ${i.apy}% APY${i.linked ? " · linked to an account" : ""}`),
+      i.maturity ? h("div", { class: "small", style: "margin-top:6px" }, i.days_to_maturity >= 0 ? `Matures ${i.maturity} (${i.days_to_maturity} days) → ${usd(i.value_at_maturity)}` : `Matured ${i.maturity}`) : null,
+      i.goal ? h("div", { style: "margin-top:8px" }, h("div", { class: "small muted" }, `Goal ${usd(i.goal)} · ${Math.round(i.goal_progress * 100)}%`), bar(i.goal_progress)) : null,
+      h("div", { class: "chips", style: "margin-top:10px" }, h("button", { class: "btn sm", onclick: () => { S.edit = { sv: i.id }; rerender(); } }, "Edit"), h("button", { class: "btn sm danger", onclick: sure(null, "Sure?", async () => { await api(`/api/savings/${i.id}`, { method: "DELETE" }); rerender(); }) }, "Delete"))))) : h("div", { class: "panel" }, h("p", { class: "muted" }, "Nothing here yet. Add CDs, savings and other accounts below.")),
+    h("div", { class: "panel" }, h("h3", {}, ed ? "Edit" : "Add a savings item"), h("p", { class: "muted small" }, "Link it to a bank account to follow that account's balance, or type a balance for things Plaid cannot see (a CD, a bond, a savings jar)."),
+      h("form", { class: "subform", onsubmit: async (ev) => { ev.preventDefault(); const body = { name: val("sv-name"), kind: val("sv-kind"), institution: val("sv-inst"), balance: num("sv-bal") ?? 0, apy: num("sv-apy") ?? 0, opened: val("sv-open") || null, maturity: val("sv-mat") || null, term_months: parseInt(val("sv-term")) || null, account_id: val("sv-acct") || null, goal: num("sv-goal"), notes: val("sv-notes"), active: true };
+        try { await api(ed ? `/api/savings/${ed.id}` : "/api/savings", send(ed ? "PUT" : "POST", body)); S.edit = null; toast("Saved"); rerender(); } catch (err) { fail(err); } } },
+        field("sv-name", "Name", ed?.name, { required: true }), select("sv-kind", "Type", SK, ed?.kind ?? "savings"), field("sv-inst", "Institution", ed?.institution), field("sv-bal", "Balance", ed?.balance, { type: "number", step: "0.01", min: "0" }),
+        field("sv-apy", "APY %", ed?.apy ?? "", { type: "number", step: "0.001", min: "0", max: "100" }), field("sv-open", "Opened", ed?.opened ?? "", { type: "date" }), field("sv-mat", "Matures (CDs)", ed?.maturity ?? "", { type: "date" }), field("sv-term", "Term (months)", ed?.term_months ?? "", { type: "number", min: "1" }),
+        select("sv-acct", "Follow account", [["", "None, I type the balance"], ...accts.map((a) => [a.id, `${a.institution} · ${a.name}`])], ed?.account_id ?? ""), field("sv-goal", "Goal ($)", ed?.goal ?? "", { type: "number", min: "0", step: "0.01" }), field("sv-notes", "Notes", ed?.notes),
+        h("div", { class: "formbtns" }, h("button", { class: "btn primary", type: "submit" }, ed ? "Save" : "Add"), ed ? h("button", { class: "btn", type: "button", onclick: () => { S.edit = null; rerender(); } }, "Cancel") : null))));
 }
 
+/* ================================ PLANNER ================================ */
+async function viewPlanner(root, rerender) {
+  const [notes, bud, cats] = await Promise.all([api("/api/notes"), api("/api/budgets?month=" + (S.month || "")), api("/api/categories")]);
+  const cur = notes.find((n) => n.id === S.note) || null;
+  const ask = h("input", { id: "pl-ask", placeholder: "e.g. Draft a plan to save $500 a month using my real spending", style: "flex:1;min-width:0" });
+  add(root, 
+    h("div", { class: "panel" }, h("h3", {}, "Ask the agent to write a plan"), h("p", { class: "muted small" }, "It reads your accounts, bills and spending, does the math, and saves the result as a note here marked as written by the agent."),
+      h("div", { class: "url" }, ask, h("button", { class: "btn primary", id: "pl-go", onclick: async (ev) => {
+        if (!val("pl-ask")) return; ev.target.disabled = true; ev.target.textContent = "Thinking…";
+        try { const r = await api("/api/agent/chat", send("POST", { provider_id: S.provider, messages: [{ role: "user", content: `Look at my real data with your tools, then save a note in the Planner (use write_note) for this request: ${val("pl-ask")}. Keep the note practical and show the numbers.` }] })); toast(r.reply.slice(0, 120) || "Done"); rerender(); } catch (err) { fail(err); ev.target.disabled = false; ev.target.textContent = "Write it"; }
+      } }, "Write it"))),
+    h("div", { class: "split" },
+      h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Notes"), h("button", { class: "btn sm", onclick: () => { S.note = "new"; rerender(); } }, "New note")),
+        notes.length ? notes.map((n) => h("div", { class: "ev note" + (n.id === S.note ? " on" : ""), style: "grid-template-columns:1fr auto", tabindex: 0, onclick: () => { S.note = n.id; rerender(); } }, h("span", {}, n.pinned ? "★ " : "", n.title), h("span", { class: "pill " + (n.author === "agent" ? "b" : "") }, n.author))) : h("p", { class: "muted" }, "No notes yet.")),
+      h("div", { class: "panel" }, S.note === "new" || cur ? h("form", { onsubmit: async (e) => { e.preventDefault(); const body = { title: val("nt-title"), body: $("#nt-body").value, pinned: $("#nt-pin").checked }; try { const r = await api(cur ? `/api/notes/${cur.id}` : "/api/notes", send(cur ? "PUT" : "POST", body)); S.note = r.id; toast("Saved"); rerender(); } catch (err) { fail(err); } }, style: "display:grid;gap:10px" },
+        field("nt-title", "Title", cur?.title ?? "", { required: true }), h("label", {}, "Note", h("textarea", { id: "nt-body", rows: 14 }, cur?.body ?? "")), h("label", { class: "check" }, h("input", { type: "checkbox", id: "nt-pin", checked: !!cur?.pinned }), "Pin to top"),
+        h("div", { class: "chips" }, h("button", { class: "btn primary", type: "submit" }, "Save"), cur ? h("button", { class: "btn danger", type: "button", onclick: sure(null, "Sure?", async () => { await api(`/api/notes/${cur.id}`, { method: "DELETE" }); S.note = null; rerender(); }) }, "Delete") : null,
+          cur?.author === "agent" ? h("span", { class: "muted small" }, "Written by the agent. Edit freely.") : null)) : h("p", { class: "muted" }, "Pick a note, or start a new one. Write your own, or have the agent draft one above."))),
+    h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Budget, " + bud.month), h("input", { type: "month", id: "bm", value: bud.month, onchange: (e) => { S.month = e.target.value; rerender(); }, class: "tiny", style: "width:auto" })),
+      bud.items.length ? bud.items.map((b) => h("div", { class: "ev", style: "grid-template-columns:110px 1fr auto auto" }, h("span", {}, b.category), h("div", {}, bar(b.pct || 0, b.pct > 1 ? "var(--red)" : b.pct > .85 ? "var(--brass)" : "var(--teal)")),
+        h("span", { class: "num small " + (b.left < 0 ? "neg" : "") }, `${usd(b.spent)} of ${usd(b.budget)}`), h("button", { class: "btn sm", onclick: async () => { await api(`/api/budgets/${encodeURIComponent(b.category)}`, { method: "DELETE" }); rerender(); } }, "×"))) : h("p", { class: "muted" }, "No budgets yet."),
+      h("form", { class: "row", style: "margin-top:12px", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/budgets", send("PUT", { category: val("bg-cat"), monthly_amount: num("bg-amt") })); rerender(); } catch (err) { fail(err); } } },
+        select("bg-cat", "Category", cats.filter((c) => c.kind === "expense").map((c) => [c.name, c.name]), "Food"), field("bg-amt", "Monthly budget ($)", "", { type: "number", step: "0.01", min: "0", required: true }), h("button", { class: "btn primary", type: "submit" }, "Set budget"))));
+}
+
+/* ================================ AGENT ================================ */
+const PROMPTS = ["How much will I pay in bills over the next 60 days?", "If I spend $1,200 on the 15th, what is my lowest checking balance this month?", "Which payments look recurring but are not in my subscriptions?", "What did I spend on food and gas last month, and how does that compare to my budget?", "Which CD matures next and what will it be worth?", "Does anything on my calendar cost money in the next two weeks?"];
+async function viewAgent(root, rerender) {
+  const pv = await api("/api/agent/providers");
+  const cur = pv.items.find((p) => p.id === S.provider) || pv.items.find((p) => String(p.id) === String(pv.default)) || pv.items[0];
+  if (cur) S.provider = cur.id;
+  const log = h("div", { class: "chat" }, S.chat.length ? S.chat.map(bubble) : h("p", { class: "muted" }, "Ask about your payments, balances or plans. It looks things up with tools, does the math exactly, and can save notes or suggest subscriptions for you to approve. It cannot move money."));
+  const input = h("textarea", { id: "ag-in", rows: 2, placeholder: "Ask anything about your money…", onkeydown: (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(); } } });
+  async function go(text) {
+    const q = text || input.value.trim(); if (!q) return;
+    S.chat.push({ role: "user", content: q }); input.value = ""; log.replaceChildren(...S.chat.map(bubble), h("div", { class: "bubble agent muted" }, "Thinking…")); log.scrollTop = log.scrollHeight;
+    try { const r = await api("/api/agent/chat", send("POST", { provider_id: S.provider, messages: S.chat.map(({ role, content }) => ({ role, content })) })); S.chat.push({ role: "assistant", content: r.reply || "(no answer)", trace: r.trace, provider: r.provider }); }
+    catch (e) { S.chat.push({ role: "assistant", content: e.message, error: true }); }
+    log.replaceChildren(...S.chat.map(bubble)); log.scrollTop = log.scrollHeight;
+  }
+  add(root, 
+    !pv.items.length ? h("div", { class: "panel" }, h("h3", {}, "Set up a model first"), h("p", { class: "muted" }, "Add a local model (Ollama, LM Studio, llama.cpp) or a cloud one in Settings, then come back."), h("button", { class: "btn primary", onclick: () => { S.tab = "settings"; S.settingsTab = "models"; render(); } }, "Open model settings")) : null,
+    h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Ask Goblin"),
+      pv.items.length ? h("div", { class: "chips" }, h("select", { class: "bare", "aria-label": "Model", onchange: (e) => { S.provider = +e.target.value; rerender(); } }, pv.items.map((p) => h("option", { value: p.id, selected: p.id === S.provider }, `${p.name} · ${p.model}`))),
+        cur ? h("span", { class: "pill " + (cur.local ? "t" : "r") }, cur.local ? "on your machine" : cur.allow_cloud ? "cloud" : "cloud, blocked") : null, h("button", { class: "btn sm", onclick: () => { S.chat = []; rerender(); } }, "Clear")) : null),
+      cur && !cur.local ? h("p", { class: "banner" }, cur.allow_cloud ? "This model runs in the cloud. Your numbers are sent to it when you ask." : "This model is in the cloud and is blocked until you tick 'allow cloud' in Settings > Models.") : null,
+      log, h("div", { class: "chips", style: "margin:10px 0" }, PROMPTS.map((p) => h("button", { class: "chip", onclick: () => go(p) }, p))),
+      h("div", { class: "url" }, input, h("button", { class: "btn primary", onclick: () => go() }, "Send"))));
+  log.scrollTop = log.scrollHeight;
+}
+function bubble(m) {
+  return h("div", { class: "bubble " + (m.role === "user" ? "me" : "agent") + (m.error ? " err" : "") }, h("div", { style: "white-space:pre-wrap" }, m.content),
+    m.trace?.length ? h("details", { class: "trace" }, h("summary", {}, `Looked at: ${[...new Set(m.trace.map((t) => t.tool))].join(", ")}`), m.trace.map((t) => h("div", { class: "small mono muted" }, `${t.ok ? "✓" : "✗"} ${t.tool}(${JSON.stringify(t.args)})`))) : null);
+}
+
+/* ================================ ROBINHOOD ================================ */
 function portfolio(title, badge, d) {
   if (!d || d.error) return h("div", { class: "panel" }, h("h3", {}, title), h("p", { class: "muted" }, d?.error || "Not configured."));
   const eq = d.balances && (d.balances.equity ?? d.balances.net_transfers);
-  return h("div", { class: "panel scroll" }, h("div", { class: "bar" }, h("h3", {}, title), h("span", { class: "pill b" }, badge)),
-    h("div", { class: "kpi" }, h("div", { class: "value" }, usd(eq == null ? null : Number(eq))), h("div", { class: "sub" }, `source ${d.source || "?"} · as of ${d.as_of ? ago(d.as_of) : "unknown"}`)),
+  return h("div", { class: "panel scroll" }, h("div", { class: "bar" }, h("h3", {}, title), h("span", { class: "pill b" }, badge)), h("div", { class: "kpi" }, h("div", { class: "value" }, usd(eq == null ? null : Number(eq))), h("div", { class: "sub" }, `source ${d.source || "?"} · as of ${d.as_of ? ago(d.as_of) : "unknown"}`)),
     d.errors ? h("p", { class: "neg small" }, "Partial data: " + d.errors.join(", ")) : null,
-    Array.isArray(d.positions) && d.positions.length ? h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Symbol"), h("th", { class: "r" }, "Shares"), h("th", { class: "r" }, "Cost"))), h("tbody", {}, d.positions.map((p) => h("tr", {}, h("td", { class: "mono" }, p.symbol), h("td", { class: "num r" }, p.quantity), h("td", { class: "num r" }, usd(p.net_cost)))))) : h("p", { class: "muted small" }, "No positions reported."));
+    Array.isArray(d.positions) && d.positions.length ? h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Symbol"), h("th", { class: "r" }, "Shares"), h("th", { class: "r" }, "Value / cost"))), h("tbody", {}, d.positions.map((p) => h("tr", {}, h("td", { class: "mono" }, p.symbol), h("td", { class: "num r" }, p.quantity), h("td", { class: "num r" }, usd(p.equity ?? p.net_cost)))))) : h("p", { class: "muted small" }, "No positions reported."));
 }
 async function viewRobinhood(root) {
   const [m, a] = await Promise.all([api("/robinhood/main").catch((e) => ({ error: e.message })), api("/robinhood/agent").catch((e) => ({ error: e.message }))]);
-  root.append(h("div", { class: "two" }, portfolio("Main account", "read-only", m), portfolio("Agent account", "read-only", a)),
-    h("p", { class: "muted small" }, "Main comes from live data when that connector is on, otherwise your latest CSV import. Nothing on this page can place a trade."));
+  add(root, h("div", { class: "two" }, portfolio("Main account", "read-only", m), portfolio("Agent account", "read-only", a)), h("p", { class: "muted small" }, "Choose where the main account's data comes from under Settings > Robinhood. Nothing on this page can place a trade."));
 }
 
-async function viewConnect(root) {
-    const dis = S.demo;
-  const st = await api("/api/status").catch(() => ({ imports: [] }));
-  const stale = (d) => Math.round((Date.now() - new Date(d + "T00:00:00Z")) / 864e5);
-  root.append(
-    h("div", { class: "panel" }, h("h3", {}, "Banks, cards, savings and IRA (Plaid)"), h("p", { class: "muted small" }, "Huntington, Discover, Axos and Capital One link through Plaid. Tokens are encrypted in your own container; the gateway never sees them."),
-      h("button", { class: "btn primary", disabled: dis, onclick: async () => {
-        try {
-          const { link_token } = await api("/plaid/link-token", { method: "POST" });
-          await new Promise((ok, no) => { const s = document.createElement("script"); s.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js"; s.onload = ok; s.onerror = no; document.head.append(s); });
-          Plaid.create({ token: link_token, onSuccess: async (pt, meta) => { const r = await api("/plaid/exchange", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ public_token: pt, institution: meta.institution?.name || "" }) }); toast(`Linked. ${r.sync.added} transactions pulled.`); } }).open();
-        } catch (e) { toast(e.message); }
-      } }, "Link an account"), " ", h("button", { class: "btn", disabled: dis, onclick: async () => { try { await api("/sync", { method: "POST" }); toast("Synced"); } catch (e) { toast(e.message); } } }, "Sync now")),
-    h("div", { class: "panel" }, h("h3", {}, "Cash App, PayPal, Venmo by CSV"), h("p", { class: "muted small" }, "Cash App has no Plaid support, so export its CSV and import it here. Use the same route for PayPal or Venmo if Plaid cannot link them. The format is detected automatically, and re-importing never double counts."),
-      st.imports.length ? h("div", { style: "display:grid;gap:4px;margin:8px 0" }, st.imports.map((i) => { const d = stale(i.last_transaction || "1970-01-01"); return h("div", { class: "small" }, h("b", {}, i.provider), ` · ${i.transactions} transactions · latest ${i.last_transaction} `, h("span", { class: "pill " + (d > 35 ? "r" : "t") }, d > 35 ? `${d} days old, export a new one` : "up to date")); })) : null,
-      h("p", { class: "muted small" }, "Faster: drop the CSV into ", h("code", { class: "mono" }, "data/<you>/imports/"), " on the server (or sync that folder from your phone). It is picked up on the next sync and then moved to ", h("code", { class: "mono" }, "done/"), "."),
-      h("input", { type: "file", id: "csvfile", accept: ".csv,text/csv", disabled: dis }), " ", h("button", { class: "btn", disabled: dis, onclick: async () => {
-        const f = $("#csvfile").files[0]; if (!f) return toast("Choose a CSV first");
-        try { const r = await api("/import/csv", { method: "POST", headers: { "Content-Type": "text/csv" }, body: await f.text() }); toast(`${r.provider}: ${r.added} new of ${r.rows} rows`); } catch (e) { toast(e.message); }
-      } }, "Import")),
-    h("div", { class: "panel" }, h("h3", {}, "Robinhood"), h("p", { class: "muted small" }, "Set up the agent account, the CSV upload and which source feeds your main account under Settings.")),
-    dis ? h("p", { class: "muted small" }, "Buttons are disabled because this preview runs on sample data.") : null);
+/* ================================ SETTINGS (tabs) ================================ */
+const STABS = [["connect", "Connect & import"], ["robinhood", "Robinhood"], ["calendar", "Calendar"], ["models", "Models"], ["categories", "Categories"], ["sharing", "Sharing"]];
+async function viewSettings(root, rerender) {
+  add(root, h("div", { class: "tabs", role: "tablist" }, STABS.map(([id, t]) => h("button", { role: "tab", "aria-selected": id === S.settingsTab, class: id === S.settingsTab ? "on" : "", onclick: () => { S.settingsTab = id; rerender(); } }, t))));
+  const body = h("div", { class: "stack" }); add(root, body);
+  await ({ connect: tabConnect, robinhood: tabRobinhood, calendar: tabCalendar, models: tabModels, categories: tabCategories, sharing: tabSharing }[S.settingsTab])(body, rerender);
 }
+const saveCfg = async (body, rerender, msg = "Saved") => { try { await api("/api/settings", send("PUT", body)); toast(msg); rerender(); } catch (e) { fail(e); } };
+const withSecret = (body, key, id) => { if (val(id)) body[key] = val(id); return body; };
+const secretField = (id, label, isSet) => field(id, label, "", { type: "password", placeholder: isSet ? "saved, leave blank to keep" : "not set", autocomplete: "new-password" });
 
-
-const SHARE_LABELS = { net_worth: "Net worth", subscriptions: "Monthly subscription total", robinhood_main: "Robinhood main balance", robinhood_agent: "Robinhood agent balance" };
+async function tabConnect(root, rerender) {
+  const [cfg, st, use] = await Promise.all([api("/api/settings"), api("/api/status"), api("/api/plaid/usage")]);
+  const dis = S.demo, stale = (d) => Math.round((Date.now() - new Date(d + "T00:00:00Z")) / 864e5);
+  add(root, 
+    h("div", { class: "panel" }, h("h3", {}, "Banks, cards, savings and IRA (Plaid)"), h("p", { class: "muted small" }, st.plaid.configured ? `Plaid is set up (${st.plaid.env}). Tokens are encrypted in your own container; the gateway never sees them.` : "Plaid is not configured. Add your client ID and secret to .secrets/plaid.env and restart."),
+      h("div", { class: "chips" }, h("button", { class: "btn primary", disabled: dis, onclick: async () => { try { const { link_token } = await api("/plaid/link-token", { method: "POST" }); await loadPlaid(); Plaid.create({ token: link_token, onSuccess: async (pt, meta) => { const r = await api("/plaid/exchange", send("POST", { public_token: pt, institution: meta.institution?.name || "" })); toast(`Linked. ${r.sync.added} transactions pulled.`); rerender(); } }).open(); } catch (e) { fail(e); } } }, "Link an account"),
+        h("button", { class: "btn", disabled: dis, onclick: async () => { try { await api("/sync", { method: "POST" }); toast("Synced"); } catch (e) { fail(e); } } }, "Sync now")),
+      st.plaid.items.length ? h("div", { style: "margin-top:12px" }, st.plaid.items.map((it) => h("div", { class: "ev", style: "grid-template-columns:1fr auto auto" }, h("span", {}, it.institution || "Bank"),
+        h("button", { class: "btn sm", disabled: dis, onclick: async () => { try { const { link_token } = await api("/plaid/link-token?item_id=" + encodeURIComponent(it.item_id), { method: "POST" }); await loadPlaid(); Plaid.create({ token: link_token, onSuccess: () => toast("Relinked") }).open(); } catch (e) { fail(e); } } }, "Relink"),
+        h("button", { class: "btn sm danger", onclick: sure(null, "Sure? Deletes its data", async () => { try { await api("/api/plaid/items/" + encodeURIComponent(it.item_id), { method: "DELETE" }); toast("Unlinked"); rerender(); } catch (e) { fail(e); } }) }, "Unlink")))) : null),
+    h("div", { class: "panel" }, h("h3", {}, "Import a CSV (Cash App, PayPal, Venmo)"), h("p", { class: "muted small" }, "The format is detected automatically, and importing the same file twice never double counts. Or drop files into data/<you>/imports/ on the server."),
+      st.imports.length ? h("div", { style: "display:grid;gap:4px;margin:8px 0" }, st.imports.map((i) => { const d = stale(i.last_transaction || "1970-01-01"); return h("div", { class: "small" }, h("b", {}, i.provider), ` · ${i.transactions} transactions · latest ${i.last_transaction} `, h("span", { class: "pill " + (d > 35 ? "r" : "t") }, d > 35 ? `${d} days old` : "up to date")); })) : null,
+      h("input", { type: "file", id: "csvfile", accept: ".csv,text/csv", disabled: dis }), " ", h("button", { class: "btn", disabled: dis, onclick: async () => { const f = $("#csvfile").files[0]; if (!f) return toast("Choose a CSV first"); try { const r = await api("/import/csv", { method: "POST", headers: { "Content-Type": "text/csv" }, body: await f.text() }); toast(`${r.provider}: ${r.added} new of ${r.rows} rows`); } catch (e) { fail(e); } } }, "Import")),
+    h("div", { class: "panel" }, h("h3", {}, "Plaid usage and cost"), use.over_budget ? h("p", { class: "banner" }, `Estimated ${usd(use.est_monthly_cost)} a month is over your ${usd(use.budget)} budget.`) : null,
+      h("div", { class: "grid", style: "margin:8px 0" }, kpi("Calls this month", String(use.calls_month), `${use.calls_today} today, cap ${use.daily_cap} a day`), kpi("Linked items", String(use.items), "Plaid bills per linked item"), kpi("Estimated monthly", use.est_monthly_cost == null ? "Enter a rate" : usd(use.est_monthly_cost), use.budget ? `budget ${usd(use.budget)}` : "no budget set", use.over_budget ? "neg" : "")),
+      h("table", {}, h("tbody", {}, Object.entries(use.by_endpoint).map(([e, n]) => h("tr", {}, h("td", { class: "mono" }, e), h("td", { class: "num r" }, n))))),
+      h("p", { class: "muted small" }, "Plaid does not publish a price list. Your rates are in your Plaid dashboard. Type your per-item monthly rate and the estimate follows. The daily cap stops a runaway sync."),
+      h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); saveCfg({ plaid_rate_item_month: val("s-rate"), plaid_budget_month: val("s-bud"), plaid_daily_cap: val("s-cap") }, rerender); } },
+        field("s-rate", "Rate per item per month ($)", cfg.plaid_rate_item_month, { type: "number", step: "0.01", min: "0" }), field("s-bud", "Monthly budget ($)", cfg.plaid_budget_month, { type: "number", step: "0.01", min: "0" }), field("s-cap", "Daily call cap", cfg.plaid_daily_cap, { type: "number", min: "0", placeholder: "500" }), h("button", { class: "btn primary", type: "submit" }, "Save"))));
+}
+const loadPlaid = () => new Promise((ok, no) => { if (window.Plaid) return ok(); const sc = document.createElement("script"); sc.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js"; sc.onload = ok; sc.onerror = no; document.head.append(sc); });
 const dot = (st) => h("span", { class: "pill " + (st === "up" ? "t" : st === "down" || st === "error" ? "r" : "") }, st);
 
-async function viewSettings(root, rerender) {
-  const [cfg, st, use] = await Promise.all([api("/api/settings"), api("/api/status"), api("/api/plaid/usage")]);
-  const save = async (body, msg = "Saved") => { try { await api("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); toast(msg); rerender(); } catch (e) { toast(e.message); } };
-  const field = (id, label, value, o = {}) => h("label", {}, label, h("input", { id, value: value ?? "", autocomplete: "off", ...o }));
-  const secret = (id, label, isSet) => field(id, label, "", { type: "password", placeholder: isSet ? "saved, leave blank to keep" : "not set", autocomplete: "new-password" });
-  const val = (id) => $("#" + id).value.trim();
-  const withSecret = (body, key, id) => { if (val(id)) body[key] = val(id); return body; };
-
-  const rh = st.robinhood;
-  root.append(
-    /* Robinhood */
-    h("div", { class: "panel" }, h("h3", {}, "Robinhood"),
-      h("p", { class: "muted small" }, "Two accounts, two routes. The agent account always uses Robinhood's official MCP. The main account uses whichever source you pick below. Nothing here can place a trade."),
-      h("div", { class: "legend", style: "margin:8px 0 14px" }, h("span", {}, "Agent connector ", dot(rh.agent)), h("span", {}, "CSV connector ", dot(rh.csv)), h("span", {}, "Live connector (unofficial) ", dot(rh.live))),
-      h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); save({ rh_main_source: val("s-src") }); } },
-        h("label", {}, "Main account source", h("select", { id: "s-src" }, [["auto", "Automatic (Plaid, then live, then CSV)"], ["plaid", "Plaid only"], ["csv", "CSV only"], ["live", "Live only (unofficial)"]].map(([v, t]) => h("option", { value: v, selected: v === cfg.rh_main_source }, t)))),
-        h("button", { class: "btn primary", type: "submit" }, "Save source")),
-      h("p", { class: "muted small" }, "Live uses an unofficial library that breaks Robinhood's terms and can get a login locked. It stays off until you enable it in the container's env file."),
-      h("h3", { style: "margin-top:18px" }, "Main account CSV"),
-      h("p", { class: "muted small" }, rh.csv_files.length ? `${rh.csv_files.length} file(s) imported. Latest: ${rh.csv_files.at(-1)}` : "No files yet. In Robinhood, download the account activity report as CSV and upload it here."),
-      h("input", { type: "file", id: "rhcsv", accept: ".csv,text/csv", disabled: S.demo }), " ", h("button", { class: "btn", disabled: S.demo, onclick: async () => {
-        const f = $("#rhcsv").files[0]; if (!f) return toast("Choose a CSV first");
-        try { const r = await api("/robinhood/csv-upload", { method: "POST", headers: { "Content-Type": "text/csv" }, body: await f.text() }); toast("Saved " + r.saved); rerender(); } catch (e) { toast(e.message); }
-      } }, "Upload"),
-      h("h3", { style: "margin-top:18px" }, "Agent account (official MCP)"),
-      h("p", { class: "muted small" }, "Only the tools you list under allowed read tools can ever be called. Leave trade tools out. Until each of the three reads below names an allowed tool, that read is refused."),
-      h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); save(withSecret({ rh_mcp_url: val("s-mcp"), rh_mcp_read_tools: val("s-allow"), rh_mcp_tool_balances: val("s-tb"), rh_mcp_tool_positions: val("s-tp"), rh_mcp_tool_history: val("s-th") }, "rh_mcp_token", "s-tok")); } },
-        field("s-mcp", "MCP server URL", cfg.rh_mcp_url, { type: "url" }), secret("s-tok", "Access token", cfg.rh_mcp_token.set), field("s-allow", "Allowed read tools (comma separated)", cfg.rh_mcp_read_tools),
-        field("s-tb", "Tool for balances", cfg.rh_mcp_tool_balances), field("s-tp", "Tool for positions", cfg.rh_mcp_tool_positions), field("s-th", "Tool for history", cfg.rh_mcp_tool_history),
-        h("button", { class: "btn primary", type: "submit" }, "Save agent settings"))),
-
-    /* Calendar */
-    h("div", { class: "panel" }, h("h3", {}, "Calendar (CalDAV)"), h("p", { class: "muted small" }, "Where \"Push to CalDAV\" sends your subscription events. Use the full address of one calendar, not the server root."),
-      h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); save(withSecret({ caldav_url: val("s-dav"), caldav_user: val("s-du") }, "caldav_password", "s-dp")); } },
-        field("s-dav", "Calendar URL", cfg.caldav_url, { type: "url" }), field("s-du", "Username", cfg.caldav_user), secret("s-dp", "Password", cfg.caldav_password.set),
-        h("button", { class: "btn primary", type: "submit" }, "Save"), h("button", { class: "btn", type: "button", onclick: async () => { try { const r = await api("/api/settings/test-caldav", { method: "POST" }); toast(r.ok ? "Connected" : "Failed: " + (r.status || r.detail)); } catch (e) { toast(e.message); } } }, "Test connection"))),
-
-    /* Sharing */
-    h("div", { class: "panel" }, h("h3", {}, "Share with Pondering Orb"), h("p", { class: "muted small" }, "The Orb can only see what is ticked here, and only totals. Transactions and account names are never shared."),
-      h("form", { onsubmit: (e) => { e.preventDefault(); save({ share: [...document.querySelectorAll(".sharebox:checked")].map((x) => x.value) }); }, style: "display:grid;gap:8px" },
-        Object.entries(SHARE_LABELS).map(([k, t]) => h("label", { style: "display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-size:.95rem;color:var(--fg)" }, h("input", { type: "checkbox", class: "sharebox", value: k, checked: cfg.share.includes(k), style: "width:auto" }), t)),
-        h("div", {}, h("button", { class: "btn primary", type: "submit" }, "Save sharing")))),
-
-    /* Plaid usage and cost */
-    h("div", { class: "panel" }, h("h3", {}, "Plaid usage and cost"),
-      use.over_budget ? h("p", { class: "banner" }, `Estimated ${usd(use.est_monthly_cost)} a month is over your ${usd(use.budget)} budget.`) : null,
-      h("div", { class: "grid", style: "margin:8px 0" }, kpi("Calls this month", String(use.calls_month), `${use.calls_today} today, cap ${use.daily_cap} a day`), kpi("Linked items", String(use.items), "Plaid bills per linked item"),
-        kpi("Estimated monthly", use.est_monthly_cost == null ? "Enter a rate" : usd(use.est_monthly_cost), use.budget ? `budget ${usd(use.budget)}` : "no budget set", use.over_budget ? "neg" : "")),
-      h("table", {}, h("tbody", {}, Object.entries(use.by_endpoint).map(([e, n]) => h("tr", {}, h("td", { class: "mono" }, e), h("td", { class: "num r" }, n))))),
-      h("p", { class: "muted small" }, "Plaid does not publish a price list. Your rates are in your Plaid dashboard once you request Production access. Type your per-item monthly rate here and the estimate follows. For billed usage, the dashboard is the source of truth. The daily cap stops a runaway sync from burning calls."),
-      h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); save({ plaid_rate_item_month: val("s-rate"), plaid_budget_month: val("s-bud"), plaid_daily_cap: val("s-cap") }); } },
-        field("s-rate", "Rate per item per month ($)", cfg.plaid_rate_item_month, { type: "number", step: "0.01", min: "0" }), field("s-bud", "Monthly budget ($)", cfg.plaid_budget_month, { type: "number", step: "0.01", min: "0" }),
-        field("s-cap", "Daily call cap", cfg.plaid_daily_cap, { type: "number", step: "1", min: "0", placeholder: "500" }), h("button", { class: "btn primary", type: "submit" }, "Save"))),
-
-    /* Plaid */
-    h("div", { class: "panel" }, h("h3", {}, "Linked banks"), h("p", { class: "muted small" }, st.plaid.configured ? `Plaid is set up (${st.plaid.env}).` : "Plaid is not configured. Add your client ID and secret to .secrets/plaid.env and restart."),
-      st.plaid.items.length ? st.plaid.items.map((it) => h("div", { class: "ev", style: "grid-template-columns:1fr auto auto" }, h("span", {}, it.institution || "Bank"),
-        h("button", { class: "btn sm", disabled: S.demo, onclick: async () => { try { const { link_token } = await api("/plaid/link-token?item_id=" + encodeURIComponent(it.item_id), { method: "POST" }); await new Promise((ok, no) => { const sc = document.createElement("script"); sc.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js"; sc.onload = ok; sc.onerror = no; document.head.append(sc); }); Plaid.create({ token: link_token, onSuccess: () => toast("Relinked") }).open(); } catch (e) { toast(e.message); } } }, "Relink"),
-        h("button", { class: "btn sm danger", onclick: async (ev) => { if (ev.target.dataset.sure) { await api("/api/plaid/items/" + encodeURIComponent(it.item_id), { method: "DELETE" }); toast("Unlinked"); rerender(); } else { ev.target.dataset.sure = 1; ev.target.textContent = "Sure? Deletes its data"; } } }, "Unlink"))) : h("p", { class: "muted" }, "Nothing linked yet. Use Connect.")),
-    S.demo ? h("p", { class: "muted small" }, "Sample preview: you can try the forms, but changes only live until you reload.") : null);
+async function tabRobinhood(root, rerender) {
+  const [cfg, st] = await Promise.all([api("/api/settings"), api("/api/status")]), rh = st.robinhood;
+  add(root, h("div", { class: "panel" }, h("h3", {}, "Robinhood"), h("p", { class: "muted small" }, "The agent account always uses Robinhood's official MCP. The main account uses the source you pick. Nothing here can place a trade."),
+    h("div", { class: "legend", style: "margin:8px 0 14px" }, h("span", {}, "Agent connector ", dot(rh.agent)), h("span", {}, "CSV connector ", dot(rh.csv)), h("span", {}, "Live connector (unofficial) ", dot(rh.live))),
+    h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); saveCfg({ rh_main_source: val("s-src") }, rerender); } },
+      select("s-src", "Main account source", [["auto", "Automatic (Plaid, then live, then CSV)"], ["plaid", "Plaid only"], ["csv", "CSV only"], ["live", "Live only (unofficial)"]], cfg.rh_main_source), h("button", { class: "btn primary", type: "submit" }, "Save source")),
+    h("p", { class: "muted small" }, "Live uses an unofficial library that breaks Robinhood's terms and can get a login locked. It stays off until you enable it in the container's env file.")),
+    h("div", { class: "panel" }, h("h3", {}, "Main account CSV"), h("p", { class: "muted small" }, rh.csv_files.length ? `${rh.csv_files.length} file(s) imported. Latest: ${rh.csv_files.at(-1)}` : "No files yet. Download the account activity report as CSV from Robinhood and upload it here."),
+      h("input", { type: "file", id: "rhcsv", accept: ".csv,text/csv", disabled: S.demo }), " ", h("button", { class: "btn", disabled: S.demo, onclick: async () => { const f = $("#rhcsv").files[0]; if (!f) return toast("Choose a CSV first"); try { const r = await api("/robinhood/csv-upload", { method: "POST", headers: { "Content-Type": "text/csv" }, body: await f.text() }); toast("Saved " + r.saved); rerender(); } catch (e) { fail(e); } } }, "Upload")),
+    h("div", { class: "panel" }, h("h3", {}, "Agent account (official MCP)"), h("p", { class: "muted small" }, "Only the tools listed under allowed read tools can ever be called. Leave trade tools out."),
+      h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); saveCfg(withSecret({ rh_mcp_url: val("s-mcp"), rh_mcp_read_tools: val("s-allow"), rh_mcp_tool_balances: val("s-tb"), rh_mcp_tool_positions: val("s-tp"), rh_mcp_tool_history: val("s-th") }, "rh_mcp_token", "s-tok"), rerender); } },
+        field("s-mcp", "MCP server URL", cfg.rh_mcp_url, { type: "url" }), secretField("s-tok", "Access token", cfg.rh_mcp_token.set), field("s-allow", "Allowed read tools (comma separated)", cfg.rh_mcp_read_tools), field("s-tb", "Tool for balances", cfg.rh_mcp_tool_balances), field("s-tp", "Tool for positions", cfg.rh_mcp_tool_positions), field("s-th", "Tool for history", cfg.rh_mcp_tool_history), h("button", { class: "btn primary", type: "submit" }, "Save agent settings"))));
+}
+async function tabCalendar(root, rerender) {
+  const cfg = await api("/api/settings");
+  add(root, h("div", { class: "panel" }, h("h3", {}, "Calendar (CalDAV)"), h("p", { class: "muted small" }, "Subscriptions are pushed here, and the agent can read events (with a $ amount in the title) to plan around them. Use the full address of one calendar."),
+    h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); saveCfg(withSecret({ caldav_url: val("s-dav"), caldav_user: val("s-du") }, "caldav_password", "s-dp"), rerender); } },
+      field("s-dav", "Calendar URL", cfg.caldav_url, { type: "url" }), field("s-du", "Username", cfg.caldav_user), secretField("s-dp", "Password", cfg.caldav_password.set), h("button", { class: "btn primary", type: "submit" }, "Save"),
+      h("button", { class: "btn", type: "button", onclick: async () => { try { const r = await api("/api/settings/test-caldav", { method: "POST" }); toast(r.ok ? "Connected" : "Failed: " + (r.status || r.detail)); } catch (e) { fail(e); } } }, "Test connection"))));
+}
+async function tabModels(root, rerender) {
+  const [pv, presets] = await Promise.all([api("/api/agent/providers"), api("/api/agent/presets")]);
+  let draft = S.draftProv || null;
+  const edit = (p) => { S.draftProv = p; rerender(); };
+  add(root, h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Models for the agent"), h("button", { class: "btn sm primary", onclick: () => edit({ name: "", kind: "openai", base_url: "", model: "", tools: true, allow_cloud: false }) }, "+ Add a model")),
+    h("p", { class: "muted small" }, "Run it on your own machine (Ollama, LM Studio, llama.cpp) so your money data never leaves it. Cloud models are blocked until you allow each one."),
+    pv.items.length ? pv.items.map((p) => h("div", { class: "ev", style: "grid-template-columns:1fr auto auto auto" }, h("span", {}, h("b", {}, p.name), h("span", { class: "muted small" }, ` ${p.model} · ${p.base_url}`)), h("span", { class: "pill " + (p.local ? "t" : "r") }, p.local ? "local" : "cloud"),
+      h("button", { class: "btn sm", onclick: () => edit({ ...p, api_key: null }) }, "Edit"), h("button", { class: "btn sm danger", onclick: sure(null, "Sure?", async () => { await api(`/api/agent/providers/${p.id}`, { method: "DELETE" }); rerender(); }) }, "Remove"))) : h("p", { class: "muted" }, "No models yet. Add one to use the Agent page."),
+    pv.items.length > 1 ? h("form", { class: "row", style: "margin-top:12px", onsubmit: (e) => { e.preventDefault(); saveCfg({ agent_provider: val("s-defprov") }, rerender, "Default model set"); } }, select("s-defprov", "Default model", pv.items.map((p) => [p.id, p.name]), pv.default), h("button", { class: "btn", type: "submit" }, "Set default")) : null),
+    draft ? h("div", { class: "panel" }, h("h3", {}, draft.id ? "Edit model" : "Add a model"),
+      !draft.id ? h("div", { class: "chips", style: "margin-bottom:10px" }, h("span", { class: "muted small" }, "Start from:"), presets.map((p) => h("button", { class: "chip", onclick: () => edit({ ...draft, ...p, allow_cloud: false }) }, p.name))) : null,
+      h("form", { class: "row", onsubmit: async (e) => { e.preventDefault(); const body = { name: val("pv-name"), kind: val("pv-kind"), base_url: val("pv-url"), model: val("pv-model"), tools: $("#pv-tools").checked, allow_cloud: $("#pv-cloud").checked }; if (val("pv-key")) body.api_key = val("pv-key");
+        try { await api(draft.id ? `/api/agent/providers/${draft.id}` : "/api/agent/providers", send(draft.id ? "PUT" : "POST", body)); S.draftProv = null; toast("Saved"); rerender(); } catch (err) { fail(err); } } },
+        field("pv-name", "Name", draft.name, { required: true }), select("pv-kind", "API type", [["openai", "OpenAI-compatible (Ollama, LM Studio, OpenRouter…)"], ["anthropic", "Anthropic (Claude)"]], draft.kind), field("pv-url", "Address", draft.base_url, { type: "url", required: true, placeholder: "http://host.docker.internal:11434/v1" }),
+        field("pv-model", "Model name", draft.model, { required: true }), secretField("pv-key", "API key (cloud only)", draft.has_key),
+        h("label", { class: "check" }, h("input", { type: "checkbox", id: "pv-tools", checked: draft.tools }), "Supports tool calling (untick for small models; they get a data snapshot instead)"),
+        h("label", { class: "check" }, h("input", { type: "checkbox", id: "pv-cloud", checked: draft.allow_cloud }), "Allow cloud: I accept my financial data is sent to this address"),
+        h("div", { class: "formbtns" }, h("button", { class: "btn primary", type: "submit" }, "Save model"), h("button", { class: "btn", type: "button", onclick: () => edit(null) }, "Cancel")))) : null);
+}
+async function tabCategories(root, rerender) {
+  const [cats, rules] = await Promise.all([api("/api/categories"), api("/api/category-rules")]);
+  add(root, h("div", { class: "panel" }, h("h3", {}, "Categories"), h("div", { class: "chips" }, cats.map((c) => h("span", { class: "pill " + (c.kind === "income" ? "t" : c.kind === "transfer" ? "" : "b"), style: "padding:3px 12px" }, c.name, c.builtin ? null : h("button", { class: "x", "aria-label": "Delete " + c.name, onclick: sure(null, "?", async () => { try { await api("/api/categories/" + encodeURIComponent(c.name), { method: "DELETE" }); rerender(); } catch (e) { fail(e); } }) }, "×")))),
+    h("form", { class: "row", style: "margin-top:12px", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/categories", send("POST", { name: val("cn-name"), kind: val("cn-kind") })); rerender(); } catch (err) { fail(err); } } },
+      field("cn-name", "New category", "", { required: true, maxlength: 30 }), select("cn-kind", "Counts as", [["expense", "Spending"], ["income", "Income"], ["transfer", "Transfer (not counted)"]], "expense"), h("button", { class: "btn primary", type: "submit" }, "Add"))),
+    h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Automatic rules"), h("button", { class: "btn sm", onclick: async () => { const r = await api("/api/categories/recategorize", { method: "POST" }); toast(`${r.changed} updated`); } }, "Re-run on all")),
+      h("p", { class: "muted small" }, "Created when you change a category with 'remember for similar payments' ticked on the Money movement page. Payments you set by hand are never overwritten."),
+      rules.length ? rules.map((r) => h("div", { class: "ev", style: "grid-template-columns:1fr auto auto" }, h("span", { class: "mono" }, `"${r.pattern}"`), h("span", { class: "pill b" }, r.category), h("button", { class: "btn sm", onclick: async () => { await api("/api/category-rules/" + r.id, { method: "DELETE" }); rerender(); } }, "Delete"))) : h("p", { class: "muted" }, "No rules yet.")));
+}
+const SHARE_LABELS = { net_worth: "Net worth", subscriptions: "Monthly subscription total", robinhood_main: "Robinhood main balance", robinhood_agent: "Robinhood agent balance" };
+async function tabSharing(root, rerender) {
+  const cfg = await api("/api/settings");
+  add(root, h("div", { class: "panel" }, h("h3", {}, "Share with Pondering Orb"), h("p", { class: "muted small" }, "The Orb sees only what is ticked, and only totals. Transactions and account names are never shared."),
+    h("form", { onsubmit: (e) => { e.preventDefault(); saveCfg({ share: [...document.querySelectorAll(".sharebox:checked")].map((x) => x.value) }, rerender); }, style: "display:grid;gap:8px" },
+      Object.entries(SHARE_LABELS).map(([k, t]) => h("label", { class: "check" }, h("input", { type: "checkbox", class: "sharebox", value: k, checked: cfg.share.includes(k) }), t)), h("div", {}, h("button", { class: "btn primary", type: "submit" }, "Save sharing")))));
 }
 
-/* ---------- shell ---------- */
-const TABS = [["overview", "Overview", viewOverview], ["movement", "Money movement", viewMovement], ["subs", "Subscriptions", viewSubs], ["accounts", "Accounts", viewAccounts], ["robinhood", "Robinhood", viewRobinhood], ["connect", "Connect", viewConnect], ["settings", "Settings", viewSettings]];
+/* ================================ SHELL ================================ */
+const TABS = [["overview", "Overview", viewOverview], ["movement", "Money movement", viewMovement], ["accounts", "Accounts", viewAccounts], ["subs", "Subscriptions", viewSubs], ["savings", "Savings", viewSavings], ["planner", "Planner", viewPlanner], ["agent", "Agent", viewAgent], ["robinhood", "Robinhood", viewRobinhood], ["settings", "Settings", viewSettings]];
 async function render() {
   const [, title, view] = TABS.find((t) => t[0] === S.tab);
-  const main = h("main", {}, h("div", { class: "bar" }, h("h2", {}, title), S.demo ? h("span", { class: "banner" }, "Sample data. Nothing here is a real account.") : h("span", { class: "muted small" }, S.name)));
-  $("#app").replaceChildren(h("div", { class: "shell" },
-    h("nav", { class: "side", "aria-label": "Sections" }, h("div", { class: "brand" }, h("span", { class: "coin" }), "Goblin Bank"),
-      TABS.map(([id, label]) => h("button", { "aria-current": id === S.tab ? "page" : null, onclick: () => { S.tab = id; location.hash = id; render(); } }, label)),
-      h("div", { class: "foot" }, S.demo ? null : h("button", { class: "btn sm", onclick: () => { sessionStorage.clear(); location.reload(); } }, "Sign out"))), main));
-  try { await view(main, render); } catch (e) { main.append(h("div", { class: "panel" }, h("p", { class: "neg" }, "Could not load: " + e.message))); }
+  const main = h("main", {}, h("div", { class: "bar" }, h("h2", {}, title), S.demo ? h("span", { class: "banner" }, "Sample data. Nothing here is a real account, and changes are not saved.") : h("span", { class: "muted small" }, S.name)));
+  $("#app").replaceChildren(h("div", { class: "shell" }, h("nav", { class: "side", "aria-label": "Sections" }, h("div", { class: "brand" }, h("span", { class: "coin" }), "Goblin Bank"),
+    TABS.map(([id, label]) => h("button", { "aria-current": id === S.tab ? "page" : null, onclick: () => { S.tab = id; S.acct = null; S.edit = null; location.hash = id; render(); } }, label)),
+    h("div", { class: "foot" }, S.demo ? null : h("button", { class: "btn sm", onclick: () => { sessionStorage.clear(); location.reload(); } }, "Sign out"))), main));
+  try { await view(main, render); } catch (e) { add(main, h("div", { class: "panel" }, h("p", { class: "neg" }, "Could not load: " + e.message))); }
 }
 function login() {
-  $("#app").replaceChildren(h("form", { class: "panel login", onsubmit: async (e) => {
-    e.preventDefault(); S.name = $("#ln").value.trim().toLowerCase(); S.token = $("#lt").value.trim();
-    try { await api("/api/overview"); sessionStorage.setItem("gb_name", S.name); sessionStorage.setItem("gb_tok", S.token); render(); } catch (err) { toast("Sign-in failed"); }
-  } }, h("h2", {}, "Goblin Bank"), h("label", {}, "Goblin", h("input", { id: "ln", autocomplete: "username", required: true })), h("label", {}, "Login token", h("input", { id: "lt", type: "password", autocomplete: "current-password", required: true })), h("button", { class: "btn primary", type: "submit" }, "Open my vault")));
+  $("#app").replaceChildren(h("form", { class: "panel login", onsubmit: async (e) => { e.preventDefault(); S.name = $("#ln").value.trim().toLowerCase(); S.token = $("#lt").value.trim();
+    try { await api("/api/overview"); S.authed = true; sessionStorage.setItem("gb_name", S.name); sessionStorage.setItem("gb_tok", S.token); render(); } catch (err) { toast("Sign-in failed"); } } },
+    h("h2", {}, "Goblin Bank"), h("label", {}, "Goblin", h("input", { id: "ln", autocomplete: "username", required: true })), h("label", {}, "Login token", h("input", { id: "lt", type: "password", autocomplete: "current-password", required: true })), h("button", { class: "btn primary", type: "submit" }, "Open my vault")));
 }
 (async function boot() {
   const want = location.hash.slice(1); if (TABS.some((t) => t[0] === want)) S.tab = want;
   let live = false;
   try { live = (await fetch("/health", { cache: "no-store" })).headers.get("content-type")?.includes("json") && !new URLSearchParams(location.search).has("demo"); } catch {}
-  if (!live) { S.demo = true; S.call = demoBackend(); return render(); }
+  if (!live) {
+    DEMO = window.GOBLIN_DEMO;
+    if (!DEMO) { $("#app").replaceChildren(h("div", { class: "panel login" }, h("h2", {}, "Goblin Bank"), h("p", { class: "muted" }, "No gateway answered at this address. Open this page from your CoinGateway."))); return; }
+    S.demo = true; S.provider = DEMO.chatProvider; return render();
+  }
   S.name = sessionStorage.getItem("gb_name") || ""; S.token = sessionStorage.getItem("gb_tok") || "";
-  S.name && S.token ? render() : login();
+  if (S.name && S.token) { try { await api("/api/overview"); S.authed = true; return render(); } catch {} }
+  login();
 })();
 </script>

@@ -23,6 +23,22 @@ PLAID_MAP = {  # detailed first, then primary
 }
 
 
+KEYWORDS = {  # last-resort guesses for payees with no bank category (CSV imports, manual entries). Your own rules always win.
+    "Groceries": ("kroger", "aldi", "trader joe", "costco", "walmart", "safeway", "publix", "whole foods", "wholefds", "heb ", "meijer", "grocery"),
+    "Gas": ("shell", "marathon", "sheetz", "exxon", "chevron", "bp ", "speedway", "wawa", "valero", "citgo", "gasoline", "fuel"),
+    "Food": ("starbucks", "chipotle", "domino", "pizza", "panera", "wendy", "five guys", "mcdonald", "burger", "taco", "subway", "coffee", "diner", "restaurant", "doordash", "grubhub", "cafe"),
+    "Clothes": ("zara", "old navy", "h&m", "nike", "gap ", "uniqlo", "nordstrom", "tj maxx", "marshalls", "ross "),
+    "Games": ("steam", "xbox", "playstation", "nintendo", "epic games", "blizzard"),
+    "Subscriptions": ("netflix", "spotify", "hulu", "disney", "hbo", "apple.com/bill", "icloud", "youtube premium", "patreon"),
+    "Transport": ("uber", "lyft", "metro", "transit", "parking", "toll"),
+    "Health": ("cvs", "walgreens", "pharmacy", "dental", "clinic", "hospital", "optical"),
+    "Housing": ("home depot", "lowes", "lowe's", "ikea", "rent "),
+    "Shopping": ("amazon", "amzn", "target", "best buy", "etsy", "ebay"),
+    "Bills": ("water", "electric", "utility", "insurance", "comcast", "verizon", "at&t", "t-mobile"),
+    "Income": ("payroll", "salary", "direct dep", "refund", "interest paid", "dividend"),
+}
+
+
 def categorize(db, name: str, amount: float, plaid_cat: str | None = None) -> str:
     low = (name or "").lower()
     for r in db.all("SELECT pattern, category FROM category_rules ORDER BY length(pattern) DESC"):
@@ -37,6 +53,10 @@ def categorize(db, name: str, amount: float, plaid_cat: str | None = None) -> st
         for n in range(len(parts) - 1, 0, -1):
             if "_".join(parts[:n]) in PLAID_MAP:
                 return PLAID_MAP["_".join(parts[:n])]
+    low = f" {low} "
+    for cat, words in KEYWORDS.items():
+        if any(w in low for w in words) and (cat == "Income") == (amount > 0 or cat == "Income" and "refund" in low):
+            return cat
     return "Income" if amount > 0 else "Misc"
 
 
