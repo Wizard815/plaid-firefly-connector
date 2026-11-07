@@ -128,6 +128,7 @@ td.mono{white-space:nowrap}
 .ev>*{min-width:0}.ev{overflow-wrap:anywhere}
 .cmp{position:relative;height:16px;border-radius:8px;background:var(--line);overflow:hidden;margin:6px 0}.cmp i{position:absolute;left:0;top:0;bottom:0;display:block}.cmp .proj{background:var(--brass-soft);box-shadow:inset 0 0 0 1px var(--brass)}.cmp .proj.over{background:var(--red-soft);box-shadow:inset 0 0 0 1px var(--red)}.cmp .sp{background:var(--teal)}.meter.dual{position:relative}.meter.dual i{position:absolute;left:0;top:0;bottom:0}.meter.dual .proj{background:var(--brass-soft)}
 .barrow .num{white-space:nowrap}
+.barrow.fc{grid-template-columns:110px 1fr 175px}@media (max-width:760px){.barrow.fc{grid-template-columns:80px minmax(0,1fr)}.barrow.fc .num{grid-column:1/-1;text-align:left}}
 </style>
 
 <div id="app"></div>
@@ -246,7 +247,7 @@ function forecastPanel(fc) {
       kpi(over ? "Over income by" : "Left after projected", fc.left_after_projected != null ? usd(Math.abs(fc.left_after_projected)) : "–", inc ? `${pct(fc.projected)} of income projected` : "", over ? "neg" : "pos")),
     cmp, inc ? h("p", { class: "small", style: "margin:4px 0 10px" }, `So far you have spent ${pct(fc.spent_so_far)} of your average income. At this pace the month ends at ${pct(fc.projected)}`,
       over ? h("b", { class: "neg" }, `, about ${usd(fc.projected - inc)} more than comes in.`) : tight ? h("b", { style: "color:var(--brass)" }, ", which is close to everything you earn.") : ", leaving room.") : h("p", { class: "muted small" }, "Add your income to see this against what comes in."),
-    fc.categories.length ? h("div", { class: "bars" }, fc.categories.slice(0, 8).map((c, i) => h("div", { class: "barrow", style: "grid-template-columns:110px 1fr 175px", title: `${c.method}${c.typical != null ? `, usual month ${usd(c.typical)}` : ""}${c.bills_due ? `, ${usd(c.bills_due)} in bills still due` : ""}` },
+    fc.categories.length ? h("div", { class: "bars" }, fc.categories.slice(0, 8).map((c, i) => h("div", { class: "barrow fc", title: `${c.method}${c.typical != null ? `, usual month ${usd(c.typical)}` : ""}${c.bills_due ? `, ${usd(c.bills_due)} in bills still due` : ""}` },
       h("span", { class: "small muted" }, c.category), h("div", { class: "meter dual" }, h("i", { class: "proj", style: `width:${(c.forecast / top) * 100}%` }), h("i", { style: `width:${(c.spent / top) * 100}%;background:${CAT_COLORS[i % CAT_COLORS.length]}` })),
       h("span", { class: "num small" }, `${usd(c.spent)} → ${usd(c.forecast)}`)))) : h("p", { class: "muted" }, "No spending yet this month."),
     fc.history.length ? h("details", { style: "margin-top:12px" }, h("summary", { class: "muted small" }, "Past months"), h("table", {}, h("tbody", {}, fc.history.slice().reverse().map((m) => h("tr", {}, h("td", { class: "mono" }, m.month), h("td", { class: "num r" }, usd(m.spent)), h("td", { class: "muted small" }, "spent"), h("td", { class: "num r pos" }, usd(m.income)), h("td", { class: "muted small" }, "income"), h("td", { class: "small r" }, m.income ? Math.round((m.spent / m.income) * 100) + "%" : "–"))))) ) : null,
