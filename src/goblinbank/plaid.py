@@ -24,7 +24,8 @@ def _b64d(s: str) -> bytes:
 
 
 class Plaid:
-    def __init__(self, transport: httpx.BaseTransport | None = None):
+    def __init__(self, transport: httpx.BaseTransport | None = None, usage=None):
+        self.usage = usage   # object with before(path) -> may raise PlaidError, and record(path)
         self.client_id = os.environ.get("PLAID_CLIENT_ID", "")
         self.secret = os.environ.get("PLAID_SECRET", "")
         self.base = HOSTS.get(os.environ.get("PLAID_ENV", "sandbox"), HOSTS["sandbox"])
@@ -39,6 +40,9 @@ class Plaid:
     def post(self, path: str, body: dict) -> dict:
         if not self.configured:
             raise PlaidError("Plaid not configured (PLAID_CLIENT_ID / PLAID_SECRET)")
+        if self.usage:
+            self.usage.before(path)
+            self.usage.record(path)
         r = self.http.post(self.base + path, json={"client_id": self.client_id, "secret": self.secret, **body})
         if r.status_code >= 400:
             try:

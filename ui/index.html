@@ -128,7 +128,7 @@ function demoBackend() {
   const history = Array.from({ length: 30 }, (_, i) => ({ date: addDays(t, i - 29), net_worth: 76000 + i * 120 + Math.sin(i / 3) * 900 }));
   const mo = (s) => (s.active ? s.amount * { weekly: 52 / 12, biweekly: 26 / 12, monthly: 1, yearly: 1 / 12 }[s.cycle] : 0);
   const demoSettings = { share: ["net_worth", "robinhood_agent"], rh_main_source: "auto", caldav_url: "https://dav.example/calendars/me/bills/", caldav_user: "me", caldav_password: { set: true },
-    rh_mcp_url: "https://mcp.example/robinhood", rh_mcp_token: { set: true }, rh_mcp_read_tools: "get_account,get_positions", rh_mcp_tool_balances: "get_account", rh_mcp_tool_positions: "get_positions", rh_mcp_tool_history: "" };
+    rh_mcp_url: "https://mcp.example/robinhood", rh_mcp_token: { set: true }, rh_mcp_read_tools: "get_account,get_positions", rh_mcp_tool_balances: "get_account", rh_mcp_tool_positions: "get_positions", rh_mcp_tool_history: "", plaid_rate_item_month: "1.50", plaid_budget_month: "10", plaid_daily_cap: "500" };
   const rh = (positions, eq) => ({ source: "sample", as_of: new Date().toISOString(), balances: { equity: eq }, positions });
   return async (path, opts = {}) => {
     const m = opts.method || "GET";
@@ -152,7 +152,11 @@ function demoBackend() {
     if (path === "/api/settings" && m === "GET") return JSON.parse(JSON.stringify(demoSettings));
     if (path === "/api/settings" && m === "PUT") { for (const [k, v] of Object.entries(JSON.parse(opts.body))) demoSettings[k] = typeof demoSettings[k] === "object" && !Array.isArray(demoSettings[k]) ? { set: !!v } : v; return JSON.parse(JSON.stringify(demoSettings)); }
     if (path === "/api/status") return { plaid: { configured: true, env: "sandbox", items: [{ item_id: "item-1", institution: "Huntington" }, { item_id: "item-2", institution: "Axos" }, { item_id: "item-3", institution: "Capital One" }] },
-      robinhood: { agent: "up", csv: "up", live: "not deployed", csv_files: ["import-2026-11-01T0000Z.csv"], agent_configured: true }, caldav_configured: true };
+      robinhood: { agent: "up", csv: "up", live: "not deployed", csv_files: ["import-2026-11-01T0000Z.csv"], agent_configured: true }, caldav_configured: true,
+      imports: [{ provider: "cashapp", transactions: 41, last_transaction: addDays(t, -38) }, { provider: "paypal", transactions: 12, last_transaction: addDays(t, -6) }] };
+    if (path === "/api/plaid/usage") return { month: t.slice(0, 7), calls_month: 214, calls_today: 9, daily_cap: 500, items: 3, est_monthly_cost: 4.5, budget: 10, over_budget: false,
+      by_endpoint: { "/transactions/sync": 96, "/accounts/get": 62, "/transactions/recurring/get": 30, "/investments/holdings/get": 18, "/link/token/create": 8 } };
+    if (path === "/import/scan") return { imports: [] };
     if (path === "/api/settings/test-caldav") return { ok: true, status: 207 };
     if (path.startsWith("/api/plaid/items/")) return { removed: true };
     if (path === "/robinhood/csv-upload") throw new Error("Upload is disabled in the sample preview");
@@ -280,6 +284,8 @@ async function viewRobinhood(root) {
 
 async function viewConnect(root) {
     const dis = S.demo;
+  const st = await api("/api/status").catch(() => ({ imports: [] }));
+  const stale = (d) => Math.round((Date.now() - new Date(d + "T00:00:00Z")) / 864e5);
   root.append(
     h("div", { class: "panel" }, h("h3", {}, "Banks, cards, savings and IRA (Plaid)"), h("p", { class: "muted small" }, "Huntington, Discover, Axos and Capital One link through Plaid. Tokens are encrypted in your own container; the gateway never sees them."),
       h("button", { class: "btn primary", disabled: dis, onclick: async () => {
@@ -290,6 +296,8 @@ async function viewConnect(root) {
         } catch (e) { toast(e.message); }
       } }, "Link an account"), " ", h("button", { class: "btn", disabled: dis, onclick: async () => { try { await api("/sync", { method: "POST" }); toast("Synced"); } catch (e) { toast(e.message); } } }, "Sync now")),
     h("div", { class: "panel" }, h("h3", {}, "Cash App, PayPal, Venmo by CSV"), h("p", { class: "muted small" }, "Cash App has no Plaid support, so export its CSV and import it here. Use the same route for PayPal or Venmo if Plaid cannot link them. The format is detected automatically, and re-importing never double counts."),
+      st.imports.length ? h("div", { style: "display:grid;gap:4px;margin:8px 0" }, st.imports.map((i) => { const d = stale(i.last_transaction || "1970-01-01"); return h("div", { class: "small" }, h("b", {}, i.provider), ` · ${i.transactions} transactions · latest ${i.last_transaction} `, h("span", { class: "pill " + (d > 35 ? "r" : "t") }, d > 35 ? `${d} days old, export a new one` : "up to date")); })) : null,
+      h("p", { class: "muted small" }, "Faster: drop the CSV into ", h("code", { class: "mono" }, "data/<you>/imports/"), " on the server (or sync that folder from your phone). It is picked up on the next sync and then moved to ", h("code", { class: "mono" }, "done/"), "."),
       h("input", { type: "file", id: "csvfile", accept: ".csv,text/csv", disabled: dis }), " ", h("button", { class: "btn", disabled: dis, onclick: async () => {
         const f = $("#csvfile").files[0]; if (!f) return toast("Choose a CSV first");
         try { const r = await api("/import/csv", { method: "POST", headers: { "Content-Type": "text/csv" }, body: await f.text() }); toast(`${r.provider}: ${r.added} new of ${r.rows} rows`); } catch (e) { toast(e.message); }
@@ -303,7 +311,7 @@ const SHARE_LABELS = { net_worth: "Net worth", subscriptions: "Monthly subscript
 const dot = (st) => h("span", { class: "pill " + (st === "up" ? "t" : st === "down" || st === "error" ? "r" : "") }, st);
 
 async function viewSettings(root, rerender) {
-  const [cfg, st] = await Promise.all([api("/api/settings"), api("/api/status")]);
+  const [cfg, st, use] = await Promise.all([api("/api/settings"), api("/api/status"), api("/api/plaid/usage")]);
   const save = async (body, msg = "Saved") => { try { await api("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); toast(msg); rerender(); } catch (e) { toast(e.message); } };
   const field = (id, label, value, o = {}) => h("label", {}, label, h("input", { id, value: value ?? "", autocomplete: "off", ...o }));
   const secret = (id, label, isSet) => field(id, label, "", { type: "password", placeholder: isSet ? "saved, leave blank to keep" : "not set", autocomplete: "new-password" });
@@ -350,6 +358,17 @@ async function viewSettings(root, rerender) {
       h("p", { class: "muted small" }, "Your RSS reader and calendar app cannot sign in, so their links carry a secret in the address instead. That secret is the feed token. Anyone holding a link can read the amounts in it, and nothing else. It cannot log in or change anything. It is separate from your login token."),
       h("p", { class: "muted small" }, "It was printed once when this goblin was created. Paste it here so this page can build your links. It stays in this browser only. If a link leaks, rotate it on the server with ", h("code", { class: "mono" }, "python3 scripts/gen_compose.py --rotate-feed " + (S.name || "<name>")), " and restart the gateway."),
       h("div", { class: "url" }, h("input", { id: "feedtok", value: S.feedToken, placeholder: "feed token", autocomplete: "off" }), h("button", { class: "btn", onclick: () => { S.feedToken = val("feedtok"); store.set("gb_feed", S.feedToken); toast("Saved in this browser"); } }, "Save"))),
+
+    /* Plaid usage and cost */
+    h("div", { class: "panel" }, h("h3", {}, "Plaid usage and cost"),
+      use.over_budget ? h("p", { class: "banner" }, `Estimated ${usd(use.est_monthly_cost)} a month is over your ${usd(use.budget)} budget.`) : null,
+      h("div", { class: "grid", style: "margin:8px 0" }, kpi("Calls this month", String(use.calls_month), `${use.calls_today} today, cap ${use.daily_cap} a day`), kpi("Linked items", String(use.items), "Plaid bills per linked item"),
+        kpi("Estimated monthly", use.est_monthly_cost == null ? "Enter a rate" : usd(use.est_monthly_cost), use.budget ? `budget ${usd(use.budget)}` : "no budget set", use.over_budget ? "neg" : "")),
+      h("table", {}, h("tbody", {}, Object.entries(use.by_endpoint).map(([e, n]) => h("tr", {}, h("td", { class: "mono" }, e), h("td", { class: "num r" }, n))))),
+      h("p", { class: "muted small" }, "Plaid does not publish a price list. Your rates are in your Plaid dashboard once you request Production access. Type your per-item monthly rate here and the estimate follows. For billed usage, the dashboard is the source of truth. The daily cap stops a runaway sync from burning calls."),
+      h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); save({ plaid_rate_item_month: val("s-rate"), plaid_budget_month: val("s-bud"), plaid_daily_cap: val("s-cap") }); } },
+        field("s-rate", "Rate per item per month ($)", cfg.plaid_rate_item_month, { type: "number", step: "0.01", min: "0" }), field("s-bud", "Monthly budget ($)", cfg.plaid_budget_month, { type: "number", step: "0.01", min: "0" }),
+        field("s-cap", "Daily call cap", cfg.plaid_daily_cap, { type: "number", step: "1", min: "0", placeholder: "500" }), h("button", { class: "btn primary", type: "submit" }, "Save"))),
 
     /* Plaid */
     h("div", { class: "panel" }, h("h3", {}, "Linked banks"), h("p", { class: "muted small" }, st.plaid.configured ? `Plaid is set up (${st.plaid.env}).` : "Plaid is not configured. Add your client ID and secret to .secrets/plaid.env and restart."),

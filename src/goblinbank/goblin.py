@@ -57,7 +57,20 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     gateway_url = os.environ.get("GATEWAY_URL", "")
     client = httpx.Client(timeout=20, transport=transport)
     store = db or DB()
-    plaid = Plaid(plaid_transport)
+    class Usage:
+        """Counts every Plaid call per day and refuses once the daily cap is hit (a runaway-sync / webhook-storm guard)."""
+        def before(self, path):
+            cap = int(float(cfg.get(store, "plaid_daily_cap") or 500))
+            row = store.one("SELECT COALESCE(SUM(calls),0) n FROM plaid_usage WHERE day=?", (date.today().isoformat(),))
+            if row["n"] >= cap:
+                raise PlaidError(f"daily Plaid call cap reached ({cap}); raise it in Settings if this is expected")
+
+        def record(self, path):
+            with store.tx() as c:
+                c.execute("INSERT INTO plaid_usage VALUES(?,?,1) ON CONFLICT(day,endpoint) DO UPDATE SET calls=calls+1", (date.today().isoformat(), path))
+
+    plaid = Plaid(plaid_transport, usage=Usage())
+    import_dir = os.environ.get("IMPORT_DIR", "/data/imports")
     csv_dir = os.environ.get("RH_CSV_DIR", "/data/robinhood-csv")
     app = FastAPI(title=f"goblin:{name}")
 
@@ -183,13 +196,39 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     @app.post("/sync")
     def sync_now(request: Request):
         auth(request)
-        out = {"plaid": [], "robinhood": snapshot_robinhood()}
+        out = {"plaid": [], "robinhood": snapshot_robinhood(), "imports": scan_imports()}
         if plaid.configured:
             try:
                 out["plaid"] = sync.sync_all(store, plaid)
             except PlaidError as e:
                 out["plaid_error"] = str(e)
         return out
+
+    def scan_imports() -> list[dict]:
+        """Import any CSV dropped in the imports folder, then move it to done/ so it is never re-read."""
+        out = []
+        if not os.path.isdir(import_dir):
+            return out
+        done = os.path.join(import_dir, "done")
+        for f in sorted(os.listdir(import_dir)):
+            path = os.path.join(import_dir, f)
+            if not (f.lower().endswith(".csv") and os.path.isfile(path)) or os.path.getsize(path) > 5_000_000:
+                continue
+            try:
+                with open(path, encoding="utf-8-sig", errors="replace") as fh:
+                    prov, rows = importers.parse(fh.read())
+                added = importers.store(store, prov, rows)
+                os.makedirs(done, exist_ok=True)
+                os.replace(path, os.path.join(done, f"{sync.now().replace(':', '')}-{f}"))
+                out.append({"file": f, "provider": prov, "rows": len(rows), "added": added})
+            except (ValueError, OSError) as e:
+                out.append({"file": f, "error": str(e)[:120]})      # left in place so you can see and fix it
+        return out
+
+    @app.post("/import/scan")
+    def import_scan(request: Request):
+        auth(request)
+        return {"imports": scan_imports()}
 
     # ---------------- CSV import (PayPal / Venmo / Cash App) ----------------
     @app.post("/import/csv")
@@ -370,7 +409,23 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                           "items": store.all("SELECT item_id, institution FROM plaid_items")},
                 "robinhood": {"agent": probe("agent"), "csv": probe("csv"), "live": probe("live"), "csv_files": csvs,
                               "agent_configured": bool(cfg.get(store, "rh_mcp_url") and cfg.get(store, "rh_mcp_read_tools"))},
-                "caldav_configured": bool(cfg.get(store, "caldav_url"))}
+                "caldav_configured": bool(cfg.get(store, "caldav_url")),
+                "imports": store.all("""SELECT substr(a.id, 8) provider, COUNT(t.id) transactions, MAX(t.date) last_transaction
+                                        FROM accounts a LEFT JOIN transactions t ON t.account_id=a.id WHERE a.id LIKE 'manual:%' GROUP BY a.id""")}
+
+    @app.get("/api/plaid/usage")
+    def plaid_usage(request: Request):
+        """API calls this month and a cost estimate from rates YOU enter (Plaid does not publish them)."""
+        auth(request)
+        month = date.today().strftime("%Y-%m")
+        by = {r["endpoint"]: r["calls"] for r in store.all("SELECT endpoint, SUM(calls) calls FROM plaid_usage WHERE day LIKE ? GROUP BY endpoint", (month + "%",))}
+        today = store.one("SELECT COALESCE(SUM(calls),0) n FROM plaid_usage WHERE day=?", (date.today().isoformat(),))["n"]
+        items = store.one("SELECT COUNT(*) n FROM plaid_items")["n"]
+        rate, budget = cfg.get(store, "plaid_rate_item_month"), cfg.get(store, "plaid_budget_month")
+        est = round(items * float(rate), 2) if rate else None
+        return {"month": month, "calls_month": sum(by.values()), "calls_today": today, "daily_cap": int(float(cfg.get(store, "plaid_daily_cap") or 500)),
+                "by_endpoint": dict(sorted(by.items(), key=lambda kv: -kv[1])), "items": items, "est_monthly_cost": est,
+                "budget": float(budget) if budget else None, "over_budget": bool(est is not None and budget and est > float(budget))}
 
     @app.get("/internal/connector-config/rh-agent")
     def agent_config(request: Request):

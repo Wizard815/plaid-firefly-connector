@@ -79,7 +79,7 @@ def main(src="goblins.yaml"):
         _stub(SEC / f"{n}.integrations.env", "CALDAV_URL=\nCALDAV_USER=\nCALDAV_PASSWORD=\n")
         _stub(SEC / "plaid.env", "PLAID_CLIENT_ID=\nPLAID_SECRET=\nPLAID_ENV=sandbox\nPLAID_WEBHOOK_URL=\n")
         gw_goblins.append({"name": n, "url": f"http://goblin-{n}:8000", "internal_secret": internal, "user_token_sha256": tok_hash, "feed_token_sha256": kv["FEED_TOKEN_SHA256"]})
-        for sub in ("db", "robinhood-csv", "rh-live-session"):
+        for sub in ("db", "robinhood-csv", "rh-live-session", "imports"):
             d = ROOT / "data" / n / sub
             d.mkdir(parents=True, exist_ok=True)
             try:
@@ -92,7 +92,7 @@ def main(src="goblins.yaml"):
         env = {"ROLE": "goblin", "GOBLIN_NAME": n, "SHARE": ",".join(g.get("share", [])),
                "GATEWAY_URL": "http://gateway:8000", "RH_CSV_URL": f"http://{n}-rh-csv:8000"}
         services[f"goblin-{n}"] = {"build": ".", "env_file": [f".secrets/{n}.env", f".secrets/{n}.integrations.env", ".secrets/plaid.env"], "environment": env,
-                                   "volumes": [f"./data/{n}/db:/data", f"./data/{n}/robinhood-csv:/data/robinhood-csv"], "user": "10001",
+                                   "volumes": [f"./data/{n}/db:/data", f"./data/{n}/robinhood-csv:/data/robinhood-csv", f"./data/{n}/imports:/data/imports"], "user": "10001",
                                    "networks": ["edge", net, "egress"], "restart": "unless-stopped"}
         conn_env = {"INTERNAL_SECRET": connector}
         services[f"{n}-rh-csv"] = {"build": ".", "environment": {"ROLE": "rh-csv", "CSV_DIR": "/csv", **conn_env},

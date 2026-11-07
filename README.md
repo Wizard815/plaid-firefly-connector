@@ -26,6 +26,8 @@ One image, many roles (`ROLE=`), so the repo stays small.
 * **PayPal / Venmo / Cash App**: CSV import (no personal-account APIs exist). PayPal Credit may link via Plaid; check its directory.
 * **Settings page**: Robinhood source + CSV upload + agent MCP config, CalDAV, what the Orb may see, feed token help, relink/unlink banks.
 * **Plaid Investments** holdings feed the Robinhood main panel when a Robinhood item is linked (check Plaid's coverage first).
+* **Plaid usage + cost guard**: per-endpoint call counts, an estimate from the rate you enter, a monthly budget warning, and a daily call cap.
+* **Drop folder**: put CSVs in `data/<name>/imports/` (Cash App, PayPal, Venmo auto-detected); picked up on sync and moved to `done/`.
 * **UI** (`ui/index.html`, served by the gateway at `/`): sign in with goblin name + login token. Falls back to sample data when no gateway answers.
 
 ## Run

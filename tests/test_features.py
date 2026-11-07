@@ -332,3 +332,36 @@ def test_plaid_item_removal_deletes_data():
     assert c.delete("/api/plaid/items/item-1", headers=H).json()["accounts"] == 2
     assert c.get("/api/accounts", headers=H).json() == [] and c.get("/api/transactions", headers=H).json() == []
     assert c.delete("/api/plaid/items/item-1", headers=H).status_code == 404
+
+
+def test_plaid_usage_counts_cap_and_cost(monkeypatch):
+    db = DB(":memory:")
+    c = TestClient(mk(db=db, plaid_transport=plaid_mock()))
+    c.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "Huntington"})
+    u = c.get("/api/plaid/usage", headers=H).json()
+    assert u["calls_month"] >= 4 and u["by_endpoint"]["/accounts/get"] == 1 and u["est_monthly_cost"] is None   # no rate entered -> no guess
+    c.put("/api/settings", headers=H, json={"plaid_rate_item_month": "1.50", "plaid_budget_month": "1"})
+    u = c.get("/api/plaid/usage", headers=H).json()
+    assert u["est_monthly_cost"] == 1.5 and u["over_budget"] is True
+    assert c.put("/api/settings", headers=H, json={"plaid_rate_item_month": "free"}).status_code == 422
+    assert c.put("/api/settings", headers=H, json={"plaid_daily_cap": "2.5"}).status_code == 422
+    # daily cap blocks further calls
+    c.put("/api/settings", headers=H, json={"plaid_daily_cap": "3"})
+    r = c.post("/plaid/link-token", headers=H)
+    assert r.status_code == 502 and "cap" in r.json()["detail"]
+
+
+def test_drop_folder_import_moves_files(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMPORT_DIR", str(tmp_path))
+    cash = "Transaction ID,Date,Transaction Type,Currency,Amount,Fee,Net Amount,Asset Type,Account,Notes\nCA1,2026-11-06,Sent,USD,-$8.00,$0,-$8.00,Cash,Cash,Coffee\n"
+    (tmp_path / "cashapp_oct.csv").write_text(cash)
+    (tmp_path / "junk.csv").write_text("a,b\n1,2\n")
+    (tmp_path / "notes.txt").write_text("ignore me")
+    c = TestClient(mk())
+    r = c.post("/import/scan", headers=H).json()["imports"]
+    assert {"file": "cashapp_oct.csv", "provider": "cashapp", "rows": 1, "added": 1} in r
+    assert any(x["file"] == "junk.csv" and "error" in x for x in r)
+    assert not (tmp_path / "cashapp_oct.csv").exists() and (tmp_path / "junk.csv").exists() and (tmp_path / "notes.txt").exists()
+    assert c.post("/import/scan", headers=H).json()["imports"][0]["file"] == "junk.csv"      # nothing re-imported
+    st = c.get("/api/status", headers=H).json()["imports"]
+    assert st == [{"provider": "cashapp", "transactions": 1, "last_transaction": "2026-11-06"}]

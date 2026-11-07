@@ -16,6 +16,8 @@ SPEC = {
     "rh_mcp_tool_balances": ("str", False, "RH_MCP_TOOL_BALANCES"),
     "rh_mcp_tool_positions": ("str", False, "RH_MCP_TOOL_POSITIONS"),
     "rh_mcp_tool_history": ("str", False, "RH_MCP_TOOL_HISTORY"),
+    # Plaid cost guard. Rates are YOURS to enter: Plaid shows them in its dashboard, not in any public price list.
+    "plaid_rate_item_month": ("num", False, ""), "plaid_budget_month": ("num", False, ""), "plaid_daily_cap": ("int", False, ""),
 }
 
 
@@ -44,6 +46,12 @@ def validate(key: str, value) -> str:
     v = str(value).strip()
     if kind == "choice" and v not in SOURCES:
         raise ValueError(f"{key} must be one of {', '.join(SOURCES)}")
+    if kind in ("num", "int") and v:
+        try:
+            n = float(v)
+            assert n >= 0 and (kind == "num" or n == int(n))
+        except (ValueError, AssertionError):
+            raise ValueError(f"{key} must be a non-negative {'number' if kind == 'num' else 'whole number'}")
     if len(v) > 2000:
         raise ValueError(f"{key} too long")
     if key.endswith("_url") and v and not v.startswith(("http://", "https://")):
