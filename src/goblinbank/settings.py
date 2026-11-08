@@ -17,7 +17,7 @@ SPEC = {
     "rh_mcp_tool_positions": ("str", False, "RH_MCP_TOOL_POSITIONS"),
     "rh_mcp_tool_history": ("str", False, "RH_MCP_TOOL_HISTORY"),
     # Plaid cost guard. Rates are YOURS to enter: Plaid shows them in its dashboard, not in any public price list.
-    "plaid_rate_item_month": ("num", False, ""), "plaid_budget_month": ("num", False, ""), "plaid_daily_cap": ("int", False, ""), "agent_provider": ("int", False, ""), "alert_missed": ("onoff", False, ""), "sync_minutes": ("int", False, ""), "alert_maturity_days": ("int", False, ""), "notify_url": ("str", True, ""), "notify_min_severity": ("sev", False, ""), "alert_untracked": ("onoff", False, ""),
+    "plaid_rate_item_month": ("num", False, ""), "plaid_budget_month": ("num", False, ""), "plaid_daily_cap": ("int", False, ""), "agent_provider": ("int", False, ""), "alert_missed": ("onoff", False, ""), "sync_minutes": ("int", False, ""), "alert_maturity_days": ("int", False, ""), "notify_url": ("str", True, ""), "notify_min_severity": ("sev", False, ""), "notify_url_cds": ("str", True, ""), "notify_min_severity_cds": ("sev", False, ""), "alert_untracked": ("onoff", False, ""),
 }
 
 
@@ -26,7 +26,7 @@ def get(db, key: str) -> str:
     row = db.one("SELECT value FROM settings WHERE key=?", (key,))
     if row is not None:
         return crypto.decrypt(row["value"]) if secret and row["value"] else (row["value"] or "")
-    return os.environ.get(env, "") if env else ("auto" if key == "rh_main_source" else "on" if kind == "onoff" else "warning" if kind == "sev" else "")
+    return os.environ.get(env, "") if env else ("auto" if key == "rh_main_source" else "on" if kind == "onoff" else ("info" if key.endswith("_cds") else "warning") if kind == "sev" else "")
 
 
 def get_list(db, key: str) -> list[str]:
@@ -58,7 +58,7 @@ def validate(key: str, value) -> str:
             raise ValueError(f"{key} must be a non-negative {'number' if kind == 'num' else 'whole number'}")
     if len(v) > 2000:
         raise ValueError(f"{key} too long")
-    if (key.endswith("_url")) and v and not v.startswith(("http://", "https://")):
+    if ("_url" in key) and v and not v.startswith(("http://", "https://")):
         raise ValueError(f"{key} must start with http:// or https://")
     return v
 

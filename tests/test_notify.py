@@ -199,3 +199,94 @@ def test_background_loop_notifies_on_its_own(monkeypatch):
     assert len(sent) == 1
     time.sleep(0.3)
     assert len(sent) == 1                                                                                       # and it does not repeat itself
+
+
+# ---------------------------------------------------------------- two routes: CDs and bonds, and everything else
+HOOK2 = "https://mm.example/hooks/cds456"
+
+
+def rig2(fail=()):
+    sent = []
+
+    def h(req: httpx.Request):
+        sent.append((str(req.url), json.loads(req.content)))
+        return httpx.Response(500 if str(req.url) in fail else 200)
+    db = DB(":memory:")
+    return TestClient(goblin.create_app(db=db, today=lambda: TODAY, notify_transport=httpx.MockTransport(h))), db, sent
+
+
+def test_cd_alerts_go_to_their_own_channel_with_their_own_floor():
+    c, db, sent = rig2()
+    c.put("/api/settings", headers=H, json={"notify_url": HOOK, "notify_url_cds": HOOK2})
+    add_cd(db, "Ally CD", maturity="2026-11-20")                                                  # matures in 13 days: an info-level alert
+    add_cd(db, "Old CD", maturity="2026-10-20")                                                   # matured and idle: a warning
+    overdrawn(db)                                                                                 # critical, not about a CD
+    r = c.post("/api/notify/run", headers=H).json()
+    assert r["sent"] == 3 and r["by_route"] == {"cds": 2, "other": 1}
+    to = {u: b["text"] for u, b in sent}
+    assert "CDs and bonds" in to[HOOK2] and "Ally CD matures in 13 days" in to[HOOK2] and "Old CD matured 18 days ago" in to[HOOK2] and "overdrawn" not in to[HOOK2]
+    assert "overdrawn" in to[HOOK] and "CD" not in to[HOOK] and "Ally" not in to[HOOK]
+    assert c.post("/api/notify/run", headers=H).json()["sent"] == 0 and len(sent) == 2             # nothing repeats on either route
+
+
+def test_floors_are_separate_per_route():
+    c, db, sent = rig2()
+    c.put("/api/settings", headers=H, json={"notify_url": HOOK, "notify_url_cds": HOOK2, "notify_min_severity": "critical", "notify_min_severity_cds": "warning"})
+    add_cd(db, "Ally CD", maturity="2026-11-20")                                                  # info: below the CD floor now
+    db.conn.execute("INSERT INTO accounts(id,source,name,kind,balance,min_balance) VALUES('low','manual','Low','cash',80,200)"); db.conn.commit()    # a warning: below the main floor
+    assert c.post("/api/notify/run", headers=H).json()["sent"] == 0 and sent == []
+    add_cd(db, "Old CD", maturity="2026-10-20")
+    r = c.post("/api/notify/run", headers=H).json()
+    assert r["by_route"] == {"cds": 1} and sent[0][0] == HOOK2 and "Old CD" in sent[0][1]["text"]
+    c.put("/api/settings", headers=H, json={"notify_min_severity": "warning"})
+    assert c.post("/api/notify/run", headers=H).json()["titles"] == ["Low is below your minimum"]
+    assert c.put("/api/settings", headers=H, json={"notify_min_severity_cds": "shout"}).status_code == 422
+    assert c.get("/api/settings", headers=H).json()["notify_min_severity_cds"] == "warning"
+
+
+def test_without_a_cd_channel_cd_alerts_follow_the_main_route_and_its_floor():
+    c, db, sent = rig2()
+    c.put("/api/settings", headers=H, json={"notify_url": HOOK, "notify_min_severity": "warning"})
+    add_cd(db, "Ally CD", maturity="2026-11-20")                                                  # info
+    assert c.post("/api/notify/run", headers=H).json()["sent"] == 0                               # the main floor applies, so an info-level CD alert stays in the app
+    add_cd(db, "Old CD", maturity="2026-10-20")
+    r = c.post("/api/notify/run", headers=H).json()
+    assert r["by_route"] == {"cds": 1} and sent[0][0] == HOOK and "Old CD matured" in sent[0][1]["text"]      # warning-level CD alert uses the only webhook
+    st = c.get("/api/notify/status", headers=H).json()
+    assert st["main"] and not st["cds"] and st["configured"]
+
+
+def test_only_a_cd_channel_set_means_other_alerts_have_nowhere_to_go():
+    c, db, sent = rig2()
+    c.put("/api/settings", headers=H, json={"notify_url_cds": HOOK2})
+    overdrawn(db); add_cd(db, "Old CD", maturity="2026-10-20")
+    r = c.post("/api/notify/run", headers=H).json()
+    assert r["by_route"] == {"cds": 1} and [u for u, _ in sent] == [HOOK2]
+    assert db.one("SELECT COUNT(*) n FROM notified WHERE key LIKE 'negative_balance%'")["n"] == 0    # not marked as told: it will go out as soon as a main address exists
+    c.put("/api/settings", headers=H, json={"notify_url": HOOK})
+    assert c.post("/api/notify/run", headers=H).json()["titles"] == ["Checking 1 is overdrawn"]
+
+
+def test_one_route_failing_does_not_block_the_other():
+    c, db, sent = rig2(fail=(HOOK2,))
+    c.put("/api/settings", headers=H, json={"notify_url": HOOK, "notify_url_cds": HOOK2})
+    overdrawn(db); add_cd(db, "Old CD", maturity="2026-10-20")
+    r = c.post("/api/notify/run", headers=H).json()
+    assert r["by_route"] == {"other": 1} and "cds: the webhook answered 500" in r["error"]
+    assert db.one("SELECT COUNT(*) n FROM notified WHERE key LIKE 'matured_idle%'")["n"] == 0 and db.one("SELECT COUNT(*) n FROM notified WHERE key LIKE 'negative%'")["n"] == 1
+    good, db2, sent2 = rig2()
+    assert notify.run(db, TODAY, "alice", httpx.MockTransport(lambda req: httpx.Response(200)))["by_route"] == {"cds": 1}      # the CD alert is retried and delivered
+
+
+def test_test_buttons_per_route_and_secret_storage():
+    c, db, sent = rig2()
+    assert c.post("/api/notify/test?route=cds", headers=H).status_code == 503
+    c.put("/api/settings", headers=H, json={"notify_url": HOOK})
+    assert c.post("/api/notify/test?route=cds", headers=H).json() == {"ok": True} and sent[-1][0] == HOOK                          # no CD address: the test uses the main one
+    c.put("/api/settings", headers=H, json={"notify_url_cds": HOOK2})
+    assert c.post("/api/notify/test?route=cds", headers=H).json() == {"ok": True} and sent[-1][0] == HOOK2 and "for CDs and bonds" in sent[-1][1]["text"]
+    assert c.post("/api/notify/test", headers=H).json() == {"ok": True} and sent[-1][0] == HOOK
+    assert c.post("/api/notify/test?route=weird", headers=H).status_code == 422
+    r = c.get("/api/settings", headers=H).json()
+    assert r["notify_url_cds"] == {"set": True} and HOOK2 not in json.dumps(r) and HOOK2 not in str(db.all("SELECT value FROM settings"))
+    assert c.put("/api/settings", headers=H, json={"notify_url_cds": "gopher://x"}).status_code == 422

@@ -282,16 +282,19 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     def notify_status(request: Request):
         auth(request)
         last = store.one("SELECT MAX(sent) s, COUNT(*) n FROM notified")
-        return {"configured": bool(cfg.get(store, "notify_url")), "min_severity": cfg.get(store, "notify_min_severity") or "warning", "last_sent": last["s"], "tracked": last["n"]}
+        return {"configured": bool(cfg.get(store, "notify_url") or cfg.get(store, "notify_url_cds")), "main": bool(cfg.get(store, "notify_url")), "cds": bool(cfg.get(store, "notify_url_cds")),
+                "min_severity": cfg.get(store, "notify_min_severity") or "warning", "min_severity_cds": cfg.get(store, "notify_min_severity_cds") or "info", "last_sent": last["s"], "tracked": last["n"]}
 
     @app.post("/api/notify/test")
-    def notify_test(request: Request):
+    def notify_test(request: Request, route: str = "main"):
         auth(request)
-        url = cfg.get(store, "notify_url")
+        if route not in ("main", "cds"):
+            raise HTTPException(422, "route must be main or cds")
+        url = cfg.get(store, "notify_url_cds") or cfg.get(store, "notify_url") if route == "cds" else cfg.get(store, "notify_url")
         if not url:
             raise HTTPException(503, "Add your Mattermost webhook address first")
         try:
-            notify.post(url, {"text": f":coin: **Goblin Bank ({name})**: notifications are working.", "username": f"Goblin Bank ({name})", "icon_emoji": ":coin:"}, notify_transport)
+            notify.post(url, {"text": f":coin: **Goblin Bank ({name})**: notifications are working" + (" for CDs and bonds." if route == "cds" else "."), "username": f"Goblin Bank ({name})", "icon_emoji": ":coin:"}, notify_transport)
         except httpx.HTTPStatusError as e:
             return {"ok": False, "detail": f"the webhook answered {e.response.status_code}" + (" (is the address right?)" if e.response.status_code in (400, 404) else "")}
         except httpx.HTTPError as e:

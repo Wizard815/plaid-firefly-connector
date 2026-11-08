@@ -726,11 +726,18 @@ async function tabCategories(root, rerender) {
 }
 async function tabAlerts(root, rerender) {
   const [cfg, ns] = await Promise.all([api("/api/settings"), api("/api/notify/status").catch(() => ({ configured: false, min_severity: "warning" }))]);
+  const sevOpts = [["critical", "Only critical"], ["warning", "Warnings and critical"], ["info", "Everything"]];
   add(root, h("div", { class: "panel" }, h("h3", {}, "Phone notifications (Mattermost)"),
-    h("p", { class: "muted small" }, "In Mattermost: Integrations, Incoming Webhooks, Add Incoming Webhook, pick a channel, copy the URL, paste it here. Each new alert is sent once, a critical one is repeated after a day if it is still there, and an alert that clears and returns is announced again. The address must be reachable from this server (a LAN address or host.docker.internal works)."),
-    h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); saveCfg(withSecret({ notify_min_severity: val("nt-sev") }, "notify_url", "nt-url"), rerender); } },
-      secretField("nt-url", "Mattermost webhook URL", cfg.notify_url.set), select("nt-sev", "Send me", [["critical", "Only critical"], ["warning", "Warnings and critical"], ["info", "Everything"]], cfg.notify_min_severity || "warning"), h("button", { class: "btn primary", type: "submit" }, "Save")),
-    h("div", { class: "chips", style: "margin-top:10px" }, h("button", { class: "btn", disabled: !ns.configured, onclick: async () => { try { const r = await api("/api/notify/test", { method: "POST" }); toast(r.ok ? "Test message sent" : "Failed: " + r.detail); } catch (e) { fail(e); } } }, "Send a test message"),
+    h("p", { class: "muted small" }, "In Mattermost: Integrations, Incoming Webhooks, Add Incoming Webhook, pick a channel, copy the URL, paste it below. Each new alert is sent once, a critical one is repeated after a day if it is still there, and an alert that clears and returns is announced again. The address must be reachable from this server (a LAN address or host.docker.internal works)."),
+    h("form", { onsubmit: (e) => { e.preventDefault(); saveCfg(withSecret(withSecret({ notify_min_severity: val("nt-sev"), notify_min_severity_cds: val("nt-sev-cds") }, "notify_url", "nt-url"), "notify_url_cds", "nt-url-cds"), rerender); }, style: "display:grid;gap:14px" },
+      h("div", { class: "subform" }, h("b", { style: "grid-column:1/-1" }, "CDs and bonds"), secretField("nt-url-cds", "Channel for CD alerts (optional)", cfg.notify_url_cds.set), select("nt-sev-cds", "Send me", sevOpts, cfg.notify_min_severity_cds || "info"),
+        h("div", { class: "small muted", style: "grid-column:1/-1" }, "Maturing soon and matured-but-still-sitting-there. Leave the address empty and these use the channel below, with its severity.")),
+      h("div", { class: "subform" }, h("b", { style: "grid-column:1/-1" }, "Everything else"), secretField("nt-url", "Main channel", cfg.notify_url.set), select("nt-sev", "Send me", sevOpts, cfg.notify_min_severity || "warning"),
+        h("div", { class: "small muted", style: "grid-column:1/-1" }, "Overdrawn or low accounts, missed payments, free savings, and everything else.")),
+      h("div", {}, h("button", { class: "btn primary", type: "submit" }, "Save"))),
+    h("div", { class: "chips", style: "margin-top:10px" },
+      h("button", { class: "btn", disabled: !ns.main, onclick: async () => { try { const r = await api("/api/notify/test", { method: "POST" }); toast(r.ok ? "Test message sent" : "Failed: " + r.detail); } catch (e) { fail(e); } } }, "Send a test message"),
+      h("button", { class: "btn", disabled: !ns.configured, onclick: async () => { try { const r = await api("/api/notify/test?route=cds", { method: "POST" }); toast(r.ok ? "Test sent to the CD channel" : "Failed: " + r.detail); } catch (e) { fail(e); } } }, "Send a test to the CD channel"),
       h("button", { class: "btn", disabled: !ns.configured, onclick: async () => { try { const r = await api("/api/notify/run", { method: "POST" }); toast(r.error ? "Failed: " + r.error : r.sent ? `Sent ${r.sent} alert${r.sent === 1 ? "" : "s"}` : "Nothing new to send"); } catch (e) { fail(e); } } }, "Check and send now"),
       h("span", { class: "muted small" }, ns.configured ? (ns.last_sent ? `last sent ${ago(ns.last_sent)}` : "nothing sent yet") : "not set up"))),
     h("div", { class: "panel" }, h("h3", {}, "What should I flag?"), h("p", { class: "muted small" }, "Always on: overdrawn accounts and accounts below the minimum you set on them."),

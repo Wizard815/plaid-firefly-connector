@@ -60,3 +60,17 @@ async def hook(request: Request):
 @app.get("/hook/_log")
 async def hook_log():
     return HOOKS
+
+
+HOOKS_B: list = []
+
+
+@app.post("/hookb")
+async def hook_b(request: Request):
+    HOOKS_B.append(await request.json())
+    return "ok"
+
+
+@app.get("/hookb/_log")
+async def hook_b_log():
+    return HOOKS_B
