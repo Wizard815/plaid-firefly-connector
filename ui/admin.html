@@ -1,0 +1,48 @@
+<!doctype html>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Goblin Bank admin</title>
+<style>
+:root{--bg:#edf1f2;--panel:#f8fafa;--line:#d5dde0;--fg:#14232b;--muted:#5a6b73;--teal:#17766b;--teal-soft:#d6ece8;--red:#b3372f;--red-soft:#f5dcd9;--brass:#a8741a}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1a1f;--panel:#13242b;--line:#24383f;--fg:#e4eeef;--muted:#8ea4ab;--teal:#4cc2b0;--teal-soft:#16393a;--red:#f07f73;--red-soft:#40201e;--brass:#e0b052;color-scheme:dark}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,"Segoe UI",sans-serif;padding:16px max(16px,env(safe-area-inset-left))}
+main{max-width:860px;margin:0 auto;display:grid;gap:16px}h1{font-size:1.5rem;margin:0}.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;overflow-x:auto}
+.muted{color:var(--muted)}.small{font-size:.86rem}table{width:100%;border-collapse:collapse}th{text-align:left;font-size:.75rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:6px 10px;border-bottom:1px solid var(--line)}
+td{padding:9px 10px;border-bottom:1px solid var(--line)}td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}tr:last-child td{border-bottom:0}
+.pill{display:inline-block;border-radius:999px;padding:1px 10px;font-size:.78rem;font-weight:600}.up{background:var(--teal-soft);color:var(--teal)}.down{background:var(--red-soft);color:var(--red)}
+input,button{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 12px}button{cursor:pointer}button.primary{background:var(--teal);border-color:var(--teal);color:#fff}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.err{color:var(--red)}
+</style>
+<main>
+  <h1>Goblin Bank admin</h1>
+  <p class="muted small">General health and call counts, only when you ask. Nothing here shows what anyone asked for or any of their data, and the gateway keeps no log of requests: no addresses, search terms, tokens or bodies.</p>
+  <form class="panel row" id="login"><input id="tok" type="password" placeholder="Admin token" autocomplete="current-password" required style="flex:1;min-width:200px"><button class="primary" type="submit">Check now</button><button type="button" id="reset">Clear counts</button><span id="msg" class="small muted"></span></form>
+  <div class="panel" id="out" hidden></div>
+</main>
+<script>
+const $ = (s) => document.querySelector(s), out = $("#out"), msg = $("#msg");
+const el = (t, a = {}, ...k) => { const e = document.createElement(t); for (const [x, v] of Object.entries(a)) e.setAttribute(x, v); k.flat().forEach((c) => e.append(c?.nodeType ? c : document.createTextNode(String(c)))); return e; };
+const get = (o, k, f) => (o && o[k] ? o[k][f] : 0);
+async function call(path, method = "GET") {
+  const r = await fetch(path, { method, headers: { Authorization: "Bearer " + $("#tok").value.trim() } });
+  if (r.status === 401) throw new Error("That is not the admin token.");
+  if (!r.ok) throw new Error("The gateway answered " + r.status);
+  return r.json();
+}
+async function show() {
+  msg.textContent = "Checking…"; msg.className = "small muted";
+  try {
+    const d = await call("/admin/status"), rows = d.goblins;
+    const calls = (g, k, f = "calls") => get(g.calls, k, f);
+    out.replaceChildren(
+      el("table", {}, el("thead", {}, el("tr", {}, ["Goblin", "Status", "App calls", "Token calls", "Webhooks", "Errors"].map((h, i) => el("th", i > 1 ? { class: "n" } : {}, h)))),
+        el("tbody", {}, rows.map((g) => el("tr", {}, el("td", {}, g.name), el("td", {}, el("span", { class: "pill " + (g.up ? "up" : "down") }, g.up ? "up" : "down")),
+          el("td", { class: "n" }, calls(g, "app")), el("td", { class: "n" }, calls(g, "api_token")), el("td", { class: "n" }, calls(g, "webhook")),
+          el("td", { class: "n" }, ["app", "api_token", "webhook"].reduce((a, k) => a + calls(g, k, "client_errors") + calls(g, k, "server_errors"), 0)))))),
+      el("p", { class: "small muted" }, `Pondering Orb summary calls: ${d.orb.calls || 0}. All calls: ${d.total.calls} (${d.total.client_errors} refused or invalid, ${d.total.server_errors} server errors), since the gateway last started or was cleared ${Math.round(d.since_seconds / 60)} minutes ago.`),
+      el("p", { class: "small muted" }, d.note));
+    out.hidden = false; msg.textContent = "Updated " + new Date().toLocaleTimeString();
+  } catch (e) { msg.textContent = e.message; msg.className = "small err"; out.hidden = true; }
+}
+$("#login").addEventListener("submit", (e) => { e.preventDefault(); show(); });
+$("#reset").addEventListener("click", async () => { try { await call("/admin/reset", "POST"); msg.textContent = "Counts cleared."; await show(); } catch (e) { msg.textContent = e.message; msg.className = "small err"; } });
+</script>

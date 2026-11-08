@@ -396,14 +396,14 @@ def list_models(kind: str, base_url: str, key: str, transport=None) -> list[dict
         if kind == "anthropic":
             r = http.get(base + "/v1/models", headers={"x-api-key": key, "anthropic-version": "2023-06-01"}, params={"limit": 1000})
             r.raise_for_status()
-            return [{"id": m["id"], "context": None} for m in r.json().get("data", [])]
+            return [{"id": m["id"], "context": m.get("max_input_tokens")} for m in r.json().get("data", [])]
         hdr = {"Authorization": f"Bearer {key}"} if key else {}
         try:
             r = http.get(base + "/models", headers=hdr)
             r.raise_for_status()
             body = r.json()
             rows = body.get("data") or body.get("models") or []
-            out = [{"id": m.get("id") or m.get("name"), "context": m.get("context_length") or m.get("max_context_length")} for m in rows if isinstance(m, dict) and (m.get("id") or m.get("name"))]
+            out = [{"id": m.get("id") or m.get("name"), "context": m.get("context_length") or m.get("max_context_length") or m.get("max_model_len") or m.get("context_window")} for m in rows if isinstance(m, dict) and (m.get("id") or m.get("name"))]
             if out:
                 return out
         except (httpx.HTTPError, ValueError):
@@ -413,19 +413,46 @@ def list_models(kind: str, base_url: str, key: str, transport=None) -> list[dict
         return [{"id": m["name"], "context": None} for m in r.json().get("models", []) if m.get("name")]
 
 
-def model_context(base_url: str, model: str, transport=None) -> int | None:
-    """Ollama can say how long a context a model supports (POST /api/show). None when the server cannot tell."""
-    try:
-        with httpx.Client(timeout=15, transport=transport) as http:
-            r = http.post(_origin(base_url) + "/api/show", json={"model": model, "name": model})
+def model_context(base_url: str, model: str, transport=None) -> dict:
+    """The context window to use for this model on this server, preferring what the server itself says it is running.
+
+    Ollama: the Modelfile preset (PARAMETER num_ctx) is what it really uses, so that wins; otherwise the model's maximum, capped at 32768
+    because Ollama only uses that much when num_ctx is set. LM Studio: the loaded context. llama.cpp server: n_ctx (the server's own setting).
+    Returns {"context_tokens": None} when the server cannot say."""
+    origin = _origin(base_url)
+    with httpx.Client(timeout=15, transport=transport) as http:
+        try:
+            r = http.post(origin + "/api/show", json={"model": model, "name": model})
             r.raise_for_status()
-            info = r.json().get("model_info") or {}
-            for k, v in info.items():
-                if k.endswith(".context_length") and isinstance(v, int):
-                    return v
-    except (httpx.HTTPError, ValueError):
-        pass
-    return None
+            body = r.json()
+            m = re.search(r"^\s*num_ctx\s+(\d+)", body.get("parameters") or "", re.M)
+            if m:
+                return {"context_tokens": int(m.group(1)), "preset": True, "source": "the model's num_ctx preset (Ollama)"}
+            mx = next((v for k, v in (body.get("model_info") or {}).items() if k.endswith(".context_length") and isinstance(v, int)), None)
+            if mx:
+                return {"context_tokens": min(mx, 32768), "model_max": mx, "preset": False, "source": "the model's maximum (Ollama only uses this much when num_ctx is set, so capped at 32768)"}
+        except (httpx.HTTPError, ValueError):
+            pass
+        try:                                                    # LM Studio's native listing knows what is loaded
+            r = http.get(origin + "/api/v0/models")
+            r.raise_for_status()
+            row = next((x for x in r.json().get("data", []) if x.get("id") == model), None)
+            if row and (row.get("loaded_context_length") or row.get("max_context_length")):
+                loaded = row.get("loaded_context_length")
+                return {"context_tokens": int(loaded or row["max_context_length"]), "preset": bool(loaded), "model_max": row.get("max_context_length"),
+                        "source": "the context LM Studio has loaded" if loaded else "the model's maximum (LM Studio)"}
+        except (httpx.HTTPError, ValueError):
+            pass
+        try:                                                    # llama.cpp's server reports the context it was started with
+            r = http.get(origin + "/props")
+            r.raise_for_status()
+            j = r.json()
+            n = (j.get("default_generation_settings") or {}).get("n_ctx") or j.get("n_ctx")
+            if n:
+                return {"context_tokens": int(n), "preset": True, "source": "the server's own context size (llama.cpp n_ctx)"}
+        except (httpx.HTTPError, ValueError, AttributeError):
+            pass
+    return {"context_tokens": None}
 
 
 def auto_name(base_url: str, model: str) -> str:
@@ -443,7 +470,7 @@ class ProviderIn(BaseModel):
     api_key: str | None = None          # omit = unchanged, "" = clear
     tools: bool = True
     allow_cloud: bool = False
-    context_tokens: int = 8192          # the model's context window; chats compact before it fills
+    context_tokens: int | None = None   # the model's context window; chats compact before it fills. Blank = ask the server (its preset wins), else 8192
 
 
 class ChatIn(BaseModel):
@@ -463,7 +490,7 @@ def register(app, ctx):
             raise HTTPException(422, "kind must be openai (any OpenAI-compatible server) or anthropic")
         if not p.model.strip():
             raise HTTPException(422, "pick or type a model")
-        if not 1024 <= p.context_tokens <= 4_000_000:
+        if p.context_tokens is not None and not 1024 <= p.context_tokens <= 4_000_000:
             raise HTTPException(422, "context_tokens must be between 1024 and 4000000")
         if urlparse(p.base_url).scheme not in ("http", "https") or not urlparse(p.base_url).hostname:
             raise HTTPException(422, "base_url must be an http(s) address")
@@ -478,10 +505,18 @@ def register(app, ctx):
         auth(request)
         return {"items": [view(p) for p in store.all("SELECT * FROM providers ORDER BY id")], "default": cfg.get(store, "agent_provider")}
 
+    def context_for(p: ProviderIn, keep: int | None = None) -> int:
+        """What you typed wins; otherwise the server's own preset for that model; otherwise what the provider had; otherwise 8192."""
+        if p.context_tokens is not None:
+            return p.context_tokens
+        found = model_context(p.base_url, p.model.strip(), ctx.llm_transport).get("context_tokens") if p.kind == "openai" else None
+        return found or keep or 8192
+
     @app.post("/api/agent/providers")
     def provider_add(request: Request, p: ProviderIn):
         auth(request)
         check(p)
+        p.context_tokens = context_for(p)
         with store.tx() as c:
             cur = c.execute("INSERT INTO providers(name,kind,base_url,model,key_enc,tools,allow_cloud,context_tokens) VALUES(?,?,?,?,?,?,?,?)",
                             ((p.name.strip() or auto_name(p.base_url, p.model.strip())), p.kind, p.base_url.strip(), p.model.strip(), crypto.encrypt(p.api_key) if p.api_key else "", int(p.tools), int(p.allow_cloud), p.context_tokens))
@@ -494,6 +529,7 @@ def register(app, ctx):
         row = store.one("SELECT * FROM providers WHERE id=?", (pid,))
         if not row:
             raise HTTPException(404, "not found")
+        p.context_tokens = context_for(p, row["context_tokens"])
         key = row["key_enc"] if p.api_key is None else (crypto.encrypt(p.api_key) if p.api_key else "")
         with store.tx() as c:
             c.execute("UPDATE providers SET name=?,kind=?,base_url=?,model=?,key_enc=?,tools=?,allow_cloud=?,context_tokens=? WHERE id=?",
@@ -537,7 +573,7 @@ def register(app, ctx):
     @app.post("/api/agent/model-info")
     def model_info(request: Request, b: Discover):
         auth(request)
-        return {"context_tokens": model_context(b.base_url, b.model or "", ctx.llm_transport) if b.kind == "openai" else None}
+        return model_context(b.base_url, b.model or "", ctx.llm_transport) if b.kind == "openai" else {"context_tokens": None}
 
     @app.get("/api/agent/tools")
     def tool_list(request: Request):

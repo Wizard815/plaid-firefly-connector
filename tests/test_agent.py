@@ -274,7 +274,8 @@ def test_refresh_lists_models_from_an_openai_compatible_server():
 def test_refresh_falls_back_to_ollama_native_list_and_reads_context_sizes():
     c = TestClient(goblin.create_app(db=DB(":memory:"), today=lambda: TODAY, llm_transport=models_server({("GET", "/api/tags"): {"models": [{"name": "mistral:7b"}]}, ("POST", "/api/show"): {"model_info": {"llama.context_length": 131072}}})))
     assert [m["id"] for m in c.post("/api/agent/models", headers=H, json={"kind": "openai", "base_url": "http://host.docker.internal:11434/v1"}).json()["models"]] == ["mistral:7b"]
-    assert c.post("/api/agent/model-info", headers=H, json={"kind": "openai", "base_url": "http://host.docker.internal:11434/v1", "model": "mistral:7b"}).json() == {"context_tokens": 131072}
+    info = c.post("/api/agent/model-info", headers=H, json={"kind": "openai", "base_url": "http://host.docker.internal:11434/v1", "model": "mistral:7b"}).json()
+    assert info["context_tokens"] == 32768 and info["model_max"] == 131072 and info["preset"] is False         # no num_ctx preset: capped, because Ollama only uses what num_ctx says
     c2 = TestClient(goblin.create_app(db=DB(":memory:"), today=lambda: TODAY, llm_transport=models_server({})))
     assert c2.post("/api/agent/model-info", headers=H, json={"kind": "openai", "base_url": "http://x:1/v1", "model": "m"}).json() == {"context_tokens": None}     # unknown is fine
 
@@ -309,3 +310,56 @@ def test_models_get_a_generated_name():
     d = c.post("/api/agent/providers", headers=H, json={"kind": "openai", "base_url": "http://nas.local:9000/v1", "model": "big"}).json()
     assert (a["name"], b["name"], d["name"]) == ("Ollama · qwen2.5:32b", "OpenRouter · x/y", "nas.local · big")
     assert c.post("/api/agent/providers", headers=H, json={"kind": "openai", "base_url": "http://x:1/v1", "model": " "}).status_code == 422
+
+
+# ---------------------------------------------------------------- a model's own preset context is used
+def ctx_server(routes):
+    return models_server(routes)
+
+
+def info_for(routes, model="m", base="http://localhost:11434/v1"):
+    c = TestClient(goblin.create_app(db=DB(":memory:"), today=lambda: TODAY, llm_transport=ctx_server(routes)))
+    return c.post("/api/agent/model-info", headers=H, json={"kind": "openai", "base_url": base, "model": model}).json()
+
+
+def test_ollama_num_ctx_preset_beats_the_model_maximum():
+    i = info_for({("POST", "/api/show"): {"parameters": "stop \"<|eot|>\"\nnum_ctx                        16384\ntemperature 0.7", "model_info": {"llama.context_length": 131072}}})
+    assert i == {"context_tokens": 16384, "preset": True, "source": "the model's num_ctx preset (Ollama)"}
+
+
+def test_other_servers_report_their_own_context():
+    lm = info_for({("GET", "/api/v0/models"): {"data": [{"id": "other", "max_context_length": 4096}, {"id": "m", "max_context_length": 32768, "loaded_context_length": 8192}]}})
+    assert lm["context_tokens"] == 8192 and lm["preset"] is True and lm["model_max"] == 32768                    # what is actually loaded
+    lm2 = info_for({("GET", "/api/v0/models"): {"data": [{"id": "m", "max_context_length": 32768}]}})
+    assert lm2["context_tokens"] == 32768 and lm2["preset"] is False
+    cpp = info_for({("GET", "/props"): {"default_generation_settings": {"n_ctx": 12288}}}, base="http://localhost:8080/v1")
+    assert cpp["context_tokens"] == 12288 and cpp["preset"] is True
+    assert info_for({("GET", "/props"): {"n_ctx": 6000}}, base="http://localhost:8080/v1")["context_tokens"] == 6000
+    assert info_for({}) == {"context_tokens": None}                                                              # a server that cannot say: no guess
+
+
+def test_listing_picks_up_context_from_openrouter_and_vllm_style_fields():
+    t = models_server({("GET", "/v1/models"): {"data": [{"id": "a", "max_model_len": 32000}, {"id": "b", "context_window": 64000}, {"id": "c", "context_length": 8000}, {"id": "d"}]}})
+    c = TestClient(goblin.create_app(db=DB(":memory:"), today=lambda: TODAY, llm_transport=t))
+    got = {m["id"]: m["context"] for m in c.post("/api/agent/models", headers=H, json={"kind": "openai", "base_url": "http://localhost:8000/v1"}).json()["models"]}
+    assert got == {"a": 32000, "b": 64000, "c": 8000, "d": None}
+    t2 = models_server({("GET", "/v1/models"): {"data": [{"id": "claude-x", "max_input_tokens": 200000}]}})
+    c2 = TestClient(goblin.create_app(db=DB(":memory:"), today=lambda: TODAY, llm_transport=t2))
+    assert c2.post("/api/agent/models", headers=H, json={"kind": "anthropic", "base_url": "https://api.anthropic.com", "api_key": "k"}).json()["models"][0]["context"] == 200000
+
+
+def test_saving_a_model_without_a_context_asks_the_server_first():
+    routes = {("POST", "/api/show"): {"parameters": "num_ctx 24576", "model_info": {}}}
+    c = TestClient(goblin.create_app(db=DB(":memory:"), today=lambda: TODAY, llm_transport=ctx_server(routes)))
+    base = {"kind": "openai", "base_url": "http://localhost:11434/v1", "model": "qwen"}
+    p = c.post("/api/agent/providers", headers=H, json=base).json()
+    assert p["context_tokens"] == 24576                                                                         # the preset was used
+    typed = c.post("/api/agent/providers", headers=H, json={**base, "model": "other", "context_tokens": 4096}).json()
+    assert typed["context_tokens"] == 4096                                                                      # what you typed always wins
+    assert c.put(f"/api/agent/providers/{typed['id']}", headers=H, json={**base, "model": "other", "context_tokens": 16384}).json()["context_tokens"] == 16384
+    assert c.put(f"/api/agent/providers/{p['id']}", headers=H, json=base).json()["context_tokens"] == 24576
+    quiet = TestClient(goblin.create_app(db=DB(":memory:"), today=lambda: TODAY, llm_transport=ctx_server({})))
+    assert quiet.post("/api/agent/providers", headers=H, json=base).json()["context_tokens"] == 8192            # nothing known: the default
+    cloud = quiet.post("/api/agent/providers", headers=H, json={"kind": "anthropic", "base_url": "https://api.anthropic.com", "model": "claude-x", "api_key": "k"}).json()
+    assert cloud["context_tokens"] == 8192
+    assert quiet.post("/api/agent/providers", headers=H, json={**base, "context_tokens": 100}).status_code == 422

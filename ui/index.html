@@ -682,19 +682,23 @@ async function tabModels(root, rerender) {
 function modelForm(D, edit, rerender) {
   const cloud = looksCloud(D.base_url), needsKey = cloud || D.kind === "anthropic";
   const draftFromForm = () => ({ ...D, kind: val("pv-kind") || D.kind, base_url: val("pv-url") ?? D.base_url, model: val("pv-model") || D.model, api_key: val("pv-key") ?? D.api_key, tools: $("#pv-tools")?.checked ?? D.tools, allow_cloud: $("#pv-cloud")?.checked ?? D.allow_cloud, context_tokens: parseInt(val("pv-ctx")) || D.context_tokens });
+  const detect = async (cur, id) => {                          // ask the server what context this model really has: its own preset wins
+    const found = cur.models?.find((m) => m.id === id);
+    let info = {};
+    if (cur.kind === "openai") { try { info = await api("/api/agent/model-info", send("POST", { kind: cur.kind, base_url: cur.base_url, model: id })); } catch {} }
+    const tok = info.context_tokens || found?.context || null;
+    return { ...cur, model: id, context_tokens: tok ? Math.min(tok, 1000000) : cur.context_tokens, ctxNote: tok ? `Context set from ${info.context_tokens ? info.source : "the model list"}.` : "" };
+  };
   const refresh = async (btn) => {
     const cur = draftFromForm(); btn.disabled = true; btn.textContent = "Checking…";
-    try { const r = await api("/api/agent/models", send("POST", { kind: cur.kind, base_url: cur.base_url, api_key: cur.api_key || null, provider_id: D.id || null })); edit({ ...cur, models: r.models, model: r.models.some((m) => m.id === cur.model) ? cur.model : r.models[0]?.id || "", error: null }); }
+    try { const r = await api("/api/agent/models", send("POST", { kind: cur.kind, base_url: cur.base_url, api_key: cur.api_key || null, provider_id: D.id || null }));
+      const id = r.models.some((m) => m.id === cur.model) ? cur.model : r.models[0]?.id || "";
+      edit(id ? await detect({ ...cur, models: r.models, error: null }, id) : { ...cur, models: r.models, model: "", error: null }); }
     catch (e) { edit({ ...cur, models: null, error: e.message }); }
   };
-  const pickModel = async (id) => {
-    const cur = { ...draftFromForm(), model: id }, found = D.models?.find((m) => m.id === id);
-    let ctxTok = found?.context;
-    if (!ctxTok && cur.kind === "openai") { try { ctxTok = (await api("/api/agent/model-info", send("POST", { kind: cur.kind, base_url: cur.base_url, model: id }))).context_tokens; } catch {} }
-    edit({ ...cur, context_tokens: ctxTok ? Math.min(ctxTok, 1000000) : cur.context_tokens });
-  };
+  const pickModel = async (id) => edit(await detect(draftFromForm(), id));
   const sel = D.models?.length ? h("label", {}, "Model", h("select", { id: "pv-model", onchange: (e) => e.target.value === "__other" ? edit({ ...draftFromForm(), models: null, model: "" }) : pickModel(e.target.value) },
-    [...D.models.map((m) => h("option", { value: m.id, selected: m.id === D.model }, m.id)), h("option", { value: "__other" }, "Other… (type a name)")])) : field("pv-model", "Model", D.model, { placeholder: "click Refresh to list them, or type a name", required: true });
+    [...D.models.map((m) => h("option", { value: m.id, selected: m.id === D.model }, m.id)), h("option", { value: "__other" }, "Other… (type a name)")])) : field("pv-model", "Model", D.model, { placeholder: "click Refresh to list them, or type a name", required: true, onchange: (e) => e.target.value.trim() && pickModel(e.target.value.trim()) });
   return h("div", { class: "panel" }, h("h3", {}, D.id ? "Edit model" : "Add a model"),
     h("form", { class: "subform", onsubmit: async (e) => { e.preventDefault(); const c = draftFromForm(); const body = { kind: c.kind, base_url: c.base_url, model: c.model, tools: c.tools, allow_cloud: c.allow_cloud, context_tokens: c.context_tokens, name: "" }; if (c.api_key) body.api_key = c.api_key;
       try { await api(D.id ? `/api/agent/providers/${D.id}` : "/api/agent/providers", send(D.id ? "PUT" : "POST", body)); S.draftProv = null; toast("Saved"); rerender(); } catch (err) { fail(err); } } },
@@ -705,7 +709,7 @@ function modelForm(D, edit, rerender) {
       h("div", { style: "display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end" }, sel, h("button", { class: "btn", type: "button", onclick: (e) => refresh(e.target) }, "Refresh")),
       D.error ? h("div", { class: "small neg", style: "grid-column:1/-1" }, D.error + " You can still type a model name.") : null,
       D.models ? h("div", { class: "small muted", style: "grid-column:1/-1" }, `${D.models.length} model${D.models.length === 1 ? "" : "s"} found on that server.`) : null,
-      field("pv-ctx", "Context size (tokens)", D.context_tokens ?? 8192, { type: "number", min: "1024", step: "1024" }),
+      h("div", {}, field("pv-ctx", "Context size (tokens)", D.context_tokens ?? 8192, { type: "number", min: "1024", step: "1024" }), D.ctxNote ? h("div", { class: "small muted" }, D.ctxNote + " Change it if you run the model with a different size.") : null),
       h("label", { class: "check" }, h("input", { type: "checkbox", id: "pv-tools", checked: D.tools }), "Supports tool calling (untick for small models; they get a data snapshot instead)"),
       cloud ? h("label", { class: "check" }, h("input", { type: "checkbox", id: "pv-cloud", checked: D.allow_cloud }), "Allow cloud: I accept my financial data is sent to this address") : null,
       h("div", { class: "formbtns" }, h("button", { class: "btn primary", type: "submit" }, "Save model"), h("button", { class: "btn", type: "button", onclick: () => edit(null) }, "Cancel"))));

@@ -4,7 +4,10 @@ It never stores Plaid tokens, balances or transactions. It only knows:
 goblin name -> url + secrets, and plaid item_id -> goblin name.
 """
 import json
+import logging
 import os
+import time
+from collections import defaultdict
 from pathlib import Path
 
 import httpx
@@ -20,13 +23,56 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f) or {}
 
 
+class Metrics:
+    """Counts and nothing else, in memory only, gone on restart. Per goblin and kind of call: how many, and how many answered 2xx, 4xx or 5xx.
+    It never sees or keeps a path, a query string, a header, a body, a token or an address, so there is nothing personal to leak."""
+
+    def __init__(self):
+        self.started = time.time()
+        self.n = defaultdict(lambda: {"calls": 0, "ok": 0, "client_errors": 0, "server_errors": 0})
+
+    def record(self, goblin: str, kind: str, status: int):
+        c = self.n[(goblin, kind)]
+        c["calls"] += 1
+        c["ok" if status < 400 else "client_errors" if status < 500 else "server_errors"] += 1
+
+    def reset(self):
+        self.n.clear()
+        self.started = time.time()
+
+
+KINDS = ("app", "api_token", "webhook", "orb")
+
+
 def create_app(config: dict | None = None, transport: httpx.BaseTransport | None = None) -> FastAPI:
+    for noisy in ("httpx", "httpcore", "uvicorn.access"):          # these log full URLs, query strings included; keep them quiet whatever the log level
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     cfg = config or load_config(os.environ.get("GATEWAY_CONFIG", "/config/gateway.yaml"))
+    metrics = Metrics()
     goblins = {g["name"]: g for g in cfg.get("goblins", [])}
     orb_keys = cfg.get("orb_keys", [])
     items: dict[str, str] = {}
     client = httpx.Client(timeout=20, transport=transport)
     app = FastAPI(title="CoinGateway")
+
+    @app.middleware("http")
+    async def count(request: Request, call_next):
+        """Tally the call by kind and goblin name only (the name comes from the path or the token's prefix, never anything else)."""
+        resp = await call_next(request)
+        path = request.url.path
+        name, kind = "", None
+        if path.startswith("/g/"):
+            kind, name = "app", path.split("/")[2] if path.count("/") >= 2 else ""
+        elif path.startswith("/api/v1/me"):
+            parts = (bearer(request) or "").split("_", 2)
+            kind, name = "api_token", parts[1] if len(parts) == 3 and parts[0] == "gb" else ""
+        elif path == "/api/v1/summary":
+            kind = "orb"
+        elif path == "/webhooks/plaid":
+            kind = "webhook"
+        if kind:
+            metrics.record(name if name in goblins else "", kind, resp.status_code)
+        return resp
 
     def goblin_headers(g):
         return {"X-Internal-Secret": g["internal_secret"]}
@@ -112,6 +158,38 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
                                     headers={**goblin_headers(g), "Plaid-Verification": request.headers.get("plaid-verification", ""),
                                              "Content-Type": "application/json"})
         return Response(r.content, r.status_code, media_type="application/json")
+
+    # ---- admin: general health and counts, on demand. No route here reaches a goblin's data; the only call into a goblin is its /health.
+    def admin(request: Request):
+        if not check_token(bearer(request), cfg.get("admin_token_sha256", "")):
+            raise HTTPException(401, "unauthorized")
+
+    @app.get("/admin/status")
+    def admin_status(request: Request):
+        admin(request)
+        rows = []
+        for n, g in goblins.items():
+            try:
+                up = client.get(f"{g['url']}/health", timeout=3).status_code == 200
+            except httpx.HTTPError:
+                up = False
+            rows.append({"name": n, "up": up, "calls": {k: dict(metrics.n[(n, k)]) for k in KINDS if (n, k) in metrics.n}})
+        total = {k: sum(metrics.n[key][k] for key in metrics.n) for k in ("calls", "ok", "client_errors", "server_errors")}
+        return {"goblins": rows, "orb": dict(metrics.n[("", "orb")]) if ("", "orb") in metrics.n else {}, "unmatched": {k: dict(v) for (n, k), v in metrics.n.items() if n == "" and k != "orb"},
+                "total": total, "since_seconds": int(time.time() - metrics.started), "note": "Counts only. Nothing here shows what anyone asked for or any of their data."}
+
+    @app.post("/admin/reset")
+    def admin_reset(request: Request):
+        admin(request)
+        metrics.reset()
+        return {"reset": True}
+
+    @app.get("/admin")
+    def admin_page():
+        f = ui / "admin.html"
+        if not f.exists():
+            raise HTTPException(404, "admin page not installed")
+        return Response(f.read_text(), media_type="text/html")
 
     ui = Path(os.environ.get("UI_DIR", Path(__file__).resolve().parents[2] / "ui"))
 

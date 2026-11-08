@@ -30,12 +30,12 @@ def main():
     db.conn.execute("UPDATE accounts SET subtype='savings', name='Axos High Yield', institution='Axos' WHERE id='sav'")      # a savings account Plaid would label for us
     db.conn.commit()
     db.conn.close()
-    (tmp / "gw.yaml").write_text(yaml.safe_dump({"goblins": [{"name": "alice", "url": "http://127.0.0.1:9203", "internal_secret": "int", "user_token_sha256": sha("login-alice")}], "orb_keys": [{"sha256": sha("orb-dev"), "scopes": ["summary:read"]}]}))
+    (tmp / "gw.yaml").write_text(yaml.safe_dump({"goblins": [{"name": "alice", "url": "http://127.0.0.1:9203", "internal_secret": "int", "user_token_sha256": sha("login-alice")}], "orb_keys": [{"sha256": sha("orb-dev"), "scopes": ["summary:read"]}], "admin_token_sha256": sha("admin-dev")}))
     env = {**os.environ, "PYTHONPATH": f"{ROOT / 'src'}:{ROOT}"}
-    procs = [subprocess.Popen([sys.executable, "-m", "uvicorn", "devtools.fake_llm_server:app", "--port", "9202", "--log-level", "warning"], env=env, cwd=ROOT),
-             subprocess.Popen([sys.executable, "-m", "uvicorn", "--factory", "goblinbank.main:app", "--port", "9203", "--log-level", "warning"], cwd=ROOT,
+    procs = [subprocess.Popen([sys.executable, "-m", "uvicorn", "devtools.fake_llm_server:app", "--port", "9202", "--log-level", "warning", "--no-access-log"], env=env, cwd=ROOT),
+             subprocess.Popen([sys.executable, "-m", "uvicorn", "--factory", "goblinbank.main:app", "--port", "9203", "--log-level", "warning", "--no-access-log"], cwd=ROOT,
                               env={**env, "ROLE": "goblin", "GOBLIN_DB": str(tmp / "goblin.db"), "RH_CSV_DIR": str(tmp / "csv"), "IMPORT_DIR": str(tmp / "imp")}),
-             subprocess.Popen([sys.executable, "-m", "uvicorn", "--factory", "goblinbank.main:app", "--port", "9204", "--log-level", "warning"], cwd=ROOT,
+             subprocess.Popen([sys.executable, "-m", "uvicorn", "--factory", "goblinbank.main:app", "--port", "9204", "--log-level", "warning", "--no-access-log"], cwd=ROOT,
                               env={**env, "ROLE": "gateway", "GATEWAY_CONFIG": str(tmp / "gw.yaml"), "UI_DIR": str(ROOT / "ui")})]
     for port in (9203, 9204):
         for _ in range(60):

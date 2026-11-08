@@ -28,6 +28,7 @@ class Plaid:
         self.usage = usage   # object with before(path) -> may raise PlaidError, and record(path)
         self.client_id = os.environ.get("PLAID_CLIENT_ID", "")
         self.secret = os.environ.get("PLAID_SECRET", "")
+        self.header_auth = os.environ.get("PLAID_AUTH") == "header"       # send credentials as PLAID-CLIENT-ID / PLAID-SECRET headers instead of in the body
         self.base = os.environ.get("PLAID_BASE_URL") or HOSTS.get(os.environ.get("PLAID_ENV", "sandbox"), HOSTS["sandbox"])   # PLAID_BASE_URL: test servers only
         self.webhook_url = os.environ.get("PLAID_WEBHOOK_URL", "")
         self.http = httpx.Client(timeout=30, transport=transport)
@@ -43,7 +44,10 @@ class Plaid:
         if self.usage:
             self.usage.before(path)
             self.usage.record(path)
-        r = self.http.post(self.base + path, json={"client_id": self.client_id, "secret": self.secret, **body})
+        if self.header_auth:
+            r = self.http.post(self.base + path, json=body, headers={"PLAID-CLIENT-ID": self.client_id, "PLAID-SECRET": self.secret})
+        else:
+            r = self.http.post(self.base + path, json={"client_id": self.client_id, "secret": self.secret, **body})
         if r.status_code >= 400:
             try:
                 e = r.json()

@@ -104,7 +104,12 @@ def main(src="goblins.yaml"):
             print(f"[orb] API key for Pondering Orb (shown once): {k}")
             of.write_text(sha256(k))
         orb = [{"sha256": of.read_text().strip(), "scopes": ["summary:read"]}]
-    (ROOT / "gateway.yaml").write_text(yaml.safe_dump({"goblins": gw_goblins, "orb_keys": orb}))
+    af = SEC / "admin.key.sha256"          # for the /admin page: general health and counts only
+    if not af.exists():
+        ak = secrets.token_urlsafe(32)
+        print(f"[admin] admin token for /admin (shown once): {ak}")
+        af.write_text(sha256(ak))
+    (ROOT / "gateway.yaml").write_text(yaml.safe_dump({"goblins": gw_goblins, "orb_keys": orb, "admin_token_sha256": af.read_text().strip()}))
     (ROOT / "gateway.yaml").chmod(0o600)
     services["gateway"] = {"build": ".", "environment": {"ROLE": "gateway", "GATEWAY_CONFIG": "/config/gateway.yaml", "UI_DIR": "/app/ui"},
                            "volumes": ["./gateway.yaml:/config/gateway.yaml:ro"], "networks": ["edge"],

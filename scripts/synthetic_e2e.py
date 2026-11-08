@@ -34,7 +34,7 @@ def check(name, cond, detail=""):
 
 def spawn(target, port, env, factory=True):
     e = {**os.environ, "PYTHONPATH": f"{ROOT / 'src'}:{ROOT}", **env}
-    cmd = [sys.executable, "-m", "uvicorn", target, "--port", str(port), "--log-level", "warning"] + (["--factory"] if factory else [])
+    cmd = [sys.executable, "-m", "uvicorn", target, "--port", str(port), "--log-level", "warning", "--no-access-log"] + (["--factory"] if factory else [])
     procs.append(subprocess.Popen(cmd, env=e, cwd=ROOT))
 
 

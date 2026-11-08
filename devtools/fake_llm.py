@@ -9,6 +9,8 @@ import httpx
 def openai_server(script: list[list[tuple[str, dict]]], log: list):
     """script[i] = tool calls to make on request i; once exhausted, reply with the last tool results."""
     def handler(req: httpx.Request):
+        if not req.url.path.endswith("/chat/completions"):          # model discovery calls (context detection) are not chats
+            return httpx.Response(404)
         body = json.loads(req.content)
         log.append({"url": str(req.url), "auth": req.headers.get("authorization"), "body": body})
         if body["messages"][0]["content"].startswith("You write concise"):      # the compaction call
@@ -24,6 +26,8 @@ def openai_server(script: list[list[tuple[str, dict]]], log: list):
 
 def anthropic_server(script, log):
     def handler(req: httpx.Request):
+        if not req.url.path.endswith("/v1/messages"):
+            return httpx.Response(404)
         body = json.loads(req.content)
         log.append({"url": str(req.url), "key": req.headers.get("x-api-key"), "version": req.headers.get("anthropic-version"), "body": body})
         n = sum(1 for m in body["messages"] if m["role"] == "assistant")

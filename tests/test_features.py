@@ -369,3 +369,21 @@ def test_drop_folder_import_moves_files(tmp_path, monkeypatch):
     assert c.post("/import/scan", headers=H).json()["imports"][0]["file"] == "junk.csv"      # nothing re-imported
     st = c.get("/api/status", headers=H).json()["imports"]
     assert st == [{"provider": "cashapp", "transactions": 1, "last_transaction": "2026-11-06"}]
+
+
+def test_plaid_header_auth_mode_keeps_credentials_out_of_the_body(monkeypatch):
+    seen = []
+
+    def h(req: httpx.Request):
+        seen.append((dict(req.headers), json.loads(req.content)))
+        return httpx.Response(200, json={"link_token": "lt"})
+    monkeypatch.setenv("PLAID_AUTH", "header")
+    p = Plaid(httpx.MockTransport(h))
+    assert p.link_token("alice") == "lt"
+    headers, body = seen[0]
+    assert headers["plaid-client-id"] == "cid" and headers["plaid-secret"] == "sec" and "client_id" not in body and "secret" not in body
+    monkeypatch.delenv("PLAID_AUTH")
+    seen.clear()
+    Plaid(httpx.MockTransport(h)).link_token("alice")
+    headers, body = seen[0]
+    assert body["client_id"] == "cid" and body["secret"] == "sec" and "plaid-secret" not in headers                 # the default is unchanged
