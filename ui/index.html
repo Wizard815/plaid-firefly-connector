@@ -35,7 +35,10 @@ nav.side button:hover{color:var(--fg)}
 .side .foot{margin-top:16px;padding:0 10px;font-size:.8rem;color:var(--muted);display:grid;gap:8px}
 main{min-width:0;display:grid;gap:20px;align-content:start}
 .bar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
-.banner{background:var(--brass-soft);color:var(--fg);border-radius:8px;padding:8px 12px;font-size:.88rem}
+.banner{background:var(--brass-soft);color:var(--fg);border-radius:999px;padding:2px 12px;font-size:.8rem;font-weight:500;cursor:help}
+@media(min-width:1000px){main.cols2{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}main.cols2>.bar,main.cols2>.wide{grid-column:1/-1}}
+.blk.hidden-blk{opacity:.45}.blk[hidden]{display:none!important}
+.swatches{display:flex;gap:10px;flex-wrap:wrap}.swatch{width:34px;height:34px;border-radius:50%;border:3px solid var(--panel);box-shadow:0 0 0 1px var(--line);padding:0}.swatch[aria-pressed="true"]{box-shadow:0 0 0 3px var(--fg)}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}
 .arr-bar{display:flex;align-items:center;gap:6px;padding:4px 8px;margin-bottom:6px;border:1px dashed var(--line);border-radius:8px;font-size:12px;color:var(--muted);cursor:grab;background:var(--bg)}
 .arr-bar b{flex:1;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -165,8 +168,18 @@ const send = (method, body) => ({ method, headers: JSONH, body: JSON.stringify(b
 function toast(msg) { const t = h("div", { class: "toast", role: "status" }, msg); document.body.append(t); setTimeout(() => t.remove(), 2800); }
 const fail = (e) => toast(e.message || String(e));
 
+/* ---------- look and feel: light/dark and an accent colour, remembered in this browser ---------- */
+const PALETTES = { teal: ["Teal", "#17766b", "#d6ece8", "#4cc2b0", "#16393a"], ocean: ["Ocean", "#2a64a8", "#d9e6f6", "#6aa7ef", "#172e4a"], violet: ["Violet", "#6b4fa3", "#e6def4", "#b49cf0", "#2a2146"], rose: ["Rose", "#b23a63", "#f5dbe5", "#f08aae", "#44202f"], amber: ["Amber", "#a2600f", "#f6e5c8", "#e8b25a", "#3d2c12"], graphite: ["Graphite", "#4a5a63", "#dde3e6", "#a9bcc4", "#26343a"] };
+function applyPrefs() {
+  const root = document.documentElement, mode = store.get("gb_mode") || "system", pal = PALETTES[store.get("gb_palette")] ? store.get("gb_palette") : "teal";
+  if (mode === "system") root.removeAttribute("data-theme"); else root.setAttribute("data-theme", mode);
+  let st = document.getElementById("pal"); if (!st) { st = document.createElement("style"); st.id = "pal"; document.head.append(st); }
+  const [, l, ls, d, ds] = PALETTES[pal];
+  st.textContent = `:root{--teal:${l};--teal-soft:${ls}}@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--teal:${d};--teal-soft:${ds}}}:root[data-theme="dark"]{--teal:${d};--teal-soft:${ds}}`;
+}
+applyPrefs();
 /* ---------- API: the gateway (/g/<name>/...) or a recorded sample (shared preview) ---------- */
-const S = { chatId: null, tools: null, badge: 0, authed: false, demo: false, name: "", token: "", tab: "overview", settingsTab: "connect", acct: null, edit: null, days: +store.get("gb_days") || 30, chat: [], provider: null };
+const S = { chatId: null, tools: null, badge: 0, authed: false, demo: false, name: "", token: "", tab: "overview", settingsTab: "general", arrange: false, acct: null, edit: null, days: +store.get("gb_days") || 30, chat: [], provider: null };
 let DEMO = null;
 const CAT_COLORS = ["#17766b", "#a8741a", "#4a6fa5", "#b3372f", "#7a5c99", "#5d8a3c", "#c46a2d", "#2f8f9d", "#8a6d3b", "#6b7a8f"];
 async function api(path, opts = {}) {
@@ -263,10 +276,10 @@ async function viewOverview(root, rerender) {
   const owed = (o.by_kind.credit || 0) + (o.by_kind.loan || 0), gross = Object.values(o.by_kind).reduce((s, v) => s + Math.abs(v), 0) || 1;
   const setDays = (d) => { S.days = Math.min(Math.max(parseInt(d) || 30, 1), 3650); store.set("gb_days", S.days); rerender(); };
   add(root, 
-    o.alerts.length ? h("div", { class: "panel" }, h("h3", {}, "Needs attention"), h("div", { class: "alerts" }, o.alerts.slice(0, 6).map(alertRow))) : null,
-    h("div", { class: "grid" }, kpi("Net worth", usd(o.net_worth), o.savings_total ? `savings ${usd(o.savings_total)}, ${usd(o.savings_free)} free` : `${o.accounts.length} accounts`), kpi("Owed on cards", usd(owed), "Credit + loans", "neg"),
+    o.alerts.length ? h("div", { class: "panel wide" }, h("h3", {}, "Needs attention"), h("div", { class: "alerts" }, o.alerts.slice(0, 6).map(alertRow))) : null,
+    h("div", { class: "grid wide", "data-title": "Key numbers" }, kpi("Net worth", usd(o.net_worth), o.savings_total ? `savings ${usd(o.savings_total)}, ${usd(o.savings_free)} free` : `${o.accounts.length} accounts`), kpi("Owed on cards", usd(owed), "Credit + loans", "neg"),
       kpi("Subscriptions / month", usd(o.subscriptions_monthly), usd(o.subscriptions_monthly * 12) + " a year"), kpi(`Bills, next ${up.days} days`, usd(up.total), `${up.count} payments${up.others_total ? " · others pay " + usd(up.others_total) : ""}`)),
-    h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Net worth, last 30 days")), spark(hist)),
+    h("div", { class: "panel wide" }, h("div", { class: "bar" }, h("h3", {}, "Net worth, last 30 days")), spark(hist)),
     h("div", { class: "panel" }, h("h3", {}, "Where the money sits"), h("div", { class: "comp" }, Object.entries(o.by_kind).map(([k, v]) => h("i", { style: `width:${(Math.abs(v) / gross) * 100}%;background:${(KIND[k] || ["", "var(--muted)"])[1]}`, title: `${(KIND[k] || [k])[0]} ${usd(v)}` }))),
       h("div", { class: "legend" }, Object.entries(o.by_kind).map(([k, v]) => h("span", {}, h("b", { style: "background:" + (KIND[k] || ["", "var(--muted)"])[1] }), `${(KIND[k] || [k])[0]} ${usd(v)}`)))),
     h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, `Bills in the next ${up.days} days`),
@@ -276,8 +289,8 @@ async function viewOverview(root, rerender) {
       up.items.length ? h("div", { class: "scroll", style: "max-height:300px" }, up.items.map((i) => h("div", { class: "ev" }, h("span", { class: "when" }, i.date.slice(5)), h("span", {}, i.name, i.payer === "other" ? h("span", { class: "pill" }, i.payer_name + " pays") : null), h("span", { class: "num " + (i.payer === "me" ? "neg" : "muted") }, usd(-i.amount))))) : h("p", { class: "muted" }, "Nothing due in this window."),
       Object.keys(up.by_category).length ? barList(Object.entries(up.by_category).sort((a, b) => b[1] - a[1])) : null),
     forecastPanel(fc),
-    h("div", { class: "two" },
-      h("div", { class: "panel" }, h("h3", {}, "Latest movement"), o.events.length ? o.events.slice(0, 7).map(evRow) : h("p", { class: "muted" }, "Link a bank or import a CSV to see movement."))));
+    h("div", { class: "panel" }, h("h3", {}, "Latest movement"), o.events.length ? o.events.slice(0, 7).map(evRow) : h("p", { class: "muted" }, "Link a bank or import a CSV to see movement.")));
+  root.classList.add("cols2");
 }
 
 /* ================================ TRANSACTION BROWSER (Money movement + account detail) ================================ */
@@ -611,11 +624,11 @@ async function viewRobinhood(root) {
 }
 
 /* ================================ SETTINGS (tabs) ================================ */
-const STABS = [["connect", "Connect & import"], ["robinhood", "Robinhood"], ["calendar", "Calendar"], ["models", "Models"], ["categories", "Categories"], ["alerts", "Alerts"], ["sharing", "Sharing"]];
+const STABS = [["general", "General"], ["alerts", "Alerts"], ["sharing", "Sharing"], ["models", "Models"], ["categories", "Categories"], ["calendar", "Calendar"], ["robinhood", "Robinhood"], ["connect", "Connect & import"]];
 async function viewSettings(root, rerender) {
   add(root, h("div", { class: "tabs", role: "tablist" }, STABS.map(([id, t]) => h("button", { role: "tab", "aria-selected": id === S.settingsTab, class: id === S.settingsTab ? "on" : "", onclick: () => { S.settingsTab = id; rerender(); } }, t))));
   const body = h("div", { class: "stack" }); add(root, body);
-  await ({ connect: tabConnect, robinhood: tabRobinhood, calendar: tabCalendar, models: tabModels, categories: tabCategories, alerts: tabAlerts, sharing: tabSharing }[S.settingsTab])(body, rerender);
+  await ({ general: tabGeneral, connect: tabConnect, robinhood: tabRobinhood, calendar: tabCalendar, models: tabModels, categories: tabCategories, alerts: tabAlerts, sharing: tabSharing }[S.settingsTab])(body, rerender);
 }
 const saveCfg = async (body, rerender, msg = "Saved") => { try { await api("/api/settings", send("PUT", body)); toast(msg); rerender(); } catch (e) { fail(e); } };
 const withSecret = (body, key, id) => { if (val(id)) body[key] = val(id); return body; };
@@ -732,6 +745,20 @@ async function tabCategories(root, rerender) {
       h("p", { class: "muted small" }, "Created when you change a category with 'remember for similar payments' ticked on the Money movement page. Payments you set by hand are never overwritten."),
       rules.length ? rules.map((r) => h("div", { class: "ev", style: "grid-template-columns:1fr auto auto" }, h("span", { class: "mono" }, `"${r.pattern}"`), h("span", { class: "pill b" }, r.category), h("button", { class: "btn sm", onclick: async () => { await api("/api/category-rules/" + r.id, { method: "DELETE" }); rerender(); } }, "Delete"))) : h("p", { class: "muted" }, "No rules yet.")));
 }
+async function tabGeneral(root, rerender) {
+  const mode = store.get("gb_mode") || "system", pal = PALETTES[store.get("gb_palette")] ? store.get("gb_palette") : "teal";
+  const setMode = (m) => { store.set("gb_mode", m); applyPrefs(); rerender(); };
+  add(root,
+    h("div", { class: "panel" }, h("h3", {}, "Appearance"),
+      h("p", { class: "muted small" }, "Saved in this browser only."),
+      h("div", { class: "chips", role: "group", "aria-label": "Colour mode" }, [["system", "Match my device"], ["light", "Light"], ["dark", "Dark"]].map(([m, t]) => h("button", { class: "chip" + (m === mode ? " on" : ""), "aria-pressed": m === mode, onclick: () => setMode(m) }, t))),
+      h("h3", { style: "margin-top:16px;font-size:.95rem" }, "Accent colour"),
+      h("div", { class: "swatches", role: "group", "aria-label": "Accent colour" }, Object.entries(PALETTES).map(([k, v]) => h("button", { class: "swatch", title: v[0], "aria-label": v[0], "aria-pressed": k === pal, style: `background:${v[1]}`, onclick: () => { store.set("gb_palette", k); applyPrefs(); rerender(); } })))),
+    h("div", { class: "panel" }, h("h3", {}, "Layout"),
+      h("p", { class: "muted small" }, "Move panels around on every tab, and hide the ones you never look at. The order is remembered per tab in this browser."),
+      h("label", { class: "check" }, h("input", { type: "checkbox", checked: S.arrange, onchange: (e) => { S.arrange = e.target.checked; } }), "Arrange mode (turn it on, then go to any tab)"),
+      h("div", { class: "chips", style: "margin-top:10px" }, h("button", { class: "btn sm", onclick: () => { for (const [id] of TABS) store.set("gb_layout_" + id, "[]"); toast("Every tab is back to the default layout"); } }, "Reset every tab's layout"))));
+}
 async function tabAlerts(root, rerender) {
   const [cfg, ns] = await Promise.all([api("/api/settings"), api("/api/notify/status").catch(() => ({ configured: false, min_severity: "warning" }))]);
   const sevOpts = [["critical", "Only critical"], ["warning", "Warnings and critical"], ["info", "Everything"]];
@@ -794,42 +821,44 @@ function blocksOf(main) {
   }
   return out;
 }
-function blockName(el, i) { const t = el.querySelector("h3,h2,.label"); return (t ? t.textContent.trim().slice(0, 40) : "") || "Section " + (i + 1); }
+function blockName(el, i) { if (el.dataset.title) return el.dataset.title; const t = el.querySelector("h3,h2,.label"); return (t ? t.textContent.trim().slice(0, 40) : "") || "Section " + (i + 1); }
 function arrangeable(main) {
+  if (S.tab === "settings") return;                                      // its tab strip and body are not panels to rearrange
   const blocks = blocksOf(main); if (blocks.length < 2) return;
   const names = blocks.map(blockName), key = layoutKey();
-  let saved = []; try { saved = JSON.parse(store.get(key) || "[]"); } catch {}
+  let saved = { order: [], hidden: [] };
+  try { const v = JSON.parse(store.get(key) || "[]"); saved = Array.isArray(v) ? { order: v, hidden: [] } : { order: v.order || [], hidden: v.hidden || [] }; } catch {}
   const host = blocks[0].parentElement;
-  const rank = (n) => { const i = saved.indexOf(n); return i < 0 ? 1e6 : i; };
-  if (saved.length && blocks.every((b) => b.parentElement === host)) {
-    const order = blocks.map((b, i) => [b, names[i], i]).sort((a, b) => rank(a[1]) - rank(b[1]) || a[2] - b[2]);
-    order.forEach(([b]) => host.append(b));
+  const rank = (n) => { const i = saved.order.indexOf(n); return i < 0 ? 1e6 : i; };
+  if (saved.order.length && blocks.every((b) => b.parentElement === host)) {
+    blocks.map((b, i) => [b, names[i], i]).sort((a, b) => rank(a[1]) - rank(b[1]) || a[2] - b[2]).forEach(([b]) => host.append(b));
   }
-  blocks.forEach((b, i) => b.classList.add("blk"));
+  blocks.forEach((b, i) => { b.classList.add("blk"); b.dataset.name = names[i]; b.hidden = !S.arrange && saved.hidden.includes(names[i]); b.classList.toggle("hidden-blk", saved.hidden.includes(names[i])); });
   const bar = main.firstElementChild;
-  bar.append(h("button", { class: "btn sm", style: "margin-left:auto", onclick: () => { S.arrange = !S.arrange; render(); } }, S.arrange ? "Done" : "Arrange"));
+  bar.append(h("button", { class: "btn sm", style: "margin-left:auto", title: "Move and hide panels on this tab", onclick: () => { S.arrange = !S.arrange; render(); } }, S.arrange ? "Done arranging" : "⠿ Arrange panels"));
   if (!S.arrange) return;
-  const save = () => store.set(key, JSON.stringify([...host.querySelectorAll(":scope > .blk")].map((b) => b.dataset.name)));
+  const save = () => store.set(key, JSON.stringify({ order: [...host.querySelectorAll(":scope > .blk")].map((b) => b.dataset.name), hidden: saved.hidden }));
   const move = (b, d) => { const sib = d < 0 ? b.previousElementSibling : b.nextElementSibling; if (!sib || !sib.classList.contains("blk")) return; d < 0 ? host.insertBefore(b, sib) : host.insertBefore(sib, b); save(); b.querySelector(".arr-bar button")?.focus(); };
   let drag = null;
   blocks.forEach((b, i) => {
-    b.dataset.name = names[i];
-    const grip = h("div", { class: "arr-bar", draggable: "true", ondragstart: (e) => { drag = b; b.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", names[i]); }, ondragend: () => { b.classList.remove("dragging"); host.querySelectorAll(".over").forEach((x) => x.classList.remove("over")); } },
-      h("span", { "aria-hidden": "true" }, "⠿"), h("b", {}, names[i]),
-      h("button", { class: "btn sm", type: "button", "aria-label": "Move " + names[i] + " up", onclick: () => move(b, -1) }, "▲"), h("button", { class: "btn sm", type: "button", "aria-label": "Move " + names[i] + " down", onclick: () => move(b, 1) }, "▼"));
+    const n = names[i];
+    const eye = h("button", { class: "btn sm", type: "button", onclick: () => { const off = saved.hidden.includes(n); saved.hidden = off ? saved.hidden.filter((x) => x !== n) : [...saved.hidden, n]; b.classList.toggle("hidden-blk", !off); eye.textContent = off ? "Hide" : "Show"; save(); } }, saved.hidden.includes(n) ? "Show" : "Hide");
+    const grip = h("div", { class: "arr-bar", draggable: "true", ondragstart: (e) => { drag = b; b.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", n); }, ondragend: () => { b.classList.remove("dragging"); host.querySelectorAll(".over").forEach((x) => x.classList.remove("over")); } },
+      h("span", { "aria-hidden": "true" }, "⠿"), h("b", {}, n), eye,
+      h("button", { class: "btn sm", type: "button", "aria-label": "Move " + n + " up", onclick: () => move(b, -1) }, "▲"), h("button", { class: "btn sm", type: "button", "aria-label": "Move " + n + " down", onclick: () => move(b, 1) }, "▼"));
     b.prepend(grip);
     b.addEventListener("dragover", (e) => { if (drag && drag !== b) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; b.classList.add("over"); } });
     b.addEventListener("dragleave", () => b.classList.remove("over"));
     b.addEventListener("drop", (e) => { e.preventDefault(); b.classList.remove("over"); if (!drag || drag === b) return; const after = drag.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING; host.insertBefore(drag, after ? b.nextSibling : b); drag = null; save(); });
   });
-  bar.append(h("button", { class: "btn sm", onclick: () => { store.set(key, "[]"); render(); } }, "Reset order"));
+  bar.append(h("button", { class: "btn sm", onclick: () => { store.set(key, "[]"); render(); } }, "Reset this tab"));
 }
 async function render() {
   const [, title, view] = TABS.find((t) => t[0] === S.tab);
   try { S.badge = (await api("/api/suggestions")).filter((x) => x.source === "detected" || x.source === "agent").length; } catch { S.badge = 0; }
-  const main = h("main", {}, h("div", { class: "bar" }, h("h2", {}, title), S.demo ? h("span", { class: "banner" }, "Recorded sample: nothing here is a real account, and changes are not saved. To click through the live app, run python3 scripts/dev_stack.py (README).") : h("span", { class: "muted small" }, S.name)));
+  const main = h("main", {}, h("div", { class: "bar" }, h("h2", {}, title), S.demo ? h("span", { class: "banner", title: "Recorded sample data. Nothing here is a real account and changes are not saved. To click through the live app, run python3 scripts/dev_stack.py (see the README)." }, "Sample data") : h("span", { class: "muted small" }, S.name)));
   $("#app").replaceChildren(h("div", { class: "shell" }, h("nav", { class: "side", "aria-label": "Sections" }, h("div", { class: "brand" }, h("span", { class: "coin" }), "Goblin Bank"),
-    TABS.map(([id, label]) => h("button", { "aria-current": id === S.tab ? "page" : null, onclick: () => { S.tab = id; S.arrange = false; S.acct = null; S.edit = null; location.hash = id; render(); } }, label, id === "subs" && S.badge ? h("span", { class: "badge", title: "Repeating payments to review" }, S.badge) : null)),
+    TABS.map(([id, label]) => h("button", { "aria-current": id === S.tab ? "page" : null, onclick: () => { S.tab = id; S.acct = null; S.edit = null; location.hash = id; render(); } }, label, id === "subs" && S.badge ? h("span", { class: "badge", title: "Repeating payments to review" }, S.badge) : null)),
     h("div", { class: "foot" }, S.demo ? null : h("button", { class: "btn sm", onclick: () => { sessionStorage.clear(); location.reload(); } }, "Sign out"))), main));
   try { await view(main, render); } catch (e) { add(main, h("div", { class: "panel" }, h("p", { class: "neg" }, "Could not load: " + e.message))); }
   try { arrangeable(main); } catch (e) { console.warn("arrange", e); }
