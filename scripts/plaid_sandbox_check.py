@@ -93,6 +93,9 @@ def main():
         cats[t["category"]] = cats.get(t["category"], 0) + 1
     info("categories: " + ", ".join(f"{k} {v}" for k, v in sorted(cats.items(), key=lambda kv: -kv[1])))
     check("categories are mapped, not everything Misc", len(cats) >= 3 and cats.get("Misc", 0) < tx["total"] * 0.8, str(cats))
+    loan_in = db.one("SELECT COUNT(*) n, SUM(CASE WHEN t.category != 'Transfer' THEN 1 ELSE 0 END) bad FROM transactions t JOIN accounts a ON a.id=t.account_id WHERE a.kind IN ('credit','loan') AND t.amount>0 AND t.plaid_category LIKE 'LOAN_PAYMENTS%'")
+    check("payments received by cards and loans are Transfers, not money in", loan_in["n"] == 0 or not loan_in["bad"], str(dict(loan_in)))
+    check("borrowed money (cash advances) is not income", not db.one("SELECT 1 FROM transactions WHERE plaid_category LIKE 'LOAN_DISBURSEMENTS%' AND category='Income'"))
     check("every category exists in the category list", {c["name"] for c in get("/api/categories").json()} >= set(cats))
     check("no duplicate transactions", len({t["id"] for t in tx["items"]}) == len(tx["items"]))
     again = app.post("/sync", headers=H).json()
@@ -103,6 +106,7 @@ def main():
     info(f"{len(subs)} subscriptions from Plaid's recurring streams: " + ", ".join(f"{s['name']} {s['amount']} {s['label']}" for s in subs[:6]))
     check("recurring streams came through (or Plaid has none yet for this data)", True)
     sug = get("/api/suggestions").json()
+    check("loan interest is not suggested as a subscription", not any("interest" in x["name"].lower() for x in sug), str([x["name"] for x in sug]))
     info(f"{len(sug)} more repeating payments found by our own detector: " + ", ".join(f"{s['name']} {s['amount']} {s['label']}" for s in sug[:6]))
 
     # --- everything built on that data renders without errors

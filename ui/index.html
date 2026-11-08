@@ -293,7 +293,7 @@ async function txBrowser(root, fixed = {}, accounts = null) {
       const spend = await api("/api/spending?" + qs({ start: F.start, end: F.end })).catch(() => []);
       if (mine !== seq) return;
       fill(list,
-        h("div", { class: "grid", style: "margin-bottom:12px" }, kpi("Matches", String(r.total), `showing ${r.items.length}`), kpi("Money in", usd(r.sum_in), "", "pos"), kpi("Money out", usd(r.sum_out), "", "neg"), kpi("Net", usd(r.net, true), "", r.net < 0 ? "neg" : "pos")),
+        h("div", { class: "grid", style: "margin-bottom:12px" }, kpi("Matches", String(r.total), `showing ${r.items.length}`), kpi("Money in", usd(r.real_in), Math.abs(r.sum_in - r.real_in) > 0.005 ? `+ ${usd(r.sum_in - r.real_in)} in transfers` : "", "pos"), kpi("Money out", usd(r.real_out), Math.abs(r.sum_out - r.real_out) > 0.005 ? `+ ${usd(r.sum_out - r.real_out)} in transfers` : "", "neg"), kpi("Net, not counting transfers", usd(r.real_in + r.real_out, true), "", r.real_in + r.real_out < 0 ? "neg" : "pos")),
         r.items.length ? h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["Date", "Description", "Account", "Category", "Amount"].map((x, i) => h("th", { class: i === 4 ? "r" : "" }, x)))),
           h("tbody", {}, r.items.map((tx) => h("tr", {}, h("td", { class: "mono muted" }, tx.date), h("td", {}, tx.name, tx.pending ? h("span", { class: "pill" }, "pending") : null), h("td", { class: "muted small" }, tx.account_name || ""),
             h("td", {}, h("select", { class: "bare", "aria-label": "Category", onchange: async (e) => { try { const x = await api(`/api/transactions/${encodeURIComponent(tx.id)}/category`, send("PUT", { category: e.target.value, make_rule: remember })); toast(remember ? `Set, and ${x.updated - 1} similar updated` : "Category set"); load(); } catch (err) { fail(err); } } },
@@ -784,7 +784,7 @@ const TABS = [["overview", "Overview", viewOverview], ["movement", "Money moveme
 async function render() {
   const [, title, view] = TABS.find((t) => t[0] === S.tab);
   try { S.badge = (await api("/api/suggestions")).filter((x) => x.source === "detected" || x.source === "agent").length; } catch { S.badge = 0; }
-  const main = h("main", {}, h("div", { class: "bar" }, h("h2", {}, title), S.demo ? h("span", { class: "banner" }, "Sample data. Nothing here is a real account, and changes are not saved.") : h("span", { class: "muted small" }, S.name)));
+  const main = h("main", {}, h("div", { class: "bar" }, h("h2", {}, title), S.demo ? h("span", { class: "banner" }, "Recorded sample: nothing here is a real account, and changes are not saved. To click through the live app, run python3 scripts/dev_stack.py (README).") : h("span", { class: "muted small" }, S.name)));
   $("#app").replaceChildren(h("div", { class: "shell" }, h("nav", { class: "side", "aria-label": "Sections" }, h("div", { class: "brand" }, h("span", { class: "coin" }), "Goblin Bank"),
     TABS.map(([id, label]) => h("button", { "aria-current": id === S.tab ? "page" : null, onclick: () => { S.tab = id; S.acct = null; S.edit = null; location.hash = id; render(); } }, label, id === "subs" && S.badge ? h("span", { class: "badge", title: "Repeating payments to review" }, S.badge) : null)),
     h("div", { class: "foot" }, S.demo ? null : h("button", { class: "btn sm", onclick: () => { sessionStorage.clear(); location.reload(); } }, "Sign out"))), main));

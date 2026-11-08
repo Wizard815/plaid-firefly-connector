@@ -16,7 +16,7 @@ def d(s) -> date:
 PLAID_MAP = {  # detailed first, then primary
     "GENERAL_MERCHANDISE_CLOTHING_AND_ACCESSORIES": "Clothes", "TRANSPORTATION_GAS": "Gas", "FOOD_AND_DRINK_GROCERIES": "Groceries",
     "RENT_AND_UTILITIES_RENT": "Housing", "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT": "Transfer", "ENTERTAINMENT_VIDEO_GAMES": "Games",
-    "INCOME": "Income", "TRANSFER_IN": "Transfer", "TRANSFER_OUT": "Transfer", "LOAN_PAYMENTS": "Bills", "FOOD_AND_DRINK": "Food",
+    "INCOME": "Income", "LOAN_DISBURSEMENTS": "Transfer", "TRANSFER_IN": "Transfer", "TRANSFER_OUT": "Transfer", "LOAN_PAYMENTS": "Bills", "FOOD_AND_DRINK": "Food",
     "ENTERTAINMENT": "Fun", "TRANSPORTATION": "Transport", "MEDICAL": "Health", "PERSONAL_CARE": "Health", "RENT_AND_UTILITIES": "Bills",
     "HOME_IMPROVEMENT": "Housing", "TRAVEL": "Travel", "GENERAL_MERCHANDISE": "Shopping", "GENERAL_SERVICES": "Misc",
     "BANK_FEES": "Misc", "GOVERNMENT_AND_NON_PROFIT": "Misc", "OTHER": "Misc",
@@ -39,11 +39,14 @@ KEYWORDS = {  # last-resort guesses for payees with no bank category (CSV import
 }
 
 
-def categorize(db, name: str, amount: float, plaid_cat: str | None = None) -> str:
+def categorize(db, name: str, amount: float, plaid_cat: str | None = None, account_kind: str | None = None) -> str:
     low = (name or "").lower()
     for r in db.all("SELECT pattern, category FROM category_rules ORDER BY length(pattern) DESC"):
         if r["pattern"].lower() in low:
             return r["category"]
+    # Money arriving on a card or loan is a payment toward the debt, not income and not new money: the other side of a transfer.
+    if account_kind in ("credit", "loan") and amount > 0 and plaid_cat and plaid_cat.startswith(("LOAN_PAYMENTS", "TRANSFER")):
+        return "Transfer"
     if plaid_cat:
         for key in (plaid_cat, plaid_cat.split("_")[0]):
             if key in PLAID_MAP:
@@ -115,10 +118,13 @@ def query_transactions(db, q=None, account_id=None, category=None, min_amount=No
         where.append("t.amount < 0")
     w = " AND ".join(where)
     order = {"date_desc": "t.date DESC, t.id", "date_asc": "t.date ASC, t.id", "amount_desc": "abs(t.amount) DESC, t.id", "amount_asc": "abs(t.amount) ASC, t.id"}.get(sort, "t.date DESC, t.id")
-    tot = db.one(f"SELECT COUNT(*) n, COALESCE(SUM(CASE WHEN t.amount>0 THEN t.amount END),0) s_in, COALESCE(SUM(CASE WHEN t.amount<0 THEN t.amount END),0) s_out FROM transactions t WHERE {w}", args)
+    tot = db.one("SELECT COUNT(*) n, COALESCE(SUM(CASE WHEN t.amount>0 THEN t.amount END),0) s_in, COALESCE(SUM(CASE WHEN t.amount<0 THEN t.amount END),0) s_out, "
+                 "COALESCE(SUM(CASE WHEN t.amount>0 AND coalesce(c.kind,'')!='transfer' THEN t.amount END),0) r_in, COALESCE(SUM(CASE WHEN t.amount<0 AND coalesce(c.kind,'')!='transfer' THEN t.amount END),0) r_out "
+                 f"FROM transactions t LEFT JOIN categories c ON c.name=t.category WHERE {w}", args)
     rows = db.all(f"SELECT t.*, a.name account_name, a.institution FROM transactions t LEFT JOIN accounts a ON a.id=t.account_id WHERE {w} ORDER BY {order} LIMIT ? OFFSET ?",
                   args + [max(1, min(int(limit), 500)), max(0, int(offset))])
-    return {"items": rows, "total": tot["n"], "sum_in": round(tot["s_in"], 2), "sum_out": round(tot["s_out"], 2), "net": round(tot["s_in"] + tot["s_out"], 2)}
+    return {"items": rows, "total": tot["n"], "sum_in": round(tot["s_in"], 2), "sum_out": round(tot["s_out"], 2), "net": round(tot["s_in"] + tot["s_out"], 2),
+            "real_in": round(tot["r_in"], 2), "real_out": round(tot["r_out"], 2)}      # the same sums not counting transfers (moving your own money around)
 
 
 def spending_by_category(db, start=None, end=None) -> list[dict]:
@@ -277,7 +283,9 @@ def project_balance(db, days: int, today: date, account_ids: list[str] | None = 
 
 
 def recurring_found(db, today: date) -> list[dict]:
-    rows = db.all("SELECT id, account_id, date, name, amount FROM transactions WHERE date >= ? ORDER BY date", ((today - timedelta(days=800)).isoformat(),))
+    # Interest accruing on a loan and transfers between your own accounts repeat on a schedule but are not subscriptions or income.
+    rows = db.all("SELECT t.id, t.account_id, t.date, t.name, t.amount FROM transactions t LEFT JOIN accounts a ON a.id=t.account_id "
+                  "WHERE t.date >= ? AND coalesce(a.kind,'') != 'loan' AND coalesce(t.category,'') != 'Transfer' ORDER BY t.date", ((today - timedelta(days=800)).isoformat(),))
     return recur.detect(rows, today)
 
 

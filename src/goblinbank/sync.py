@@ -59,7 +59,8 @@ def sync_item(db, plaid: Plaid, item_id: str) -> dict:
             is_new = db.one("SELECT 1 FROM transactions WHERE id=?", (t["transaction_id"],)) is None
             pfc = t.get("personal_finance_category") or {}
             pcat = pfc.get("detailed") or pfc.get("primary") or ""
-            cat = ledger.categorize(db, t.get("merchant_name") or t["name"], amt, pcat)
+            akind = (db.one("SELECT kind FROM accounts WHERE id=?", (t["account_id"],)) or {}).get("kind")
+            cat = ledger.categorize(db, t.get("merchant_name") or t["name"], amt, pcat, akind)
             with db.tx() as c:
                 c.execute("""INSERT INTO transactions(id,account_id,date,name,amount,currency,category,pending,source,plaid_category) VALUES(?,?,?,?,?,?,?,?,?,?)
                              ON CONFLICT(id) DO UPDATE SET account_id=excluded.account_id, date=excluded.date, name=excluded.name, amount=excluded.amount,

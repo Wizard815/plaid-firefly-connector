@@ -304,3 +304,42 @@ def test_keyword_fallback_categories():
     db.conn.execute("INSERT INTO category_rules(pattern,category) VALUES('starbucks','Fun')"); db.conn.commit()
     assert ledger.categorize(db, "Starbucks #8497", -6) == "Fun"            # your rule beats the keyword guess
     assert ledger.categorize(db, "Kroger", -5, "GENERAL_MERCHANDISE") == "Shopping"   # the bank's category beats the keyword guess
+
+
+# ---------------------------------------------------------------- lessons from the real Plaid Sandbox
+def test_payments_received_by_cards_and_loans_are_transfers_not_money_in():
+    db = DB(":memory:")
+    cat = lambda name, amt, pc, kind: ledger.categorize(db, name, amt, pc, kind)
+    assert cat("Payment Thank You", 2835.8, "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT", "credit") == "Transfer"
+    assert cat("Mortgage payment", 900, "LOAN_PAYMENTS_MORTGAGE_PAYMENT", "loan") == "Transfer"        # the mirror image of the payment that left checking
+    assert cat("Mortgage payment", -900, "LOAN_PAYMENTS_MORTGAGE_PAYMENT", "cash") == "Bills"           # leaving checking, it is a real bill
+    assert cat("Card payment", -500, "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT", "cash") == "Transfer"        # paying a card is never spending twice
+    assert cat("Interest charge", -40, "BANK_FEES_INTEREST_CHARGE", "loan") == "Misc"                   # interest accruing is a cost
+    assert cat("Refund", 25, "GENERAL_MERCHANDISE_ONLINE_MARKETPLACES", "credit") == "Shopping"        # a refund stays a refund
+    assert cat("Cash advance", 95, "LOAN_DISBURSEMENTS_CASH_ADVANCES", "cash") == "Transfer"           # borrowed money is not income
+    assert cat("Paycheck", 2000, "INCOME_WAGES", "cash") == "Income"
+
+
+def test_loan_interest_and_transfers_are_not_suggested_as_subscriptions_or_income():
+    db = DB(":memory:")
+    db.conn.executemany("INSERT INTO accounts(id,source,name,kind,balance) VALUES(?,?,?,?,?)", [("loan", "plaid", "Mortgage", "loan", 100000.0), ("chk", "plaid", "Checking", "cash", 100.0)])
+    for i in range(1, 7):
+        d = f"2026-{i:02d}-05"
+        db.conn.execute("INSERT INTO transactions(id,account_id,date,name,amount,category) VALUES(?,?,?,?,?,?)", (f"i{i}", "loan", d, "Interest charge", -111.47, "Misc"))
+        db.conn.execute("INSERT INTO transactions(id,account_id,date,name,amount,category) VALUES(?,?,?,?,?,?)", (f"t{i}", "chk", d, "Monthly savings move", -500.0, "Transfer"))
+        db.conn.execute("INSERT INTO transactions(id,account_id,date,name,amount,category) VALUES(?,?,?,?,?,?)", (f"n{i}", "chk", d, "NETFLIX", -15.49, "Subscriptions"))
+    db.conn.commit()
+    found = {f["name"] for f in ledger.recurring_found(db, date(2026, 7, 1))}
+    assert [n.lower() for n in found] == ["netflix"]                                                      # only the real subscription survives
+
+
+def test_movement_totals_can_leave_out_transfers(world):
+    db, _, _ = world
+    tid = db.one("SELECT id FROM transactions WHERE amount<0 LIMIT 1")["id"]
+    ledger.set_category(db, tid, "Transfer")
+    r = ledger.query_transactions(db, limit=500)
+    want_out = db.one("SELECT ROUND(SUM(t.amount),2) s FROM transactions t JOIN categories c ON c.name=t.category WHERE t.amount<0 AND c.kind!='transfer'")["s"]
+    want_in = db.one("SELECT ROUND(SUM(t.amount),2) s FROM transactions t JOIN categories c ON c.name=t.category WHERE t.amount>0 AND c.kind!='transfer'")["s"]
+    assert r["real_out"] == pytest.approx(want_out, abs=0.02) and r["real_in"] == pytest.approx(want_in, abs=0.02)
+    assert r["sum_out"] < r["real_out"] or r["sum_out"] == r["real_out"] == 0                      # the raw total still includes the transfer
+    assert r["sum_out"] - r["real_out"] == pytest.approx(db.one("SELECT amount FROM transactions WHERE id=?", (tid,))["amount"] + sum(t["amount"] for t in db.all("SELECT amount FROM transactions t JOIN categories c ON c.name=t.category WHERE t.amount<0 AND c.kind='transfer' AND t.id != ?", (tid,))), abs=0.02)
