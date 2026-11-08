@@ -37,6 +37,10 @@ main{min-width:0;display:grid;gap:20px;align-content:start}
 .bar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
 .banner{background:var(--brass-soft);color:var(--fg);border-radius:8px;padding:8px 12px;font-size:.88rem}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}
+.arr-bar{display:flex;align-items:center;gap:6px;padding:4px 8px;margin-bottom:6px;border:1px dashed var(--line);border-radius:8px;font-size:12px;color:var(--muted);cursor:grab;background:var(--bg)}
+.arr-bar b{flex:1;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.arr-bar button{padding:2px 8px}
+.blk.dragging{opacity:.4}.blk.over{outline:2px solid var(--accent,#17766b);outline-offset:2px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}
 .kpi .label{font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .kpi .value{white-space:nowrap;font:500 1.9rem var(--mono);font-variant-numeric:tabular-nums;margin-top:2px}
@@ -781,14 +785,54 @@ async function tabSharing(root, rerender) {
 
 /* ================================ SHELL ================================ */
 const TABS = [["overview", "Overview", viewOverview], ["movement", "Money movement", viewMovement], ["accounts", "Accounts", viewAccounts], ["subs", "Subscriptions", viewSubs], ["savings", "Savings", viewSavings], ["planner", "Budgets & notes", viewPlanner], ["agent", "Agent", viewAgent], ["robinhood", "Robinhood", viewRobinhood], ["settings", "Settings", viewSettings]];
+/* ---------- movable panels: order is remembered per tab in this browser ---------- */
+function layoutKey() { return "gb_layout_" + S.tab + (S.tab === "settings" ? ":" + S.settingsTab : "") + (S.acct ? ":acct" : ""); }
+function blocksOf(main) {
+  const out = [];
+  for (const el of [...main.children].slice(1)) {                          // child 0 is the title bar
+    if (!el.classList.length && el.children.length > 1 && [...el.children].every((c) => c.classList.contains("panel"))) out.push(...el.children); else out.push(el);
+  }
+  return out;
+}
+function blockName(el, i) { const t = el.querySelector("h3,h2,.label"); return (t ? t.textContent.trim().slice(0, 40) : "") || "Section " + (i + 1); }
+function arrangeable(main) {
+  const blocks = blocksOf(main); if (blocks.length < 2) return;
+  const names = blocks.map(blockName), key = layoutKey();
+  let saved = []; try { saved = JSON.parse(store.get(key) || "[]"); } catch {}
+  const host = blocks[0].parentElement;
+  const rank = (n) => { const i = saved.indexOf(n); return i < 0 ? 1e6 : i; };
+  if (saved.length && blocks.every((b) => b.parentElement === host)) {
+    const order = blocks.map((b, i) => [b, names[i], i]).sort((a, b) => rank(a[1]) - rank(b[1]) || a[2] - b[2]);
+    order.forEach(([b]) => host.append(b));
+  }
+  blocks.forEach((b, i) => b.classList.add("blk"));
+  const bar = main.firstElementChild;
+  bar.append(h("button", { class: "btn sm", style: "margin-left:auto", onclick: () => { S.arrange = !S.arrange; render(); } }, S.arrange ? "Done" : "Arrange"));
+  if (!S.arrange) return;
+  const save = () => store.set(key, JSON.stringify([...host.querySelectorAll(":scope > .blk")].map((b) => b.dataset.name)));
+  const move = (b, d) => { const sib = d < 0 ? b.previousElementSibling : b.nextElementSibling; if (!sib || !sib.classList.contains("blk")) return; d < 0 ? host.insertBefore(b, sib) : host.insertBefore(sib, b); save(); b.querySelector(".arr-bar button")?.focus(); };
+  let drag = null;
+  blocks.forEach((b, i) => {
+    b.dataset.name = names[i];
+    const grip = h("div", { class: "arr-bar", draggable: "true", ondragstart: (e) => { drag = b; b.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", names[i]); }, ondragend: () => { b.classList.remove("dragging"); host.querySelectorAll(".over").forEach((x) => x.classList.remove("over")); } },
+      h("span", { "aria-hidden": "true" }, "⠿"), h("b", {}, names[i]),
+      h("button", { class: "btn sm", type: "button", "aria-label": "Move " + names[i] + " up", onclick: () => move(b, -1) }, "▲"), h("button", { class: "btn sm", type: "button", "aria-label": "Move " + names[i] + " down", onclick: () => move(b, 1) }, "▼"));
+    b.prepend(grip);
+    b.addEventListener("dragover", (e) => { if (drag && drag !== b) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; b.classList.add("over"); } });
+    b.addEventListener("dragleave", () => b.classList.remove("over"));
+    b.addEventListener("drop", (e) => { e.preventDefault(); b.classList.remove("over"); if (!drag || drag === b) return; const after = drag.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING; host.insertBefore(drag, after ? b.nextSibling : b); drag = null; save(); });
+  });
+  bar.append(h("button", { class: "btn sm", onclick: () => { store.set(key, "[]"); render(); } }, "Reset order"));
+}
 async function render() {
   const [, title, view] = TABS.find((t) => t[0] === S.tab);
   try { S.badge = (await api("/api/suggestions")).filter((x) => x.source === "detected" || x.source === "agent").length; } catch { S.badge = 0; }
   const main = h("main", {}, h("div", { class: "bar" }, h("h2", {}, title), S.demo ? h("span", { class: "banner" }, "Recorded sample: nothing here is a real account, and changes are not saved. To click through the live app, run python3 scripts/dev_stack.py (README).") : h("span", { class: "muted small" }, S.name)));
   $("#app").replaceChildren(h("div", { class: "shell" }, h("nav", { class: "side", "aria-label": "Sections" }, h("div", { class: "brand" }, h("span", { class: "coin" }), "Goblin Bank"),
-    TABS.map(([id, label]) => h("button", { "aria-current": id === S.tab ? "page" : null, onclick: () => { S.tab = id; S.acct = null; S.edit = null; location.hash = id; render(); } }, label, id === "subs" && S.badge ? h("span", { class: "badge", title: "Repeating payments to review" }, S.badge) : null)),
+    TABS.map(([id, label]) => h("button", { "aria-current": id === S.tab ? "page" : null, onclick: () => { S.tab = id; S.arrange = false; S.acct = null; S.edit = null; location.hash = id; render(); } }, label, id === "subs" && S.badge ? h("span", { class: "badge", title: "Repeating payments to review" }, S.badge) : null)),
     h("div", { class: "foot" }, S.demo ? null : h("button", { class: "btn sm", onclick: () => { sessionStorage.clear(); location.reload(); } }, "Sign out"))), main));
   try { await view(main, render); } catch (e) { add(main, h("div", { class: "panel" }, h("p", { class: "neg" }, "Could not load: " + e.message))); }
+  try { arrangeable(main); } catch (e) { console.warn("arrange", e); }
 }
 function login() {
   $("#app").replaceChildren(h("form", { class: "panel login", onsubmit: async (e) => { e.preventDefault(); S.name = $("#ln").value.trim().toLowerCase(); S.token = $("#lt").value.trim();
