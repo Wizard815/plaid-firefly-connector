@@ -1,0 +1,15 @@
+# Let Plaid reach ONLY the webhook, and nothing else, from the open internet. Everything else stays private (Tailscale or your LAN).
+# 1. Point a domain (e.g. hooks.example.com) at this server and open ports 80/443.
+# 2. Put https://hooks.example.com in the gateway admin page, Plaid limits, "Public address".
+# 3. Because that address only serves the webhook, set PLAID_REDIRECT_URI in .secrets/plaid.env to the PRIVATE https address you open the app on
+#    (for example your Tailscale one, with a trailing slash) and register that one with Plaid under Allowed redirect URIs.
+# Use with:  docker compose -f docker-compose.generated.yml -f examples/docker-compose.caddy.yml up -d   (with this file mounted as the Caddyfile)
+hooks.example.com {
+	@plaid path /webhooks/plaid
+	handle @plaid {
+		reverse_proxy gateway:8000
+	}
+	handle {
+		respond "not found" 404
+	}
+}

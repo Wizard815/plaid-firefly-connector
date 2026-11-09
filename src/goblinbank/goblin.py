@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from goblinbank import plaidcost, plaidplan, agent, api_links, api_money, api_plan, links, external, notify, plan, crypto, feed, importers, ledger, settings as cfg, sync
 from goblinbank.db import DB
-from goblinbank.plaid import Plaid, PlaidError
+from goblinbank.plaid import Plaid, PlaidError, PlaidLimit
 from goblinbank.security import require_internal
 
 
@@ -44,6 +44,29 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     store = db or DB()
     policy_state = {"at": 0.0, "keys": set()}
 
+    def update_item_webhooks():
+        """Banks linked before the address was set learn it too (one free call each, once)."""
+        for r in store.all("SELECT item_id, token_enc, hook_url FROM plaid_items"):
+            if r.get("hook_url") == plaid.webhook_url:
+                continue
+            try:
+                plaid.post("/item/webhook/update", {"access_token": crypto.decrypt(r["token_enc"]), "webhook": plaid.webhook_url})
+                with store.tx() as c:
+                    c.execute("UPDATE plaid_items SET hook_url=? WHERE item_id=?", (plaid.webhook_url, r["item_id"]))
+            except PlaidError:
+                pass
+
+    def register_items(force: bool = False):
+        """Tell the gateway which bank belongs to this goblin, so a webhook finds its way here (the gateway keeps this in memory only, so say it again after any restart)."""
+        if not gateway_url or (not force and time.time() - policy_state.get("reg", 0) < 600):
+            return
+        policy_state["reg"] = time.time()
+        for r in store.all("SELECT item_id FROM plaid_items"):
+            try:
+                client.post(f"{gateway_url}/internal/items", json={"item_id": r["item_id"]}, headers={"X-Internal-Secret": secret, "X-Goblin": name})
+            except httpx.HTTPError:
+                break
+
     def apply_policy(force: bool = False):
         """Fetch the limits the gateway admin set for this goblin and keep them in settings, where everything else already reads them.
         If the gateway cannot be reached the last ones stay in force."""
@@ -57,6 +80,12 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             pol = r.json()
         except Exception:
             return
+        pub = (pol.get("public_url") or "").rstrip("/")
+        if pub.startswith("https://"):
+            plaid.webhook_url = pub + "/webhooks/plaid"          # one address on the admin page sets both of these for everyone
+            if not os.environ.get("PLAID_REDIRECT_URI"):
+                plaid.redirect_uri = pub + "/"
+            update_item_webhooks()
         keys = set()
         for k in ("plaid_budget_month", "plaid_daily_cap", "plaid_min_minutes", "plaid_use_recurring"):
             if k in pol:
@@ -75,7 +104,8 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         iv = plaidplan.interval(store, row, floor)
         return {"item_id": row["item_id"], "institution": row["institution"], "schedule": row.get("schedule") or "auto", "schedule_effective": plaidplan.schedule_of(store, row),
                 "recurring": row.get("recurring") or "auto", "recurring_effective": plaidplan.recurring_on(store, row, glob), "interval_minutes": None if iv is None else round(iv / 60),
-                "last_sync": row.get("last_sync"), "calls_per_day": round(plaidplan.calls_per_day(store, row, floor, glob), 1)}
+                "last_sync": row.get("last_sync"), "calls_per_day": round(plaidplan.calls_per_day(store, row, floor, glob), 1),
+                "status": row.get("status"), "status_detail": row.get("status_detail"), "webhook_live": plaidplan.hook_live(row, time.time())}
 
     def month_calls() -> dict:
         return {r["endpoint"]: r["calls"] for r in store.all("SELECT endpoint, SUM(calls) calls FROM plaid_usage WHERE day LIKE ? GROUP BY endpoint", (date.today().strftime("%Y-%m") + "%",))}
@@ -105,11 +135,11 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             cap = int(float(cfg.get(store, "plaid_daily_cap") or 300))
             row = store.one("SELECT COALESCE(SUM(calls),0) n FROM plaid_usage WHERE day=?", (date.today().isoformat(),))
             if row["n"] >= cap:
-                raise PlaidError(f"daily Plaid call cap reached ({cap}); raise it in Settings if this is expected")
+                raise PlaidLimit(f"daily Plaid call cap reached ({cap}); raise it in Settings if this is expected")
             if path in plaidcost.PER_CALL:
                 b = budget_state()
                 if b["budget"] is not None and b["est"] + plaidcost.PER_CALL[path] > b["budget"] + 0.005:
-                    raise PlaidError(f"that call costs ${plaidcost.PER_CALL[path]:.2f} and would put this month's estimated Plaid bill over your ${b['budget']:.2f} budget")
+                    raise PlaidLimit(f"that call costs ${plaidcost.PER_CALL[path]:.2f} and would put this month's estimated Plaid bill over your ${b['budget']:.2f} budget")
 
         def record(self, path):
             with store.tx() as c:
@@ -238,9 +268,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             raise HTTPException(401, "webhook signature invalid")
         import json
         body = json.loads(raw)
-        if body.get("item_id") and body.get("webhook_type") == "TRANSACTIONS":
-            return {"synced": await run_in_threadpool(sync.sync_item, store, plaid, body["item_id"], True)}
-        return {"ignored": body.get("webhook_code")}
+        return await run_in_threadpool(sync.handle_webhook, store, plaid, body)
 
     sync_state = {"last": 0.0, "at": None}
     sync_lock = threading.Lock()
@@ -362,6 +390,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     def shared_changed(gid: int | None = None, edited: bool = False) -> None:
         """A goal I share changed (or my set-aside amount did): tell the others. Never lets a link problem break the edit."""
         try:
+            register_items()
             links.bump(store, name, gid) if edited and gid else links.push(store, name)
             links.push_accounts(store)
             link_flush()
@@ -434,7 +463,8 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         b = budget_state()
         today_n = store.one("SELECT COALESCE(SUM(calls),0) n FROM plaid_usage WHERE day=?", (date.today().isoformat(),))["n"]
         return {"items": b["items"], "est_monthly_cost": b["est"], "budget": b["budget"], "calls_today": today_n, "daily_cap": int(float(cfg.get(store, "plaid_daily_cap") or 300)),
-                "calls_month": sum(month_calls().values()), "min_minutes": int(float(cfg.get(store, "plaid_min_minutes") or 0))}
+                "calls_month": sum(month_calls().values()), "min_minutes": int(float(cfg.get(store, "plaid_min_minutes") or 0)),
+                "webhook_banks": sum(1 for r in store.all("SELECT last_hook FROM plaid_items") if plaidplan.hook_live(r, time.time())), "webhook_set": bool(plaid.webhook_url)}
 
     @app.put("/api/settings")
     async def settings_put(request: Request):
@@ -503,7 +533,8 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                 "by_endpoint": dict(sorted(by.items(), key=lambda kv: -kv[1])), "items": b["items"], "est_monthly_cost": b["est"], "breakdown": b["detail"]["lines"], "list_total": b["detail"]["total"],
                 "custom_rate": float(rate) if rate else None, "use_recurring": b["use_recurring"], "budget": b["budget"], "over_budget": bool(b["budget"] and b["est"] > b["budget"] + 0.005),
                 "room_for_items": (int((b["budget"] - b["est"] + 0.005) // b["per_item"]) if b["budget"] and b["per_item"] else None), "per_item": b["per_item"],
-                "min_minutes": int(gap), "calls_per_day_estimate": int(per_day), "calls_per_month_estimate": int(round(sum(v["calls_per_day"] for v in views) * 30))}
+                "min_minutes": int(gap), "calls_per_day_estimate": int(per_day), "calls_per_month_estimate": int(round(sum(v["calls_per_day"] for v in views) * 30)),
+                "webhook_set": bool(plaid.webhook_url), "webhook_banks": sum(1 for v in views if v["webhook_live"])}
 
     @app.get("/internal/connector-config/rh-agent")
     def agent_config(request: Request):

@@ -182,7 +182,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             return {"delivered": False}
         return {"delivered": r.status_code == 200}
 
-    POLICY_KEYS = {"plaid_budget_month": float, "plaid_daily_cap": int, "plaid_min_minutes": int, "plaid_use_recurring": str}
+    POLICY_KEYS = {"plaid_budget_month": float, "plaid_daily_cap": int, "plaid_min_minutes": int, "plaid_use_recurring": str, "public_url": str}
 
     def effective_policy(name: str) -> dict:
         return {**policy["default"], **policy["people"].get(name, {})}
@@ -259,6 +259,12 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
                 out[k] = ""                                    # empty = no limit (budget) or the built-in default
                 continue
             try:
+                if k == "public_url":
+                    u = str(v).strip().rstrip("/")
+                    if not re.fullmatch(r"https://[A-Za-z0-9.-]+(:\d+)?(/[A-Za-z0-9._~/-]*)?", u):
+                        raise ValueError
+                    out[k] = u
+                    continue
                 if k == "plaid_use_recurring":
                     if str(v) not in ("on", "off"):
                         raise ValueError
@@ -269,13 +275,13 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
                         raise ValueError
                     out[k] = int(n) if n == int(n) else n
             except (TypeError, ValueError):
-                raise HTTPException(422, f"{k} must be a non-negative number" + (" (on or off)" if k == "plaid_use_recurring" else ""))
+                raise HTTPException(422, f"{k} must be " + ("an https:// address" if k == "public_url" else "on or off" if k == "plaid_use_recurring" else "a non-negative number"))
         return out
 
     @app.get("/admin/policy")
     def admin_get_policy(request: Request):
         admin(request)
-        return {**policy, "built_in": {"plaid_budget_month": 5, "plaid_daily_cap": 300, "plaid_min_minutes": 0, "plaid_use_recurring": "on"}}
+        return {**policy, "built_in": {"public_url": "", "plaid_budget_month": 5, "plaid_daily_cap": 300, "plaid_min_minutes": 0, "plaid_use_recurring": "on"}}
 
     @app.put("/admin/policy")
     async def admin_put_policy(request: Request):

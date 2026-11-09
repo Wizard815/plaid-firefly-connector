@@ -8,6 +8,12 @@ SCHEDULES = {"always": 0, "15m": 900, "3h": 3 * 3600, "daily": 86400, "weekly": 
 LABELS = {"auto": "Automatic (by account type)", "15m": "Every 15 minutes", "3h": "Every 3 hours", "daily": "Daily", "weekly": "Weekly", "biweekly": "Every 2 weeks", "monthly": "Monthly", "manual": "Only when I press Sync"}
 SAVINGS = {"savings", "cd", "money market", "cash management", "hsa", "high yield savings", "529", "cd/money market", "money_market"}
 RECURRING_EVERY = 7 * 86400          # repeating payments change slowly: at most weekly
+HOOK_LIVE = 14 * 86400               # a bank that has sent a verified webhook in the last two weeks is "live": Plaid tells us when there is news
+SAFETY_NET = 7 * 86400               # so on Automatic it is only polled weekly, in case a webhook was missed
+
+
+def hook_live(row: dict, now: float) -> bool:
+    return bool(row.get("last_hook")) and now - row["last_hook"] < HOOK_LIVE
 
 
 def _accounts(db, item_id: str) -> list[dict]:
@@ -31,9 +37,13 @@ def schedule_of(db, row: dict) -> str:
     return auto_schedule(db, row["item_id"]) if s == "auto" else s
 
 
-def interval(db, row: dict, floor_seconds: float = 0) -> float | None:
-    """Seconds between automatic pulls of this bank (None = only when you press Sync). `floor_seconds` is the admin's 'never more often than'."""
+def interval(db, row: dict, floor_seconds: float = 0, now: float | None = None) -> float | None:
+    """Seconds between automatic pulls of this bank (None = only when you press Sync). `floor_seconds` is the admin's 'never more often than'.
+    A bank on Automatic whose webhooks are arriving is only polled weekly as a safety net."""
+    import time
     sec = SCHEDULES.get(schedule_of(db, row), SCHEDULES["daily"])
+    if sec is not None and (row.get("schedule") or "auto") == "auto" and hook_live(row, now if now is not None else time.time()):
+        sec = max(sec, SAFETY_NET)
     return None if sec is None else max(sec, floor_seconds)
 
 
@@ -44,9 +54,17 @@ def recurring_on(db, row: dict, global_on: bool = True) -> bool:
     return global_on and has_everyday(db, row["item_id"])
 
 
-def calls_per_day(db, row: dict, floor_seconds: float = 0, global_on: bool = True) -> float:
-    iv = interval(db, row, floor_seconds)
+def calls_per_day(db, row: dict, floor_seconds: float = 0, global_on: bool = True, now: float | None = None) -> float:
+    """Expected calls a day for this bank. A quiet polled pass costs two calls (transactions, then balances, since Plaid only sends balances with the sync when something
+    changed), plus holdings for an investment account. A pass Plaid triggers by webhook has news in it, so balances come with it: one call. For a bank whose webhooks are
+    live, add those passes (about one a day for a checking account or card, about one a month for savings or investments); recurring then arrives by webhook only when it changed."""
+    import time
+    iv = interval(db, row, floor_seconds, now)
     if iv is None:
         return 0.0
-    per_pass = 2 + (1 if any(a["kind"] == "investment" for a in _accounts(db, row["item_id"])) else 0)          # accounts + transactions (+ holdings)
-    return per_pass * 86400 / max(iv, 900) + (86400 / RECURRING_EVERY if recurring_on(db, row, global_on) else 0)
+    inv = 1 if any(a["kind"] == "investment" for a in _accounts(db, row["item_id"])) else 0
+    live = hook_live(row, now if now is not None else time.time())
+    polled = (2 + inv) * 86400 / max(iv, 900)
+    pushed = (1 + inv) * (1.0 if has_everyday(db, row["item_id"]) else 1 / 30) if live else 0.0
+    rec = (1 / 30 if live else 1 / 7) if recurring_on(db, row, global_on) else 0.0
+    return polled + pushed + rec

@@ -19,6 +19,10 @@ class PlaidError(Exception):
     pass
 
 
+class PlaidLimit(PlaidError):
+    """Our own guard said no (daily call cap, monthly budget). Not a problem with the bank."""
+
+
 def _b64d(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 

@@ -327,6 +327,11 @@ def alerts(db, today: date) -> list[dict]:
 
 def _alerts(db, today: date) -> list[dict]:
     out = []
+    for it in db.all("SELECT item_id, institution, status, status_detail FROM plaid_items WHERE status IS NOT NULL"):
+        gone = it["status"] == "revoked"
+        out.append({"kind": "bank_login", "key": f"bank_login:{it['item_id']}", "severity": "warning" if it["status"] == "expiring" else "critical",
+                    "title": f"{it['institution'] or 'A bank'} {'was disconnected' if gone else 'needs you to sign in again' if it['status'] == 'error' else 'will need you to sign in again soon'}",
+                    "detail": "Open Settings, Connect & import and press Relink. Until then its numbers are out of date." + (f" ({it['status_detail']})" if it.get("status_detail") else "")})
     for a in db.all("SELECT * FROM accounts"):
         bal = a["balance"]
         if bal is None or a["kind"] in OUT_KINDS or a["kind"] == "investment":
