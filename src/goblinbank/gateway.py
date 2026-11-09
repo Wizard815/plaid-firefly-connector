@@ -53,10 +53,13 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     metrics = Metrics()
     goblins = {g["name"]: g for g in cfg.get("goblins", [])}
     state_path = Path(os.environ.get("GATEWAY_STATE", cfg.get("state_file", "")) or "")
+    policy: dict = {"default": {}, "people": {}}               # Plaid limits set on the admin page; goblins fetch theirs and obey (budget, daily call cap, how often to ask Plaid)
     added: dict[str, dict] = {}                               # people added from the admin page (name, address, secrets' hash): the same facts gateway.yaml holds
     if str(state_path) not in ("", "."):
         try:
-            for g in json.loads(state_path.read_text()).get("people", []):
+            saved = json.loads(state_path.read_text())
+            policy.update({k: v for k, v in (saved.get("policy") or {}).items() if k in policy})
+            for g in saved.get("people", []):
                 if g["name"] not in goblins:
                     goblins[g["name"]] = added[g["name"]] = g
         except (OSError, ValueError, KeyError):
@@ -67,7 +70,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             raise HTTPException(409, "this gateway has no writable state folder; add people with goblins.yaml instead")
         state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"people": list(added.values())}))
+        tmp.write_text(json.dumps({"people": list(added.values()), "policy": policy}))
         tmp.chmod(0o600)
         tmp.replace(state_path)
     orb_keys = cfg.get("orb_keys", [])
@@ -179,6 +182,20 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             return {"delivered": False}
         return {"delivered": r.status_code == 200}
 
+    POLICY_KEYS = {"plaid_budget_month": float, "plaid_daily_cap": int, "plaid_min_minutes": int, "plaid_use_recurring": str}
+
+    def effective_policy(name: str) -> dict:
+        return {**policy["default"], **policy["people"].get(name, {})}
+
+    @app.get("/internal/policy")
+    def goblin_policy(request: Request):
+        """The limits this goblin must keep (budget, daily call cap, how often to ask Plaid). Set on the admin page; nothing personal."""
+        g = goblins.get(request.headers.get("x-goblin", ""))
+        if not g:
+            raise HTTPException(401, "unauthorized")
+        require_internal(request, g["internal_secret"])
+        return effective_policy(g["name"])
+
     @app.get("/internal/link/people")
     def link_people(request: Request):
         """Names of the other goblins, for the 'link with…' picker. Names only."""
@@ -221,10 +238,59 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
                 up = client.get(f"{g['url']}/health", timeout=3).status_code == 200
             except httpx.HTTPError:
                 up = False
-            rows.append({"name": n, "up": up, "added_here": n in added, "calls": {k: dict(metrics.n[(n, k)]) for k in KINDS if (n, k) in metrics.n}})
+            stats = {}
+            if up:
+                try:
+                    r = client.get(f"{g['url']}/internal/plaid-stats", headers=goblin_headers(g), timeout=3)
+                    stats = r.json() if r.status_code == 200 else {}
+                except (httpx.HTTPError, ValueError):
+                    stats = {}
+            rows.append({"name": n, "up": up, "plaid": stats, "added_here": n in added, "calls": {k: dict(metrics.n[(n, k)]) for k in KINDS if (n, k) in metrics.n}})
         total = {k: sum(metrics.n[key][k] for key in metrics.n) for k in ("calls", "ok", "client_errors", "server_errors")}
         return {"goblins": rows, "orb": dict(metrics.n[("", "orb")]) if ("", "orb") in metrics.n else {}, "unmatched": {k: dict(v) for (n, k), v in metrics.n.items() if n == "" and k != "orb"},
                 "total": total, "since_seconds": int(time.time() - metrics.started), "note": "Counts only. Nothing here shows what anyone asked for or any of their data."}
+
+    def clean_policy(d: dict) -> dict:
+        out = {}
+        for k, v in (d or {}).items():
+            if k not in POLICY_KEYS:
+                raise HTTPException(422, f"unknown limit {k!r}")
+            if v in ("", None):
+                out[k] = ""                                    # empty = no limit (budget) or the built-in default
+                continue
+            try:
+                if k == "plaid_use_recurring":
+                    if str(v) not in ("on", "off"):
+                        raise ValueError
+                    out[k] = str(v)
+                else:
+                    n = POLICY_KEYS[k](v)
+                    if n < 0 or n > 100000:
+                        raise ValueError
+                    out[k] = int(n) if n == int(n) else n
+            except (TypeError, ValueError):
+                raise HTTPException(422, f"{k} must be a non-negative number" + (" (on or off)" if k == "plaid_use_recurring" else ""))
+        return out
+
+    @app.get("/admin/policy")
+    def admin_get_policy(request: Request):
+        admin(request)
+        return {**policy, "built_in": {"plaid_budget_month": 5, "plaid_daily_cap": 300, "plaid_min_minutes": 180, "plaid_use_recurring": "on"}}
+
+    @app.put("/admin/policy")
+    async def admin_put_policy(request: Request):
+        """Set the Plaid limits: one default for everyone plus optional per-person overrides. Empty budget = no limit."""
+        admin(request)
+        body = await request.json()
+        new = {"default": clean_policy(body.get("default", {})), "people": {n: clean_policy(v) for n, v in (body.get("people") or {}).items() if n in goblins and v}}
+        old = dict(policy)
+        policy.update(new)
+        try:
+            save_state()
+        except HTTPException:
+            policy.update(old)
+            raise
+        return policy
 
     @app.post("/admin/people")
     async def admin_add_person(request: Request):

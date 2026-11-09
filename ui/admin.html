@@ -18,6 +18,7 @@ input,button{font:inherit;color:inherit;background:var(--bg);border:1px solid va
   <form class="panel row" id="login"><input id="tok" type="password" placeholder="Admin token" autocomplete="current-password" required style="flex:1;min-width:200px"><button class="primary" type="submit">Check now</button><button type="button" id="reset">Clear counts</button><span id="msg" class="small muted"></span></form>
   <div class="panel" id="out" hidden></div>
   <div class="panel" id="people" hidden></div>
+  <div class="panel" id="plaid" hidden></div>
 </main>
 <script>
 const $ = (s) => document.querySelector(s), out = $("#out"), msg = $("#msg");
@@ -68,6 +69,33 @@ function renderPeople(rows) {
     el("div", { style: "margin-top:12px" }, add), note, res);
   box.hidden = false;
 }
+
+const usd = (n) => n == null ? "none" : "$" + Number(n).toFixed(2);
+async function renderPlaid(rows) {
+  const box = $("#plaid"), pol = await call("/admin/policy"), note = el("p", { class: "small muted" }), bi = pol.built_in;
+  const inp = (id, ph, v, step) => el("input", { id, type: "number", min: "0", step: step || "1", placeholder: ph, value: v ?? "", style: "width:110px" });
+  const dflt = pol.default || {}, mine = pol.people || {};
+  const fD = { b: inp("pd-b", "$" + bi.plaid_budget_month, dflt.plaid_budget_month, "0.01"), c: inp("pd-c", String(bi.plaid_daily_cap), dflt.plaid_daily_cap), m: inp("pd-m", String(bi.plaid_min_minutes), dflt.plaid_min_minutes) };
+  const rec = el("select", { id: "pd-r" }, el("option", { value: "" }, "default (on)"), el("option", { value: "on" }, "on"), el("option", { value: "off" }, "off")); rec.value = dflt.plaid_use_recurring || "";
+  const per = rows.map((g) => ({ n: g.name, b: inp("pp-b-" + g.name, "default", (mine[g.name] || {}).plaid_budget_month, "0.01"), c: inp("pp-c-" + g.name, "default", (mine[g.name] || {}).plaid_daily_cap) }));
+  const num = (x) => x.value.trim() === "" ? "" : Number(x.value);
+  const save = el("button", { class: "primary", type: "button" }, "Save limits");
+  save.addEventListener("click", async () => {
+    const people = {}; for (const p of per) { const o = {}; if (p.b.value.trim() !== "") o.plaid_budget_month = num(p.b); if (p.c.value.trim() !== "") o.plaid_daily_cap = num(p.c); if (Object.keys(o).length) people[p.n] = o; }
+    const d = {}; if (fD.b.value.trim() !== "") d.plaid_budget_month = num(fD.b); if (fD.c.value.trim() !== "") d.plaid_daily_cap = num(fD.c); if (fD.m.value.trim() !== "") d.plaid_min_minutes = num(fD.m); if (rec.value) d.plaid_use_recurring = rec.value;
+    try { await call("/admin/policy", "PUT", { default: d, people }); note.textContent = "Saved. Each goblin picks it up within five minutes."; note.className = "small"; } catch (e) { note.textContent = e.message; note.className = "small err"; }
+  });
+  const total = rows.reduce((a, g) => a + ((g.plaid || {}).est_monthly_cost || 0), 0);
+  box.replaceChildren(el("h2", { style: "margin:0 0 6px;font-size:1.1rem" }, "Plaid limits"),
+    el("p", { class: "small muted" }, "These are enforced by every goblin and cannot be raised from inside the app. Empty = the built-in default. Budget is each person's own monthly maximum for Plaid (estimated at list price). Plaid bills you the combined total of everyone."),
+    el("div", { class: "row" }, el("label", { class: "small" }, "Budget per person ($/month) ", fD.b), el("label", { class: "small" }, "Daily call cap ", fD.c), el("label", { class: "small" }, "Ask a bank at most every (minutes) ", fD.m), el("label", { class: "small" }, "Plaid recurring detection ", rec)),
+    el("p", { class: "small muted" }, "Built-in: $5 a month, 300 calls a day, every 180 minutes. Most calls are free; Plaid bills per bank per month (Transactions $0.30, Recurring $0.15, Investments Holdings $0.18)."),
+    el("table", {}, el("thead", {}, el("tr", {}, ["Person", "Banks", "Estimated / month", "Their budget", "Calls today", "Own budget", "Own daily cap"].map((h, i) => el("th", i > 0 && i < 5 ? { class: "n" } : {}, h)))),
+      el("tbody", {}, rows.map((g, i) => { const p = g.plaid || {}; return el("tr", {}, el("td", {}, g.name), el("td", { class: "n" }, p.items ?? "?"), el("td", { class: "n" }, p.est_monthly_cost == null ? "?" : usd(p.est_monthly_cost)), el("td", { class: "n" }, p.budget == null ? "none" : usd(p.budget)), el("td", { class: "n" }, p.calls_today == null ? "?" : `${p.calls_today} / ${p.daily_cap}`), el("td", {}, per[i].b), el("td", {}, per[i].c)); }))),
+    el("p", { class: "small muted" }, `Everyone together: about ${usd(total)} a month. Counts only; nothing about what is in anyone's accounts.`),
+    el("div", { class: "row" }, save), note);
+  box.hidden = false;
+}
 async function show() {
   msg.textContent = "Checking…"; msg.className = "small muted";
   try {
@@ -80,7 +108,7 @@ async function show() {
           el("td", { class: "n" }, ["app", "api_token", "webhook"].reduce((a, k) => a + calls(g, k, "client_errors") + calls(g, k, "server_errors"), 0)))))),
       el("p", { class: "small muted" }, `Pondering Orb summary calls: ${d.orb.calls || 0}. All calls: ${d.total.calls} (${d.total.client_errors} refused or invalid, ${d.total.server_errors} server errors), since the gateway last started or was cleared ${Math.round(d.since_seconds / 60)} minutes ago.`),
       el("p", { class: "small muted" }, d.note));
-    out.hidden = false; renderPeople(rows); msg.textContent = "Updated " + new Date().toLocaleTimeString();
+    out.hidden = false; renderPeople(rows); renderPlaid(rows).catch(() => {}); msg.textContent = "Updated " + new Date().toLocaleTimeString();
   } catch (e) { msg.textContent = e.message; msg.className = "small err"; out.hidden = true; }
 }
 $("#login").addEventListener("submit", (e) => { e.preventDefault(); show(); });

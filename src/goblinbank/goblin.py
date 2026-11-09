@@ -42,13 +42,66 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     gateway_url = os.environ.get("GATEWAY_URL", "")
     client = httpx.Client(timeout=20, transport=transport)
     store = db or DB()
+    policy_state = {"at": 0.0, "keys": set()}
+
+    def apply_policy(force: bool = False):
+        """Fetch the limits the gateway admin set for this goblin and keep them in settings, where everything else already reads them.
+        If the gateway cannot be reached the last ones stay in force."""
+        if not gateway_url or (not force and time.time() - policy_state["at"] < 300):
+            return
+        policy_state["at"] = time.time()
+        try:
+            r = client.get(f"{gateway_url}/internal/policy", headers={"X-Goblin": name, "X-Internal-Secret": secret})
+            if r.status_code != 200:
+                return
+            pol = r.json()
+        except Exception:
+            return
+        keys = set()
+        for k in ("plaid_budget_month", "plaid_daily_cap", "plaid_min_minutes", "plaid_use_recurring"):
+            if k in pol:
+                try:
+                    if pol[k] == "" and k != "plaid_budget_month":
+                        continue                              # empty = the built-in default; the budget alone may be "no limit"
+                    cfg.put(store, k, pol[k])
+                    keys.add(k)
+                except ValueError:
+                    pass
+        policy_state["keys"] = keys
+
+    def month_calls() -> dict:
+        return {r["endpoint"]: r["calls"] for r in store.all("SELECT endpoint, SUM(calls) calls FROM plaid_usage WHERE day LIKE ? GROUP BY endpoint", (date.today().strftime("%Y-%m") + "%",))}
+
+    def budget_state() -> dict:
+        """This month's estimated Plaid bill against the budget (default $5; empty = no limit) and what one more linked bank would add."""
+        apply_policy()
+        raw = cfg.get(store, "plaid_budget_month")
+        budget = float(raw) if raw not in ("", None) and float(raw) > 0 else None
+        use_rec = cfg.get(store, "plaid_use_recurring") != "off"
+        det = plaidcost.estimate(store, use_rec, month_calls())
+        rate = cfg.get(store, "plaid_rate_item_month")
+        items = store.one("SELECT COUNT(*) n FROM plaid_items")["n"]
+        est = round(items * float(rate), 2) if rate else det["total"]
+        per_item = float(rate) if rate else det["per_item"]
+        return {"est": est, "budget": budget, "per_item": per_item, "detail": det, "use_recurring": use_rec, "items": items}
+
+    def ensure_room_for_new_item():
+        b = budget_state()
+        if b["budget"] is not None and b["est"] + b["per_item"] > b["budget"] + 0.005:
+            raise HTTPException(409, f"Linking another bank would raise the estimated Plaid bill from ${b['est']:.2f} to ${b['est'] + b['per_item']:.2f} a month, over your ${b['budget']:.2f} budget. Raise the budget in Settings, Connect & import, or unlink a bank you no longer need.")
+
     class Usage:
-        """Counts every Plaid call per day and refuses once the daily cap is hit (a runaway-sync / webhook-storm guard)."""
+        """Counts every Plaid call per day, refuses past the daily cap (a runaway-sync / webhook-storm guard), and never lets a call that Plaid bills per use push the month over budget."""
         def before(self, path):
-            cap = int(float(cfg.get(store, "plaid_daily_cap") or 500))
+            apply_policy()
+            cap = int(float(cfg.get(store, "plaid_daily_cap") or 300))
             row = store.one("SELECT COALESCE(SUM(calls),0) n FROM plaid_usage WHERE day=?", (date.today().isoformat(),))
             if row["n"] >= cap:
                 raise PlaidError(f"daily Plaid call cap reached ({cap}); raise it in Settings if this is expected")
+            if path in plaidcost.PER_CALL:
+                b = budget_state()
+                if b["budget"] is not None and b["est"] + plaidcost.PER_CALL[path] > b["budget"] + 0.005:
+                    raise PlaidError(f"that call costs ${plaidcost.PER_CALL[path]:.2f} and would put this month's estimated Plaid bill over your ${b['budget']:.2f} budget")
 
         def record(self, path):
             with store.tx() as c:
@@ -140,6 +193,8 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     def link_token(request: Request, item_id: str | None = None):
         auth(request)
         tok = None
+        if not item_id:
+            ensure_room_for_new_item()
         if item_id:
             row = store.one("SELECT token_enc FROM plaid_items WHERE item_id=?", (item_id,))
             tok = crypto.decrypt(row["token_enc"]) if row else None
@@ -151,6 +206,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     @app.post("/plaid/exchange")
     def plaid_exchange(request: Request, body: Exchange):
         auth(request)
+        ensure_room_for_new_item()
         try:
             r = plaid.exchange(body.public_token)
             with store.tx() as c:
@@ -162,7 +218,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                                 headers={"X-Internal-Secret": secret, "X-Goblin": name})
                 except httpx.HTTPError:
                     pass
-            return {"item_id": r["item_id"], "sync": sync.sync_item(store, plaid, r["item_id"])}
+            return {"item_id": r["item_id"], "sync": sync.sync_item(store, plaid, r["item_id"], force=True)}
         except PlaidError as e:
             raise HTTPException(502, str(e))
 
@@ -175,19 +231,20 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         import json
         body = json.loads(raw)
         if body.get("item_id") and body.get("webhook_type") == "TRANSACTIONS":
-            return {"synced": await run_in_threadpool(sync.sync_item, store, plaid, body["item_id"])}
+            return {"synced": await run_in_threadpool(sync.sync_item, store, plaid, body["item_id"], True)}
         return {"ignored": body.get("webhook_code")}
 
     sync_state = {"last": 0.0, "at": None}
     sync_lock = threading.Lock()
 
-    def do_sync() -> dict:
+    def do_sync(force: bool = False) -> dict:
         """One pull of everything: Plaid, Robinhood snapshots, drop-folder CSVs. One at a time, whoever asks."""
+        apply_policy()
         with sync_lock:
             out = {"plaid": [], "robinhood": snapshot_robinhood(), "imports": scan_imports()}
             if plaid.configured:
                 try:
-                    out["plaid"] = sync.sync_all(store, plaid)
+                    out["plaid"] = sync.sync_all(store, plaid, force)
                 except PlaidError as e:
                     out["plaid_error"] = str(e)
             sync_state["last"], sync_state["at"] = time.time(), sync.now()
@@ -197,7 +254,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     @app.post("/sync")
     def sync_now(request: Request):
         auth(request)
-        return do_sync()
+        return do_sync(force=True)             # you asked: pull now (the daily cap and the budget still apply)
 
     def autosync_loop():
         """Keep the data fresh without anyone pressing Sync. Every `sync_minutes` (default 15; 0 turns it off)."""
@@ -359,7 +416,17 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     @app.get("/api/settings")
     def settings_get(request: Request):
         auth(request)
-        return cfg.view(store)
+        apply_policy(force=True)                          # opening Settings picks up a change the admin just made
+        return {**cfg.view(store), "managed": sorted(policy_state["keys"])}          # managed: limits the gateway admin has set; the app shows them read-only
+
+    @app.get("/internal/plaid-stats")
+    def plaid_stats(request: Request):
+        """Counts only, for the admin page: how many banks, the estimated bill against the budget, calls today. Nothing about what is in them."""
+        auth(request)
+        b = budget_state()
+        today_n = store.one("SELECT COALESCE(SUM(calls),0) n FROM plaid_usage WHERE day=?", (date.today().isoformat(),))["n"]
+        return {"items": b["items"], "est_monthly_cost": b["est"], "budget": b["budget"], "calls_today": today_n, "daily_cap": int(float(cfg.get(store, "plaid_daily_cap") or 300)),
+                "calls_month": sum(month_calls().values()), "min_minutes": int(float(cfg.get(store, "plaid_min_minutes") or 180))}
 
     @app.put("/api/settings")
     async def settings_put(request: Request):
@@ -368,6 +435,9 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(422, "expected an object")
+        locked = [k for k in body if k in policy_state["keys"]]
+        if locked:
+            raise HTTPException(409, f"{', '.join(locked)} is set by the gateway admin and cannot be changed here")
         try:
             for k, v in body.items():
                 cfg.validate(k, v)          # validate everything before writing anything
@@ -411,19 +481,21 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
 
     @app.get("/api/plaid/usage")
     def plaid_usage(request: Request):
-        """API calls this month and a cost estimate from rates YOU enter (Plaid does not publish them)."""
+        """API calls this month, the estimated bill at Plaid's list prices against the budget, and how many calls a day the settings allow."""
         auth(request)
         month = date.today().strftime("%Y-%m")
-        by = {r["endpoint"]: r["calls"] for r in store.all("SELECT endpoint, SUM(calls) calls FROM plaid_usage WHERE day LIKE ? GROUP BY endpoint", (month + "%",))}
+        by = month_calls()
         today = store.one("SELECT COALESCE(SUM(calls),0) n FROM plaid_usage WHERE day=?", (date.today().isoformat(),))["n"]
-        items = store.one("SELECT COUNT(*) n FROM plaid_items")["n"]
-        rate, budget = cfg.get(store, "plaid_rate_item_month"), cfg.get(store, "plaid_budget_month")
-        use_rec = cfg.get(store, "plaid_use_recurring") != "off"
-        est_detail = plaidcost.estimate(store, use_rec, by)
-        est = round(items * float(rate), 2) if rate else est_detail["total"]          # a rate you type (a negotiated one) replaces the list-price estimate
-        return {"month": month, "calls_month": sum(by.values()), "calls_today": today, "daily_cap": int(float(cfg.get(store, "plaid_daily_cap") or 500)),
-                "by_endpoint": dict(sorted(by.items(), key=lambda kv: -kv[1])), "items": items, "est_monthly_cost": est, "breakdown": est_detail["lines"], "list_total": est_detail["total"], "custom_rate": float(rate) if rate else None, "use_recurring": use_rec,
-                "budget": float(budget) if budget else None, "over_budget": bool(est is not None and budget and est > float(budget))}
+        b = budget_state()
+        rate = cfg.get(store, "plaid_rate_item_month")
+        gap = float(cfg.get(store, "plaid_min_minutes") or 180)
+        inv = sum(1 for x in b["detail"]["lines"] if x["label"] == "Investments holdings" for _ in range(x["qty"]))
+        per_day = round(b["items"] * (max(1.0, 1440 / max(gap, 1)) * 2 + (2 if b["use_recurring"] else 0)) + inv, 0)     # accounts + transactions per pass, plus recurring and holdings once a day
+        return {"month": month, "calls_month": sum(by.values()), "calls_today": today, "daily_cap": int(float(cfg.get(store, "plaid_daily_cap") or 300)),
+                "by_endpoint": dict(sorted(by.items(), key=lambda kv: -kv[1])), "items": b["items"], "est_monthly_cost": b["est"], "breakdown": b["detail"]["lines"], "list_total": b["detail"]["total"],
+                "custom_rate": float(rate) if rate else None, "use_recurring": b["use_recurring"], "budget": b["budget"], "over_budget": bool(b["budget"] and b["est"] > b["budget"] + 0.005),
+                "room_for_items": (int((b["budget"] - b["est"] + 0.005) // b["per_item"]) if b["budget"] and b["per_item"] else None), "per_item": b["per_item"],
+                "min_minutes": int(gap), "calls_per_day_estimate": int(per_day)}
 
     @app.get("/internal/connector-config/rh-agent")
     def agent_config(request: Request):

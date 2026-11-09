@@ -4,6 +4,7 @@ Billed per linked item per month: Transactions $0.30, Recurring Transactions $0.
 Billed per call: Transactions Refresh $0.12 (successful), Balance $0.10. Auth, Identity, Income, Assets and the rest are not used by this app.
 """
 PRICE = {"transactions": 0.30, "recurring": 0.15, "investments": 0.18, "refresh_call": 0.12, "balance_call": 0.10}
+PER_CALL = {"/transactions/refresh": 0.12, "/accounts/balance/get": 0.10, "/identity/get": 1.50, "/auth/get": 1.50, "/liabilities/get": 0.20}     # billed per use, so they are the ones a budget must stop
 LIST_AS_OF = "pay-as-you-go list price you provided"
 
 

@@ -358,7 +358,7 @@ def test_plaid_usage_counts_cap_and_cost(monkeypatch):
     assert c.put("/api/settings", headers=H, json={"plaid_rate_item_month": "free"}).status_code == 422
     assert c.put("/api/settings", headers=H, json={"plaid_daily_cap": "2.5"}).status_code == 422
     # daily cap blocks further calls
-    c.put("/api/settings", headers=H, json={"plaid_daily_cap": "3"})
+    c.put("/api/settings", headers=H, json={"plaid_daily_cap": "3", "plaid_budget_month": ""})
     r = c.post("/plaid/link-token", headers=H)
     assert r.status_code == 502 and "cap" in r.json()["detail"]
 

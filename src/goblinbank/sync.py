@@ -33,10 +33,24 @@ def record_balance(db, acct_id: str, name: str, balance: float | None, kind: str
                        f"{prev['balance']:,.2f} -> {balance:,.2f}"))
 
 
-def sync_item(db, plaid: Plaid, item_id: str) -> dict:
+import time
+
+clock = time.time          # tests replace this
+SLOW_SECONDS = 24 * 3600   # holdings and recurring payments change slowly: once a day is plenty
+
+
+def sync_item(db, plaid: Plaid, item_id: str, force: bool = False) -> dict:
+    """Pull one bank. Plaid refreshes most banks only a few times a day, so asking more often returns nothing new: unless `force`
+    (first link, a Plaid webhook, or you pressing Sync now) an item is skipped if it was pulled less than `plaid_min_minutes` ago,
+    and holdings / recurring payments are asked for at most once a day."""
     row = db.one("SELECT * FROM plaid_items WHERE item_id=?", (item_id,))
     if not row:
         return {"item": item_id, "error": "unknown item"}
+    t0 = clock()
+    gap = float(settings.get(db, "plaid_min_minutes") or 180) * 60
+    if not force and row.get("last_sync") and t0 - row["last_sync"] < gap:
+        return {"item": item_id, "skipped": "fresh", "next_in_minutes": round((gap - (t0 - row["last_sync"])) / 60)}
+    slow_due = not row.get("last_slow") or t0 - row["last_slow"] >= SLOW_SECONDS
     token = crypto.decrypt(row["token_enc"])
     inst = row["institution"] or "Bank"
     stats = {"item": item_id, "added": 0, "modified": 0, "removed": 0}
@@ -82,16 +96,18 @@ def sync_item(db, plaid: Plaid, item_id: str) -> dict:
     with db.tx() as c:
         c.execute("UPDATE plaid_items SET cursor=? WHERE item_id=?", (cursor, item_id))
 
-    if db.one("SELECT 1 FROM accounts WHERE item_id=? AND kind='investment'", (item_id,)):
+    if slow_due and db.one("SELECT 1 FROM accounts WHERE item_id=? AND kind='investment'", (item_id,)):
         try:
             stats["holdings"] = sync_holdings(db, plaid, token)
         except Exception as e:  # not every institution supports investments
             stats["holdings_error"] = str(e)[:120]
     try:
-        if settings.get(db, "plaid_use_recurring") != "off":          # Plaid bills Recurring Transactions per item per month; the app's own detection works without it
+        if slow_due and settings.get(db, "plaid_use_recurring") != "off":          # Plaid bills Recurring Transactions per item per month; the app's own detection works without it
             sync_recurring(db, plaid, token)
     except Exception as e:  # recurring needs history; don't fail the whole sync
         stats["recurring_error"] = str(e)[:120]
+    with db.tx() as c:
+        c.execute("UPDATE plaid_items SET last_sync=?" + (", last_slow=?" if slow_due else "") + " WHERE item_id=?", (t0, t0, item_id) if slow_due else (t0, item_id))
     return stats
 
 
@@ -124,5 +140,5 @@ def sync_recurring(db, plaid: Plaid, token: str):
                       (s.get("merchant_name") or s["description"], amt, recur.label(ev, un), ev, un, nxt, "Subscriptions", "plaid", s["stream_id"], now()))
 
 
-def sync_all(db, plaid: Plaid) -> list[dict]:
-    return [sync_item(db, plaid, r["item_id"]) for r in db.all("SELECT item_id FROM plaid_items")]
+def sync_all(db, plaid: Plaid, force: bool = False) -> list[dict]:
+    return [sync_item(db, plaid, r["item_id"], force) for r in db.all("SELECT item_id FROM plaid_items")]
