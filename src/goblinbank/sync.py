@@ -1,7 +1,7 @@
 """Pull data from Plaid into the goblin DB and record money-movement events."""
 from datetime import datetime, timezone
 
-from goblinbank import crypto, ledger, recur
+from goblinbank import crypto, ledger, recur, settings
 from goblinbank.plaid import Plaid
 
 KIND = {"depository": "cash", "credit": "credit", "investment": "investment", "loan": "loan", "brokerage": "investment"}
@@ -88,7 +88,8 @@ def sync_item(db, plaid: Plaid, item_id: str) -> dict:
         except Exception as e:  # not every institution supports investments
             stats["holdings_error"] = str(e)[:120]
     try:
-        sync_recurring(db, plaid, token)
+        if settings.get(db, "plaid_use_recurring") != "off":          # Plaid bills Recurring Transactions per item per month; the app's own detection works without it
+            sync_recurring(db, plaid, token)
     except Exception as e:  # recurring needs history; don't fail the whole sync
         stats["recurring_error"] = str(e)[:120]
     return stats

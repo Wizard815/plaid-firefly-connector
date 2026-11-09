@@ -343,7 +343,15 @@ def test_plaid_usage_counts_cap_and_cost(monkeypatch):
     c = TestClient(mk(db=db, plaid_transport=plaid_mock()))
     c.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "Huntington"})
     u = c.get("/api/plaid/usage", headers=H).json()
-    assert u["calls_month"] >= 4 and u["by_endpoint"]["/accounts/get"] == 1 and u["est_monthly_cost"] is None   # no rate entered -> no guess
+    assert u["calls_month"] >= 4 and u["by_endpoint"]["/accounts/get"] == 1
+    assert u["est_monthly_cost"] == 0.45 and [x["label"] for x in u["breakdown"]] == ["Transactions", "Recurring transactions"]       # list price: $0.30 + $0.15 for one item
+    n_before = u["by_endpoint"].get("/transactions/recurring/get", 0)
+    c.put("/api/settings", headers=H, json={"plaid_use_recurring": "off"})
+    u = c.get("/api/plaid/usage", headers=H).json()
+    assert u["est_monthly_cost"] == 0.30 and u["use_recurring"] is False
+    c.post("/sync", headers=H)
+    assert c.get("/api/plaid/usage", headers=H).json()["by_endpoint"].get("/transactions/recurring/get", 0) == n_before       # and it really stops calling it
+    c.put("/api/settings", headers=H, json={"plaid_use_recurring": "on"})
     c.put("/api/settings", headers=H, json={"plaid_rate_item_month": "1.50", "plaid_budget_month": "1"})
     u = c.get("/api/plaid/usage", headers=H).json()
     assert u["est_monthly_cost"] == 1.5 and u["over_budget"] is True

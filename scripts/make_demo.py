@@ -90,7 +90,7 @@ def main(out: str, artifact: bool):
     post("/api/agent/providers", {"name": "Ollama (this machine)", "kind": "openai", "base_url": "http://host.docker.internal:11434/v1", "model": "llama3.1", "tools": True})
     post("/api/agent/providers", {"name": "OpenRouter", "kind": "openai", "base_url": "https://openrouter.ai/api/v1", "model": "anthropic/claude-sonnet-4.5", "tools": True})
     c.put("/api/settings", headers=H, json={"caldav_url": "https://dav.example/calendars/me/bills/", "caldav_user": "me", "rh_mcp_url": "https://mcp.example/robinhood", "rh_mcp_read_tools": "get_account,get_positions",
-                                             "rh_mcp_tool_balances": "get_account", "rh_mcp_tool_positions": "get_positions", "share": ["net_worth", "bills", "alerts", "savings", "goals", "spending", "robinhood_agent"], "plaid_rate_item_month": "1.50", "plaid_budget_month": "10"})
+                                             "rh_mcp_tool_balances": "get_account", "rh_mcp_tool_positions": "get_positions", "share": ["net_worth", "bills", "alerts", "savings", "goals", "spending", "robinhood_agent"], "plaid_budget_month": "10"})
     for i, inst in enumerate(["Huntington", "Axos", "Capital One"]):
         db.conn.execute("INSERT INTO plaid_items VALUES(?,?,?,NULL)", (f"item-{i}", inst, "x"))
     for ep, n in {"/transactions/sync": 96, "/accounts/get": 62, "/transactions/recurring/get": 30, "/investments/holdings/get": 18}.items():

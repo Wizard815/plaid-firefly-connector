@@ -14,7 +14,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from goblinbank import agent, api_links, api_money, api_plan, links, external, notify, plan, crypto, feed, importers, ledger, settings as cfg, sync
+from goblinbank import plaidcost, agent, api_links, api_money, api_plan, links, external, notify, plan, crypto, feed, importers, ledger, settings as cfg, sync
 from goblinbank.db import DB
 from goblinbank.plaid import Plaid, PlaidError
 from goblinbank.security import require_internal
@@ -403,9 +403,11 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         today = store.one("SELECT COALESCE(SUM(calls),0) n FROM plaid_usage WHERE day=?", (date.today().isoformat(),))["n"]
         items = store.one("SELECT COUNT(*) n FROM plaid_items")["n"]
         rate, budget = cfg.get(store, "plaid_rate_item_month"), cfg.get(store, "plaid_budget_month")
-        est = round(items * float(rate), 2) if rate else None
+        use_rec = cfg.get(store, "plaid_use_recurring") != "off"
+        est_detail = plaidcost.estimate(store, use_rec, by)
+        est = round(items * float(rate), 2) if rate else est_detail["total"]          # a rate you type (a negotiated one) replaces the list-price estimate
         return {"month": month, "calls_month": sum(by.values()), "calls_today": today, "daily_cap": int(float(cfg.get(store, "plaid_daily_cap") or 500)),
-                "by_endpoint": dict(sorted(by.items(), key=lambda kv: -kv[1])), "items": items, "est_monthly_cost": est,
+                "by_endpoint": dict(sorted(by.items(), key=lambda kv: -kv[1])), "items": items, "est_monthly_cost": est, "breakdown": est_detail["lines"], "list_total": est_detail["total"], "custom_rate": float(rate) if rate else None, "use_recurring": use_rec,
                 "budget": float(budget) if budget else None, "over_budget": bool(est is not None and budget and est > float(budget))}
 
     @app.get("/internal/connector-config/rh-agent")
