@@ -38,6 +38,10 @@ CREATE INDEX IF NOT EXISTS cm_chat ON chat_messages(chat_id, id);
 CREATE TABLE IF NOT EXISTS goals(
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, target REAL NOT NULL, deadline TEXT, priority INTEGER DEFAULT 2, monthly REAL DEFAULT 0,
   note TEXT DEFAULT '', status TEXT DEFAULT 'active', created TEXT, closed TEXT);
+CREATE TABLE IF NOT EXISTS links(peer TEXT PRIMARY KEY, status TEXT NOT NULL, created TEXT);   -- status: invited (I asked) | pending (they asked) | active
+CREATE TABLE IF NOT EXISTS goal_partners(goal_id INTEGER NOT NULL, peer TEXT NOT NULL, amount REAL NOT NULL DEFAULT 0, PRIMARY KEY(goal_id, peer));
+CREATE TABLE IF NOT EXISTS goal_notes(id TEXT PRIMARY KEY, goal_id INTEGER NOT NULL, author TEXT NOT NULL, ts TEXT NOT NULL, text TEXT NOT NULL, deleted INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS outbox(peer TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL DEFAULT '', payload TEXT NOT NULL, PRIMARY KEY(peer, kind, ref));
 CREATE TABLE IF NOT EXISTS allocations(id INTEGER PRIMARY KEY AUTOINCREMENT, goal_id INTEGER NOT NULL, place TEXT NOT NULL DEFAULT '', amount REAL NOT NULL, UNIQUE(goal_id, place));
 CREATE TABLE IF NOT EXISTS incomes(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, amount REAL NOT NULL, every INTEGER DEFAULT 1, unit TEXT DEFAULT 'month', next_date TEXT NOT NULL, account_id TEXT, active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS chat_links(chat_id INTEGER NOT NULL, kind TEXT NOT NULL, ref_id INTEGER NOT NULL, PRIMARY KEY(chat_id, kind, ref_id));
@@ -56,7 +60,7 @@ COLUMNS = {  # added after the first release: (table, column) -> DDL fragment
     ("subscriptions", "payer"): "TEXT DEFAULT 'me'", ("subscriptions", "payer_name"): "TEXT DEFAULT ''",
     ("subscriptions", "notify_days"): "INTEGER DEFAULT 3", ("subscriptions", "end_date"): "TEXT", ("subscriptions", "created"): "TEXT", ("subscriptions", "match_key"): "TEXT", ("incomes", "match_key"): "TEXT",
     ("transactions", "plaid_category"): "TEXT", ("transactions", "category_locked"): "INTEGER DEFAULT 0", ("transactions", "notes"): "TEXT DEFAULT ''",
-    ("accounts", "min_balance"): "REAL", ("accounts", "subtype"): "TEXT", ("accounts", "savings_pool"): "INTEGER", ("accounts", "mask"): "TEXT", ("accounts", "nickname"): "TEXT", ("accounts", "pinned"): "INTEGER DEFAULT 0", ("providers", "context_tokens"): "INTEGER DEFAULT 8192",
+    ("accounts", "min_balance"): "REAL", ("accounts", "subtype"): "TEXT", ("accounts", "savings_pool"): "INTEGER", ("accounts", "mask"): "TEXT", ("accounts", "joint_with"): "TEXT", ("accounts", "my_share"): "REAL", ("goals", "shared_id"): "TEXT", ("goals", "members"): "TEXT", ("goals", "shared_state"): "TEXT", ("goals", "rev"): "INTEGER DEFAULT 0", ("goals", "edited_by"): "TEXT", ("goals", "sent_sig"): "TEXT", ("accounts", "nickname"): "TEXT", ("accounts", "pinned"): "INTEGER DEFAULT 0", ("providers", "context_tokens"): "INTEGER DEFAULT 8192",
 }
 DEFAULT_CATEGORIES = [("Income", "income"), ("Food", "expense"), ("Groceries", "expense"), ("Clothes", "expense"), ("Fun", "expense"), ("Games", "expense"),
                       ("Gas", "expense"), ("Transport", "expense"), ("Bills", "expense"), ("Housing", "expense"), ("Health", "expense"), ("Shopping", "expense"),

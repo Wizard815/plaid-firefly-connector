@@ -140,6 +140,25 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         items[item_id] = g["name"]
         return {"ok": True}
 
+    @app.post("/internal/link/send")
+    async def link_send(request: Request):
+        """Relay one message from a goblin to another goblin it wants to link with. The gateway keeps nothing: it checks who is sending, stamps the
+        sender's name on it (so nobody can pose as someone else) and passes it on. Whether the two are actually linked is the receiving goblin's call."""
+        g = goblins.get(request.headers.get("x-goblin", ""))
+        if not g:
+            raise HTTPException(401, "unauthorized")
+        require_internal(request, g["internal_secret"])
+        body = await request.json()
+        to = goblins.get(body.get("to", ""))
+        if not to or to["name"] == g["name"] or not isinstance(body.get("payload", {}), dict):
+            return {"delivered": False}
+        try:
+            r = await run_in_threadpool(client.post, f"{to['url']}/internal/link/inbox", json={"type": str(body.get("type", ""))[:20], "payload": body.get("payload", {}), "sender": g["name"]},
+                                        headers=goblin_headers(to))
+        except httpx.HTTPError:
+            return {"delivered": False}
+        return {"delivered": r.status_code == 200}
+
     @app.post("/webhooks/plaid")
     async def plaid_webhook(request: Request):
         """Relay to the owning goblin. The goblin verifies Plaid's JWT signature (it holds the

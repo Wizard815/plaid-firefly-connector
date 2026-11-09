@@ -4,7 +4,7 @@ from datetime import date
 from fastapi import HTTPException, Request
 from pydantic import BaseModel
 
-from goblinbank import plan, recur, sync
+from goblinbank import links, plan, recur, sync
 
 
 class GoalIn(BaseModel):
@@ -86,45 +86,64 @@ def register(app, ctx):
     @app.put("/api/goals/{gid}")
     def goal_update(request: Request, gid: int, g: GoalPatch):
         auth(request)
-        return run(plan.update_goal, store, gid, ctx.today(), **g.model_dump())
+        r = run(plan.update_goal, store, gid, ctx.today(), **g.model_dump())
+        ctx.shared_changed(gid, edited=True)
+        return r
 
     @app.delete("/api/goals/{gid}")
     def goal_delete(request: Request, gid: int):
         auth(request)
+        try:
+            links.stop_sharing(store, ctx.name, gid)          # the others keep their copy, without my number
+        except KeyError:
+            raise HTTPException(404, "not found")
         plan.delete_goal(store, gid)
+        ctx.shared_changed()
         return {"deleted": gid}
 
     @app.post("/api/goals/{gid}/allocate")
     def goal_allocate(request: Request, gid: int, a: AllocIn):
         auth(request)
-        return run(plan.set_allocation, store, gid, a.place, a.amount, ctx.today())
+        r = run(plan.set_allocation, store, gid, a.place, a.amount, ctx.today())
+        ctx.shared_changed()
+        return r
 
     @app.post("/api/goals/{gid}/fund")
     def goal_fund(request: Request, gid: int, a: AllocIn):
         auth(request)
-        return run(plan.fund, store, gid, a.amount, ctx.today(), a.place)
+        r = run(plan.fund, store, gid, a.amount, ctx.today(), a.place)
+        ctx.shared_changed()
+        return r
 
     @app.post("/api/goals/{gid}/release")
     def goal_release(request: Request, gid: int, r: ReleaseIn):
         auth(request)
-        return run(plan.release, store, gid, ctx.today(), r.amount, r.place)
+        out = run(plan.release, store, gid, ctx.today(), r.amount, r.place)
+        ctx.shared_changed()
+        return out
 
     @app.post("/api/goals/{gid}/close")
     def goal_close(request: Request, gid: int, c: CloseIn):
         auth(request)
         if c.status not in ("done", "dropped", "active"):
             raise HTTPException(422, "status must be done, dropped or active")
-        return run(plan.close_goal, store, gid, ctx.today(), c.status)
+        r = run(plan.close_goal, store, gid, ctx.today(), c.status)
+        ctx.shared_changed(gid, edited=True)
+        return r
 
     @app.post("/api/goals/move")
     def goal_move(request: Request, m: MoveIn):
         auth(request)
-        return run(plan.move, store, m.from_id, m.to_id, m.amount, ctx.today())
+        r = run(plan.move, store, m.from_id, m.to_id, m.amount, ctx.today())
+        ctx.shared_changed()
+        return r
 
     @app.post("/api/goals/autofill")
     def goal_autofill(request: Request):
         auth(request)
-        return plan.autofill(store, ctx.today())
+        r = plan.autofill(store, ctx.today())
+        ctx.shared_changed()
+        return r
 
     @app.get("/api/maturities")
     def maturities(request: Request, days: int = 365):

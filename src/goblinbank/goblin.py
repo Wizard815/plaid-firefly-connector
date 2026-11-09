@@ -14,7 +14,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from goblinbank import agent, api_money, api_plan, external, notify, plan, crypto, feed, importers, ledger, settings as cfg, sync
+from goblinbank import agent, api_links, api_money, api_plan, links, external, notify, plan, crypto, feed, importers, ledger, settings as cfg, sync
 from goblinbank.db import DB
 from goblinbank.plaid import Plaid, PlaidError
 from goblinbank.security import require_internal
@@ -208,6 +208,10 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                 mins = 15.0
             time.sleep(autosync_tick if autosync_tick is not None else max(60.0, mins * 60))        # autosync_tick: tests only
             try:
+                shared_changed()                                  # also retries anything that could not be delivered earlier
+            except Exception:
+                pass
+            try:
                 if mins > 0 and (autosync_tick is not None or time.time() - sync_state["last"] >= mins * 60 - 5):
                     do_sync()                                     # also checks alerts
                 else:
@@ -256,10 +260,29 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             raise HTTPException(422, str(e))
         return {"provider": prov, "rows": len(rows), "added": importers.store(store, prov, rows)}
 
-    ctx = api_money.make_ctx(store, auth, today or date.today, name=name, plaid=plaid, client=client, caldav_transport=caldav_transport)
+    def link_send(peer: str, kind: str, payload: dict) -> bool:
+        """Hand a message for another goblin to the gateway, which relays it and keeps nothing."""
+        if not gateway_url:
+            return False
+        r = client.post(f"{gateway_url}/internal/link/send", json={"to": peer, "type": kind, "payload": payload}, headers={"X-Goblin": name, "X-Internal-Secret": secret})
+        return r.status_code == 200 and bool(r.json().get("delivered"))
+
+    def link_flush() -> int:
+        return links.flush(store, link_send)
+
+    def shared_changed(gid: int | None = None, edited: bool = False) -> None:
+        """A goal I share changed (or my set-aside amount did): tell the others. Never lets a link problem break the edit."""
+        try:
+            links.bump(store, name, gid) if edited and gid else links.push(store, name)
+            link_flush()
+        except Exception:
+            pass
+
+    ctx = api_money.make_ctx(store, auth, today or date.today, name=name, plaid=plaid, client=client, caldav_transport=caldav_transport, shared_changed=shared_changed, link_flush=link_flush)
     ctx.llm_transport = llm_transport
     api_money.register(app, ctx)
     api_plan.register(app, ctx)
+    api_links.register(app, ctx)
     agent.register(app, ctx)
 
     @app.post("/api/subscriptions/export/caldav")
@@ -520,7 +543,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             out["savings"] = {"total": ext["savings_total"], "free": ext["savings_free"], "earmarked": ext["savings_earmarked"]}
         if "goals" in share() or every:
             gv = plan.goals_view(store, (today or date.today)())
-            out["goals"] = [{"name": g["name"], "target": g["target"], "allocated": g["allocated"], "pct": g["pct"]} for g in gv["items"] if g["status"] == "active"]
+            out["goals"] = [{"name": g["name"], "target": g["target"], "allocated": g["allocated"], "pct": g["pct"]} for g in gv["items"] if g["status"] == "active" and g.get("shared_state") != "offered"]
         if "spending" in share() or every:
             fc = ledger.spending_forecast(store, (today or date.today)())
             out["spending"] = {"so_far": fc["spent_so_far"], "projected": fc["projected"], "income_avg": fc["income_avg"], "pct_projected": fc["pct_projected"], "left_after": fc["left_after_projected"], "confidence": fc["confidence"]}

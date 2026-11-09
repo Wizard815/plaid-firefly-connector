@@ -381,11 +381,12 @@ async function accountDetail(root, rerender) {
     h("div", { class: "grid" }, kpi(an(a), usd(a.balance), a.updated ? "updated " + ago(a.updated) : ""), kpi("In, last 30 days", usd(d.last_30_days.in), "", "pos"), kpi("Out, last 30 days", usd(d.last_30_days.out), `${d.last_30_days.count} transactions`, "neg")),
     h("div", { class: "panel" }, h("h3", {}, "Balance history"), spark(d.history.map((x) => ({ balance: x.balance, date: x.ts })), 560, 110, "balance", "date")),
     h("div", { class: "panel" }, h("h3", {}, "Settings for this account"),
-      h("form", { class: "row", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/accounts/" + encodeURIComponent(a.id), send("PUT", { min_balance: num("ad-min") ?? -1, nickname: val("ad-nick"), pinned: $("#ad-pin").checked, ...(manual ? { balance: num("ad-bal"), name: val("ad-name") } : {}) })); toast("Saved"); rerender(); } catch (err) { fail(err); } } },
+      h("form", { class: "row", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/accounts/" + encodeURIComponent(a.id), send("PUT", { min_balance: num("ad-min") ?? -1, nickname: val("ad-nick"), pinned: $("#ad-pin").checked, joint_with: val("ad-joint"), my_share: num("ad-share") ?? -1, ...(manual ? { balance: num("ad-bal"), name: val("ad-name") } : {}) })); toast("Saved"); rerender(); } catch (err) { fail(err); } } },
         field("ad-nick", "Nickname", a.nickname || "", { placeholder: a.name }), manual ? field("ad-name", "Name", a.name) : null, manual ? field("ad-bal", "Balance", a.balance, { type: "number", step: "0.01" }) : null,
-        field("ad-min", "Warn me below ($)", a.min_balance ?? "", { type: "number", step: "0.01", min: "0", placeholder: "no warning" }), h("label", { class: "check" }, h("input", { type: "checkbox", id: "ad-pin", checked: !!a.pinned }), "Show on Overview"), h("button", { class: "btn primary", type: "submit" }, "Save"),
+        field("ad-min", "Warn me below ($)", a.min_balance ?? "", { type: "number", step: "0.01", min: "0", placeholder: "no warning" }), h("label", { class: "check" }, h("input", { type: "checkbox", id: "ad-pin", checked: !!a.pinned }), "Show on Overview"),
+        field("ad-joint", "Joint with (goblin name)", a.joint_with || "", { placeholder: "none" }), field("ad-share", "My share of it (%)", a.my_share ?? "", { type: "number", min: "0", max: "100", step: "1", placeholder: "100" }), h("button", { class: "btn primary", type: "submit" }, "Save"),
         manual ? h("button", { class: "btn danger", type: "button", onclick: sure(null, "Sure? Deletes its data", async () => { try { await api("/api/accounts/" + encodeURIComponent(a.id), { method: "DELETE" }); S.acct = null; rerender(); } catch (err) { fail(err); } }) }, "Delete account") : null),
-      manual ? null : h("p", { class: "muted small" }, "Balance and type come from your bank. You can still set a warning level.")),
+      h("p", { class: "muted small" }, (manual ? "" : "Balance and type come from your bank. You can still set a warning level. ") + "For a joint account that you and another goblin both link, set your share so it is not counted twice."),),
     d.subscriptions.length ? h("div", { class: "panel" }, h("h3", {}, "Bills paid from this account"), d.subscriptions.map((s) => h("div", { class: "ev", style: "grid-template-columns:auto 1fr auto" }, h("span", { class: "when" }, s.next_due?.slice(5) || ""), h("span", {}, s.name, " ", h("span", { class: "muted small" }, s.label)), h("span", { class: "num neg" }, usd(-s.amount))))) : null,
     manual ? h("div", { class: "panel" }, h("h3", {}, "Add a transaction"),
       h("form", { class: "row", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/transactions", send("POST", { account_id: a.id, date: val("at-date"), name: val("at-name"), amount: (val("at-dir") === "out" ? -1 : 1) * Math.abs(num("at-amt")) })); toast("Added"); rerender(); } catch (err) { fail(err); } } },
@@ -448,17 +449,31 @@ async function viewSubs(root, rerender) {
 /* ================================ SAVINGS: where the money is, and what it is for ================================ */
 const SK = [["savings", "Savings account"], ["cd", "Certificate of deposit"], ["money_market", "Money market"], ["bond", "Bond / I-bond"], ["hsa", "HSA"], ["529", "529 plan"], ["cash", "Cash"], ["other", "Other"]];
 const PRIO = [[1, "High"], [2, "Normal"], [3, "Low"]];
-const goalCard = (g, v, rerender) => {
+const goalCard = (g, v, rerender, lk = { me: "", links: [] }) => {
+  const peers = lk.links.filter((l) => l.status === "active").map((l) => l.peer);
   const placeOpts = [["", "Any savings"], ...v.places.filter((p) => p.free > 0.005).map((p) => [p.key, `${p.name} (${usd(p.free)} free)`])];
   if (S.edit?.goal === g.id) return h("form", { class: "card", style: "display:grid;gap:8px", onsubmit: async (ev) => { ev.preventDefault();
       try { await api(`/api/goals/${g.id}`, send("PUT", { name: val(`ge-name-${g.id}`), target: num(`ge-target-${g.id}`), deadline: val(`ge-due-${g.id}`), priority: parseInt(val(`ge-prio-${g.id}`)), monthly: num(`ge-monthly-${g.id}`) || 0, note: val(`ge-note-${g.id}`) })); S.edit = null; toast("Saved"); rerender(); } catch (e) { fail(e); } } },
     h("b", {}, "Edit goal"), field(`ge-name-${g.id}`, "Name", g.name, { required: true }), field(`ge-target-${g.id}`, "Cost ($)", g.target, { type: "number", min: "0.01", step: "0.01", required: true }),
     field(`ge-due-${g.id}`, "Needed by (empty for none)", g.deadline ?? "", { type: "date" }), select(`ge-prio-${g.id}`, "Priority", PRIO, g.priority), field(`ge-monthly-${g.id}`, "I will save per month ($)", g.monthly || "", { type: "number", min: "0", step: "0.01" }), field(`ge-note-${g.id}`, "Note", g.note || ""),
     h("div", { class: "formbtns" }, h("button", { class: "btn primary", type: "submit" }, "Save goal"), h("button", { class: "btn", type: "button", onclick: () => { S.edit = null; rerender(); } }, "Cancel")));
+  if (g.shared_state === "offered") return h("div", { class: "card", style: "border-color:var(--teal)" }, h("div", { class: "bar" }, h("b", {}, g.name), h("span", { class: "num" }, usd(g.target))),
+    h("p", { class: "small" }, `${(g.members || []).join(", ")} shared this goal with you. If you accept, you each set money aside and see the total together, plus each other's notes. Your accounts and balances stay private.`),
+    g.deadline ? h("div", { class: "small muted" }, "Needed by " + g.deadline) : null,
+    h("div", { class: "chips", style: "margin-top:8px" }, h("button", { class: "btn sm primary", onclick: async () => { try { await api(`/api/goals/${g.id}/accept`, send("POST", {})); rerender(); } catch (e) { fail(e); } } }, "Accept"),
+      h("button", { class: "btn sm", onclick: async () => { try { await api(`/api/goals/${g.id}/decline`, send("POST", {})); rerender(); } catch (e) { fail(e); } } }, "Decline")));
+  const shared = !!g.shared_id && g.shared_state === "active";
+  const noteBox = shared ? h("details", { style: "margin:8px 0" }, h("summary", { class: "small" }, `Shared notes (${(g.notes || []).length})`),
+    (g.notes || []).map((n) => h("div", { class: "small", style: "padding:4px 0;border-bottom:1px solid var(--line)" }, h("b", {}, n.author === lk.me ? "You" : n.author), h("span", { class: "muted" }, " · " + ago(n.ts) + " "), n.text,
+      n.author === lk.me ? h("button", { class: "btn sm", style: "margin-left:8px", "aria-label": "Remove note", onclick: async () => { try { await api(`/api/goals/${g.id}/notes/${n.id}`, { method: "DELETE" }); rerender(); } catch (e) { fail(e); } } }, "×") : null)),
+    h("div", { class: "url", style: "margin-top:6px" }, h("input", { id: `gn-${g.id}`, placeholder: "Leave a note for " + (g.members || []).join(", ") }), h("button", { class: "btn sm", onclick: async () => { const t = val(`gn-${g.id}`); if (!t) return; try { await api(`/api/goals/${g.id}/notes`, send("POST", { text: t })); S.openNotes = g.id; rerender(); } catch (e) { fail(e); } } }, "Add"))) : null;
+  if (noteBox && S.openNotes === g.id) noteBox.open = true;
   return h("div", { class: "card" + (g.status !== "active" ? " done" : "") },
-    h("div", { class: "bar" }, h("b", {}, g.name, g.status !== "active" ? h("span", { class: "pill" }, g.status) : null, g.priority === 1 ? h("span", { class: "pill b" }, "high priority") : null), h("span", { class: "num" }, usd(g.target))),
+    h("div", { class: "bar" }, h("b", {}, g.name, g.status !== "active" ? h("span", { class: "pill" }, g.status) : null, g.priority === 1 ? h("span", { class: "pill b" }, "high priority") : null, shared ? h("span", { class: "pill t", title: "Shared through your link" }, "shared with " + (g.members || []).join(", ")) : null), h("span", { class: "num" }, usd(g.target))),
     h("div", { style: "margin:8px 0" }, bar(g.pct, g.funded ? "var(--teal)" : "var(--brass)")),
     h("div", { class: "small" }, g.status !== "active" ? `Closed ${g.closed || ""}` : g.funded ? `Fully set aside (${usd(g.allocated)}).` : `${usd(g.allocated)} set aside, ${usd(g.shortfall)} still needed.`),
+    shared ? h("div", { class: "small" }, `Together ${usd(g.team_allocated)} of ${usd(g.target)}: you ${usd(g.allocated)}`, (g.partners || []).map((x) => `, ${x.peer} ${usd(x.amount)}`).join("")) : null,
+    noteBox,
     g.status === "active" && !g.funded ? h("div", { class: "small muted" }, [g.deadline ? `Due ${g.deadline}: save ${usd(g.monthly_needed)} a month.` : "", g.ready_date ? ` At ${usd(g.monthly)} a month it is ready ${g.ready_date}.` : "", g.can_fund_now ? " Free savings cover the rest now." : ""].join("")) : null,
     g.note ? h("div", { class: "small muted" }, g.note) : null,
     g.status === "active" ? h("div", { class: "filters", style: "margin:10px 0 4px" }, field(`gf-${g.id}`, "Set aside $", "", { type: "number", min: "0", step: "0.01" }), select(`gp-${g.id}`, "From", placeOpts, "")) : null,
@@ -469,6 +484,7 @@ const goalCard = (g, v, rerender) => {
         h("button", { class: "btn sm", onclick: sure(null, "Sure? Marks it bought", async () => { await api(`/api/goals/${g.id}/close`, send("POST", { status: "done" })); rerender(); }) }, "Bought it")] :
         h("button", { class: "btn sm", onclick: async () => { await api(`/api/goals/${g.id}/close`, send("POST", { status: "active" })); rerender(); } }, "Reopen"),
       h("button", { class: "btn sm", onclick: () => { S.edit = { goal: g.id }; rerender(); } }, "Edit"),
+      shared ? h("button", { class: "btn sm", onclick: sure(null, "Sure? You leave it, the others keep it", async () => { await api(`/api/goals/${g.id}/unshare`, send("POST", {})); rerender(); }) }, "Stop sharing") : peers.length && g.status === "active" && !g.shared_id ? [h("select", { id: `gs-${g.id}`, class: "bare", "aria-label": "Share with" }, peers.map((x) => h("option", { value: x }, x))), h("button", { class: "btn sm", onclick: async () => { try { await api(`/api/goals/${g.id}/share`, send("POST", { peers: [val(`gs-${g.id}`)] })); toast("Shared"); rerender(); } catch (e) { fail(e); } } }, "Share")] : null,
       h("button", { class: "btn sm", onclick: () => discuss({ kind: "goal", ref_id: g.id }, `About my goal: ${g.name}`) }, "Discuss with agent"),
       h("button", { class: "btn sm danger", onclick: sure(null, "Sure?", async () => { await api(`/api/goals/${g.id}`, { method: "DELETE" }); rerender(); }) }, "Delete")));
 };
@@ -476,7 +492,7 @@ async function discuss(link, title) {
   try { const c = await api("/api/chats", send("POST", { title, links: [link] })); S.chatId = c.chat.id; S.tab = "agent"; render(); } catch (e) { fail(e); }
 }
 async function viewSavings(root, rerender) {
-  const [v, accts, mat] = await Promise.all([api("/api/goals"), api("/api/accounts"), api("/api/maturities")]);
+  const [v, accts, mat, lk] = await Promise.all([api("/api/goals"), api("/api/accounts"), api("/api/maturities"), api("/api/links").catch(() => ({ me: "", links: [] }))]);
   const editing = null, ep = S.edit?.place ? S.edit.place : null;
   const active = v.items.filter((g) => g.status === "active"), closed = v.items.filter((g) => g.status !== "active");
   const gform = h("form", { class: "subform", onsubmit: async (ev) => { ev.preventDefault();
@@ -518,8 +534,8 @@ async function viewSavings(root, rerender) {
         m.suggestions.length && v.places.find((p) => p.key === m.key)?.free > 0.005 ? h("div", { class: "chips", style: "margin-top:8px" }, m.suggestions.map((x) => h("button", { class: "btn sm", title: "Earmark it from this account now so it is promised when it matures", onclick: async () => { try { await api(`/api/goals/${x.goal_id}/fund`, send("POST", { amount: Math.min(x.amount, v.places.find((p) => p.key === m.key).free), place: m.key })); toast("Pinned to this account"); rerender(); } catch (e) { fail(e); } } }, `Pin to ${x.goal}`))) : null)))) : null,
     h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Goals: what the savings are for"), v.free > 0 && active.some((g) => g.shortfall > 0) ? h("button", { class: "btn sm primary", onclick: async () => { await api("/api/goals/autofill", { method: "POST" }); toast("Free savings assigned by priority"); rerender(); } }, "Fill goals from free savings") : null),
       h("p", { class: "muted small" }, "A goal sets money aside inside your savings. Free money is what is saved minus what is set aside. Free money is shared by every goal until you assign it. A new goal starts unfunded (tick the box to take what is free) and tells you how long saving would take."),
-      active.length ? h("div", { class: "cards" }, active.map((g) => goalCard(g, v, rerender))) : h("p", { class: "muted" }, "No goals yet. Add one below."),
-      closed.length ? h("details", { style: "margin-top:14px" }, h("summary", { class: "muted" }, `${closed.length} closed goal${closed.length === 1 ? "" : "s"}`), h("div", { class: "cards" }, closed.map((g) => goalCard(g, v, rerender)))) : null),
+      active.length ? h("div", { class: "cards" }, active.map((g) => goalCard(g, v, rerender, lk))) : h("p", { class: "muted" }, "No goals yet. Add one below."),
+      closed.length ? h("details", { style: "margin-top:14px" }, h("summary", { class: "muted" }, `${closed.length} closed goal${closed.length === 1 ? "" : "s"}`), h("div", { class: "cards" }, closed.map((g) => goalCard(g, v, rerender, lk)))) : null),
     h("div", { class: "panel" }, h("h3", {}, editing ? "Edit goal" : "Add a goal"), gform));
 }
 
@@ -648,11 +664,11 @@ async function viewRobinhood(root) {
 }
 
 /* ================================ SETTINGS (tabs) ================================ */
-const STABS = [["general", "General"], ["alerts", "Alerts"], ["sharing", "Sharing"], ["models", "Models"], ["categories", "Categories"], ["calendar", "Calendar"], ["robinhood", "Robinhood"], ["connect", "Connect & import"]];
+const STABS = [["general", "General"], ["alerts", "Alerts"], ["links", "Family links"], ["sharing", "Sharing"], ["models", "Models"], ["categories", "Categories"], ["calendar", "Calendar"], ["robinhood", "Robinhood"], ["connect", "Connect & import"]];
 async function viewSettings(root, rerender) {
   add(root, h("div", { class: "tabs", role: "tablist" }, STABS.map(([id, t]) => h("button", { role: "tab", "aria-selected": id === S.settingsTab, class: id === S.settingsTab ? "on" : "", onclick: () => { S.settingsTab = id; rerender(); } }, t))));
   const body = h("div", { class: "stack" }); add(root, body);
-  await ({ general: tabGeneral, connect: tabConnect, robinhood: tabRobinhood, calendar: tabCalendar, models: tabModels, categories: tabCategories, alerts: tabAlerts, sharing: tabSharing }[S.settingsTab])(body, rerender);
+  await ({ general: tabGeneral, links: tabLinks, connect: tabConnect, robinhood: tabRobinhood, calendar: tabCalendar, models: tabModels, categories: tabCategories, alerts: tabAlerts, sharing: tabSharing }[S.settingsTab])(body, rerender);
 }
 const saveCfg = async (body, rerender, msg = "Saved") => { try { await api("/api/settings", send("PUT", body)); toast(msg); rerender(); } catch (e) { fail(e); } };
 const withSecret = (body, key, id) => { if (val(id)) body[key] = val(id); return body; };
@@ -782,6 +798,20 @@ async function tabGeneral(root, rerender) {
       h("p", { class: "muted small" }, "Move panels around on every tab, and hide the ones you never look at. The order is remembered per tab in this browser."),
       h("label", { class: "check" }, h("input", { type: "checkbox", checked: S.arrange, onchange: (e) => { S.arrange = e.target.checked; } }), "Arrange mode (turn it on, then go to any tab)"),
       h("div", { class: "chips", style: "margin-top:10px" }, h("button", { class: "btn sm", onclick: () => { for (const [id] of TABS) store.set("gb_layout_" + id, "[]"); toast("Every tab is back to the default layout"); } }, "Reset every tab's layout"))));
+}
+async function tabLinks(root, rerender) {
+  const r = await api("/api/links").catch(() => ({ me: "", links: [], waiting: 0 }));
+  const lab = { active: "Linked", invited: "Waiting for them to accept", pending: "Wants to link with you" };
+  add(root, h("div", { class: "panel" }, h("h3", {}, "Family links"),
+    h("p", { class: "muted small" }, "Link with another goblin to share a goal: you each set money aside, see the total, and leave notes for each other. Only that goal's name, cost, date, notes and how much each of you has set aside travel. Never an account, balance or transaction. Either of you can unlink any time."),
+    r.links.length ? h("table", {}, h("tbody", {}, r.links.map((l) => h("tr", {}, h("td", {}, h("b", {}, l.peer)), h("td", { class: "muted small" }, lab[l.status] || l.status),
+      h("td", { class: "r", style: "white-space:nowrap" }, l.status === "pending" ? [h("button", { class: "btn sm primary", onclick: async () => { try { await api(`/api/links/${l.peer}/accept`, send("POST", {})); rerender(); } catch (e) { fail(e); } } }, "Accept"), " "] : null,
+        h("button", { class: "btn sm danger", onclick: sure(null, l.status === "active" ? "Sure? Shared goals stay with you as private goals" : "Sure?", async () => { await api(`/api/links/${l.peer}`, { method: "DELETE" }); rerender(); }) }, l.status === "pending" ? "Decline" : l.status === "active" ? "Unlink" : "Cancel"))))))
+      : h("p", { class: "muted" }, "Not linked with anyone yet."),
+    r.waiting ? h("p", { class: "small" }, `${r.waiting} update${r.waiting === 1 ? "" : "s"} waiting to be delivered (the other goblin is offline). `, h("button", { class: "btn sm", onclick: async () => { await api("/api/links/flush", send("POST", {})); rerender(); } }, "Try now")) : null,
+    h("form", { class: "row", style: "margin-top:12px", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/links", send("POST", { peer: val("lk-peer") })); toast("Request sent"); rerender(); } catch (err) { fail(err); } } },
+      field("lk-peer", "Their goblin's name", "", { required: true, placeholder: "e.g. bob" }), h("button", { class: "btn primary", type: "submit" }, "Ask to link")),
+    h("p", { class: "muted small" }, `You are ${r.me || "this goblin"}. They have to enter your name too, or accept your request on their Family links tab.`)));
 }
 async function tabAlerts(root, rerender) {
   const [cfg, ns] = await Promise.all([api("/api/settings"), api("/api/notify/status").catch(() => ({ configured: false, min_severity: "warning" }))]);

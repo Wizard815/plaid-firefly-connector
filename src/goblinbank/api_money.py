@@ -39,6 +39,8 @@ class AccountIn(BaseModel):
     savings_mode: str | None = None        # auto | yes | no: does this account count as savings?
     nickname: str | None = None            # your own label for any account ("" clears it)
     pinned: bool | None = None             # show its balance on the Overview
+    joint_with: str | None = None          # "" clears; the other goblin that also links this account
+    my_share: float | None = None          # percent of its balance that is mine (joint accounts); -1 clears
 
 
 class TxIn(BaseModel):
@@ -134,10 +136,11 @@ def register(app, ctx):
         """Daily net worth built from balance snapshots (last known balance carried forward)."""
         auth(request)
         kinds = {a["id"]: a["kind"] for a in store.all("SELECT id,kind FROM accounts")}
+        shares = {a["id"]: (100.0 if a["my_share"] is None else a["my_share"]) / 100 for a in store.all("SELECT id,my_share FROM accounts")}
         sign = {"credit": -1, "loan": -1}
         last, by_day = {}, {}
         for r in store.all("SELECT * FROM snapshots ORDER BY ts"):
-            last[r["account_id"]] = r["balance"] * sign.get(kinds.get(r["account_id"], "cash"), 1)
+            last[r["account_id"]] = r["balance"] * shares.get(r["account_id"], 1.0) * sign.get(kinds.get(r["account_id"], "cash"), 1)
             by_day[r["ts"][:10]] = round(sum(last.values()), 2)
         return [{"date": d, "net_worth": v} for d, v in by_day.items()]
 
@@ -199,6 +202,12 @@ def register(app, ctx):
                 c.execute("UPDATE accounts SET min_balance=? WHERE id=?", (a.min_balance if a.min_balance >= 0 else None, aid))
             if a.nickname is not None:
                 c.execute("UPDATE accounts SET nickname=? WHERE id=?", (a.nickname.strip()[:60] or None, aid))
+            if a.joint_with is not None:
+                c.execute("UPDATE accounts SET joint_with=? WHERE id=?", (a.joint_with.strip().lower()[:32] or None, aid))
+            if a.my_share is not None:
+                if a.my_share > 100:
+                    bad("my_share is a percentage from 0 to 100")
+                c.execute("UPDATE accounts SET my_share=? WHERE id=?", (a.my_share if a.my_share >= 0 else None, aid))
             if a.pinned is not None:
                 c.execute("UPDATE accounts SET pinned=? WHERE id=?", (1 if a.pinned else 0, aid))
             if manual:

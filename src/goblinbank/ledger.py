@@ -214,13 +214,21 @@ def late_payments(db, today: date, grace: int = 3, look_back: int = 3) -> list[d
     return out
 
 
+# ------------------------------------------------------------------ joint accounts
+def mine(a: dict, bal: float | None = None) -> float:
+    """My part of an account's balance. A joint account is linked in both people's goblins, so each counts only their share (default all of it)."""
+    b = a["balance"] if bal is None else bal
+    s = a.get("my_share")
+    return (b or 0.0) * (100.0 if s is None else s) / 100.0
+
+
 # ------------------------------------------------------------------ savings
 def savings_view(db, row: dict, today: date) -> dict:
     bal = row["balance"] or 0.0
     if row.get("account_id"):
-        a = db.one("SELECT balance FROM accounts WHERE id=?", (row["account_id"],))
+        a = db.one("SELECT balance, my_share FROM accounts WHERE id=?", (row["account_id"],))
         if a and a["balance"] is not None:
-            bal = a["balance"]
+            bal = mine(a)
     apy = row.get("apy") or 0.0
     out = {**row, "balance": round(bal, 2), "linked": bool(row.get("account_id")), "yearly_interest": round(bal * apy / 100, 2)}
     if row.get("maturity"):
@@ -245,8 +253,8 @@ def savings_summary(db, today: date) -> dict:
 # ------------------------------------------------------------------ net worth, projection, alerts
 def net_worth(db, today: date | None = None) -> float:
     total = 0.0
-    for a in db.all("SELECT kind, balance FROM accounts"):
-        total += (a["balance"] or 0) * (-1 if a["kind"] in OUT_KINDS else 1)
+    for a in db.all("SELECT kind, balance, my_share FROM accounts"):
+        total += mine(a) * (-1 if a["kind"] in OUT_KINDS else 1)
     for s in db.all("SELECT * FROM savings WHERE active=1 AND (account_id IS NULL OR account_id='')"):
         total += s["balance"] or 0                       # savings linked to an account are already counted via that account
     return round(total, 2)
@@ -257,7 +265,7 @@ def project_balance(db, days: int, today: date, account_ids: list[str] | None = 
     days = max(1, min(int(days), 3650))
     accts = db.all("SELECT * FROM accounts WHERE kind='cash'" if not account_ids else f"SELECT * FROM accounts WHERE id IN ({','.join('?' * len(account_ids))})", account_ids or [])
     ids = {a["id"] for a in accts}
-    start = round(sum(a["balance"] or 0 for a in accts), 2)
+    start = round(sum(mine(a) for a in accts), 2)
     events = []
     for i in upcoming(db, days, today)["items"]:
         if i["payer"] != "me" or (account_ids and i["account_id"] not in ids):
@@ -348,8 +356,8 @@ def _alerts(db, today: date) -> list[dict]:
     if gv["overallocated"]:
         out.append({"kind": "overallocated", "severity": "warning", "title": "You have earmarked more than you have saved",
                     "detail": f"Saved {gv['total']:,.2f}, earmarked {gv['allocated']:,.2f}. Release some or wait for the balance to recover."})
-    elif gv["free"] >= 50 and any(g["status"] == "active" and g["shortfall"] > 0 for g in gv["items"]):
-        top = next(g for g in gv["items"] if g["status"] == "active" and g["shortfall"] > 0)
+    elif gv["free"] >= 50 and any(g["status"] == "active" and g.get("shared_state") != "offered" and g["shortfall"] > 0 for g in gv["items"]):
+        top = next(g for g in gv["items"] if g["status"] == "active" and g.get("shared_state") != "offered" and g["shortfall"] > 0)
         out.append({"kind": "free_savings", "severity": "info", "title": f"${gv['free']:,.2f} of your savings is free",
                     "detail": f"{top['name']} still needs ${top['shortfall']:,.2f}"})
     try:
@@ -392,7 +400,7 @@ def overview(db, days: int, today: date) -> dict:
     accts = db.all("SELECT * FROM accounts")
     by_kind = {}
     for a in accts:
-        by_kind[a["kind"]] = round(by_kind.get(a["kind"], 0) + (a["balance"] or 0), 2)
+        by_kind[a["kind"]] = round(by_kind.get(a["kind"], 0) + mine(a), 2)
     sav = savings_summary(db, today)
     from goblinbank import plan
     gv = plan.goals_view(db, today)

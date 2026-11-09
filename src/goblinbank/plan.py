@@ -7,7 +7,7 @@ created unfunded and the plan says how long it takes to save for it."""
 import math
 from datetime import date, timedelta
 
-from goblinbank import ledger, recur
+from goblinbank import ledger, links, recur
 
 SAVINGS_SUBTYPES = {"savings", "cd", "money market", "cash management", "hsa", "high yield savings", "529", "cd/money market", "money_market"}
 
@@ -40,7 +40,7 @@ def places(db, today: date) -> list[dict]:
         if pool == 0 or not (pool == 1 or auto):                  # investment accounts count only when you switch them on
             continue
         out.append({"key": f"a:{a['id']}", "id": a["id"], "name": a["name"], "institution": a["institution"], "kind": (a.get("subtype") or "savings").replace(" ", "_"),
-                    "balance": round(a["balance"], 2), "apy": None, "maturity": None, "days_to_maturity": None, "value_at_maturity": None, "origin": "account", "account_id": a["id"]})
+                    "balance": round(ledger.mine(a), 2), "apy": None, "maturity": None, "days_to_maturity": None, "value_at_maturity": None, "origin": "account", "account_id": a["id"]})
     return out
 
 
@@ -64,10 +64,12 @@ def goals_view(db, today: date) -> dict:
         p["earmarked"] = round(pinned.get(p["key"], 0), 2)
         p["free"] = round(p["balance"] - p["earmarked"], 2)
     items = []
+    team_extra = {r["goal_id"]: r["n"] for r in db.all("SELECT p.goal_id, SUM(p.amount) n FROM goal_partners p JOIN goals g ON g.id=p.goal_id WHERE g.shared_state='active' GROUP BY p.goal_id")}   # what the others on a shared goal have set aside
     for g in db.all("SELECT * FROM goals ORDER BY status='done', priority, deadline IS NULL, deadline, id"):
         got = round(sum(a["amount"] for a in by_goal.get(g["id"], [])), 2)
-        short = round(max(0.0, g["target"] - got), 2)
-        v = {**g, "allocated": got, "shortfall": short, "pct": round(min(1.0, got / g["target"]), 3) if g["target"] else 1.0, "funded": short == 0,
+        team = round(got + team_extra.get(g["id"], 0), 2)
+        short = round(max(0.0, g["target"] - team), 2)
+        v = {**g, "allocated": got, "team_allocated": team, "shortfall": short, "pct": round(min(1.0, team / g["target"]), 3) if g["target"] else 1.0, "funded": short == 0,
              "allocations": [{"place": a["place"], "amount": a["amount"]} for a in by_goal.get(g["id"], [])], "can_fund_now": g["status"] == "active" and free >= short and short > 0}
         if g["status"] == "active" and short > 0:
             if g.get("deadline"):
@@ -78,7 +80,8 @@ def goals_view(db, today: date) -> dict:
                 months = math.ceil(max(0.0, short - max(0.0, free)) / g["monthly"]) if short > free else 0
                 v["ready_date"] = (today + timedelta(days=round(months * 30.4375))).isoformat()
         items.append(v)
-    active = [i for i in items if i["status"] == "active"]
+    links.decorate(db, items)
+    active = [i for i in items if i["status"] == "active" and i.get("shared_state") != "offered"]
     return {"items": items, "places": pl, "total": total, "allocated": allocated, "free": free, "overallocated": free < -0.005,
             "needed": round(sum(i["shortfall"] for i in active), 2), "pinned": {k: round(v, 2) for k, v in pinned.items()}}
 
@@ -102,6 +105,8 @@ def set_allocation(db, gid: int, place: str, amount: float, today: date) -> dict
     g = _goal(db, gid)
     if g["status"] != "active":
         raise PlanError("that goal is closed")
+    if g.get("shared_state") == "offered":
+        raise PlanError("accept the shared goal first")
     if amount < 0:
         raise PlanError("amount must be >= 0")
     v = goals_view(db, today)
@@ -223,7 +228,7 @@ def autofill(db, today: date) -> dict:
     for g in v["items"]:
         if free <= 0.005:
             break
-        if g["status"] == "active" and g["shortfall"] > 0:
+        if g["status"] == "active" and g.get("shared_state") != "offered" and g["shortfall"] > 0:
             put = min(free, g["shortfall"])
             fund(db, g["id"], put, today)
             free -= put
@@ -329,7 +334,7 @@ def maturity_outlook(db, today: date, horizon_days: int = 365) -> list[dict]:
     """For every CD / bond / savings item with a maturity date: what it is worth then, what is already pinned to goals,
     what is free (interest plus unpinned principal), and which goals that free money would reach, in priority order."""
     v = goals_view(db, today)
-    goals = [g for g in v["items"] if g["status"] == "active"]
+    goals = [g for g in v["items"] if g["status"] == "active" and g.get("shared_state") != "offered"]
     order = sorted(goals, key=lambda g: (g["priority"], g["deadline"] or "9999-12-31", g["id"]))
     short = {g["id"]: g["shortfall"] for g in goals}
     names = {g["id"]: g["name"] for g in goals}
@@ -368,7 +373,7 @@ def matured_idle(db, today: date, within_days: int = 60) -> list[dict]:
     """CDs and bonds whose maturity date has passed but which are still listed with a balance: the money is sitting there with no new plan.
     Shows what is pinned to goals and where the free part would reach, so the alert says what to do."""
     v = goals_view(db, today)
-    goals = [g for g in v["items"] if g["status"] == "active"]
+    goals = [g for g in v["items"] if g["status"] == "active" and g.get("shared_state") != "offered"]
     order = sorted(goals, key=lambda g: (g["priority"], g["deadline"] or "9999-12-31", g["id"]))
     short = {g["id"]: g["shortfall"] for g in goals}
     names = {g["id"]: g["name"] for g in goals}

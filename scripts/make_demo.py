@@ -60,6 +60,16 @@ def main(out: str, artifact: bool):
     gid = next(g["id"] for g in c.get("/api/goals", headers=H).json()["items"] if g["name"].startswith("House"))
     c.post(f"/api/goals/{gid}/release", headers=H, json={}); c.post(f"/api/goals/{gid}/allocate", headers=H, json={"place": cdk, "amount": 9000}); c.post(f"/api/goals/{gid}/fund", headers=H, json={"amount": round(tot - 1500, -1) - 9000})
     post("/api/goals", {"name": "New laptop", "target": 1200, "priority": 3, "monthly": 250, "deadline": d(120)})      # nothing free left: starts unfunded
+    # a linked partner (bob), one goal shared with him (with notes), and one he is offering
+    import json as _json
+    db.conn.execute("INSERT INTO links VALUES('bob','active',?)", (sync.now(),))
+    gid_v = db.conn.execute("INSERT INTO goals(name,target,deadline,priority,monthly,note,status,created,shared_id,members,shared_state,rev,edited_by) VALUES('Family vacation',3200,?,2,200,'','active',?,?,?,'active',2,'bob')",
+                            (d(200), TODAY.isoformat(), "demo-shared-vacation-1", _json.dumps(["bob"]))).lastrowid
+    db.conn.execute("INSERT INTO goal_partners VALUES(?,?,?)", (gid_v, "bob", 900))
+    for nid, who, txt, back in [("n1", "bob", "Found flights for $1,150 for the two of us in July.", 3), ("n2", "alice", "Great. I will put in $100 each payday.", 2)]:
+        db.conn.execute("INSERT INTO goal_notes VALUES(?,?,?,?,?,0)", (nid, gid_v, who, (sync.now()[:10] + "T00:00:00+00:00") if back == 0 else (TODAY - timedelta(days=back)).isoformat() + "T12:00:00+00:00", txt))
+    db.conn.execute("INSERT INTO goals(name,target,deadline,priority,monthly,note,status,created,shared_id,members,shared_state,rev,edited_by) VALUES('New couch',1400,NULL,3,0,'','active',?,?,?,'offered',1,'bob')", (TODAY.isoformat(), "demo-shared-couch-0001", _json.dumps(["bob"])))
+    db.conn.commit()
     inc = c.get("/api/incomes", headers=H).json()
     for sg in inc["suggestions"]:
         if "payroll" in sg["name"].lower():
@@ -97,7 +107,7 @@ def main(out: str, artifact: bool):
     g = lambda p: c.get(p, headers=H).json()
     rec = {"transactions": g("/api/transactions?limit=500")}
     for p in ["/api/overview", "/api/history", "/api/spending", f"/api/spending?start={TODAY:%Y-%m}-01", "/api/categories", "/api/accounts", "/api/subscriptions", "/api/suggestions", "/api/alerts", "/api/savings", "/api/notes",
-              "/api/budgets", "/api/agent/providers", "/api/agent/presets", "/api/settings", "/api/plaid/usage", "/api/category-rules"]:
+              "/api/budgets", "/api/links", "/api/agent/providers", "/api/agent/presets", "/api/settings", "/api/plaid/usage", "/api/category-rules"]:
         rec[p] = g(p)
     for dd in list(range(1, 121)) + [365]:
         rec[f"/api/upcoming?days={dd}"] = g(f"/api/upcoming?days={dd}")
