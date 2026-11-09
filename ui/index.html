@@ -25,7 +25,7 @@ h2{font-size:1.5rem} h3{font-size:1.05rem}
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer}
 :focus-visible{outline:2px solid var(--teal);outline-offset:2px}
-.shell{display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px;max-width:1240px;margin:0 auto}
+.shell{display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px;max-width:2400px;margin:0 auto}
 nav.side{display:flex;flex-direction:column;gap:4px;position:sticky;top:16px;align-self:start}
 .brand{font:700 1.35rem var(--display);padding:4px 10px 14px;display:flex;align-items:center;gap:10px}
 .coin{width:22px;height:22px;border-radius:50%;background:var(--brass);box-shadow:inset 0 0 0 4px var(--brass-soft)}
@@ -36,7 +36,12 @@ nav.side button:hover{color:var(--fg)}
 main{min-width:0;display:grid;gap:20px;align-content:start}
 .bar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
 .banner{background:var(--brass-soft);color:var(--fg);border-radius:999px;padding:2px 12px;font-size:.8rem;font-weight:500;cursor:help}
-@media(min-width:1000px){main.cols2{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}main.cols2>.bar,main.cols2>.wide{grid-column:1/-1}}
+main.free{grid-template-columns:repeat(12,minmax(0,1fr));align-items:start}main.free>.bar{grid-column:1/-1}
+main.free>.blk{grid-column:span var(--span,12)}
+@media(max-width:999px){main.free>.blk{grid-column:1/-1}}
+.sizes{display:flex;gap:2px}.sizes .btn{padding:2px 7px}.sizes .btn.on{background:var(--teal);color:#fff;border-color:var(--teal)}
+.blk{position:relative}.rz{position:absolute;top:0;right:-6px;bottom:0;width:12px;cursor:ew-resize;z-index:3;touch-action:none}.rz::after{content:"";position:absolute;top:30%;bottom:30%;left:4px;width:4px;border-radius:2px;background:var(--line)}.rz:hover::after,.rz.on::after{background:var(--teal)}
+@media(max-width:999px){.rz,.sizes{display:none}}
 .blk.hidden-blk{opacity:.45}.blk[hidden]{display:none!important}
 .swatches{display:flex;gap:10px;flex-wrap:wrap}.swatch{width:34px;height:34px;border-radius:50%;border:3px solid var(--panel);box-shadow:0 0 0 1px var(--line);padding:0}.swatch[aria-pressed="true"]{box-shadow:0 0 0 3px var(--fg)}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}
@@ -290,7 +295,7 @@ async function viewOverview(root, rerender) {
       Object.keys(up.by_category).length ? barList(Object.entries(up.by_category).sort((a, b) => b[1] - a[1])) : null),
     forecastPanel(fc),
     h("div", { class: "panel" }, h("h3", {}, "Latest movement"), o.events.length ? o.events.slice(0, 7).map(evRow) : h("p", { class: "muted" }, "Link a bank or import a CSV to see movement.")));
-  root.classList.add("cols2");
+
 }
 
 /* ================================ TRANSACTION BROWSER (Money movement + account detail) ================================ */
@@ -822,34 +827,53 @@ function blocksOf(main) {
   return out;
 }
 function blockName(el, i) { if (el.dataset.title) return el.dataset.title; const t = el.querySelector("h3,h2,.label"); return (t ? t.textContent.trim().slice(0, 40) : "") || "Section " + (i + 1); }
+const SIZES = [[3, "¼"], [4, "⅓"], [6, "½"], [8, "⅔"], [12, "Full"]];
 function arrangeable(main) {
   if (S.tab === "settings") return;                                      // its tab strip and body are not panels to rearrange
   const blocks = blocksOf(main); if (blocks.length < 2) return;
   const names = blocks.map(blockName), key = layoutKey();
-  let saved = { order: [], hidden: [] };
-  try { const v = JSON.parse(store.get(key) || "[]"); saved = Array.isArray(v) ? { order: v, hidden: [] } : { order: v.order || [], hidden: v.hidden || [] }; } catch {}
-  const host = blocks[0].parentElement;
+  let saved = { order: [], hidden: [], span: {} };
+  try { const v = JSON.parse(store.get(key) || "[]"); saved = Array.isArray(v) ? { order: v, hidden: [], span: {} } : { order: v.order || [], hidden: v.hidden || [], span: v.span || {} }; } catch {}
+  const host = blocks[0].parentElement; host.classList.add("free");
   const rank = (n) => { const i = saved.order.indexOf(n); return i < 0 ? 1e6 : i; };
   if (saved.order.length && blocks.every((b) => b.parentElement === host)) {
     blocks.map((b, i) => [b, names[i], i]).sort((a, b) => rank(a[1]) - rank(b[1]) || a[2] - b[2]).forEach(([b]) => host.append(b));
   }
-  blocks.forEach((b, i) => { b.classList.add("blk"); b.dataset.name = names[i]; b.hidden = !S.arrange && saved.hidden.includes(names[i]); b.classList.toggle("hidden-blk", saved.hidden.includes(names[i])); });
+  const dflt = (b) => (S.tab === "overview" && !b.classList.contains("wide") ? 6 : 12);
+  const spanOf = (b) => saved.span[b.dataset.name] || dflt(b);
+  const setSpan = (b, n) => { b.style.setProperty("--span", n); };
+  blocks.forEach((b, i) => { b.classList.add("blk"); b.dataset.name = names[i]; setSpan(b, spanOf(b)); b.hidden = !S.arrange && saved.hidden.includes(names[i]); b.classList.toggle("hidden-blk", saved.hidden.includes(names[i])); });
   const bar = main.firstElementChild;
-  bar.append(h("button", { class: "btn sm", style: "margin-left:auto", title: "Move and hide panels on this tab", onclick: () => { S.arrange = !S.arrange; render(); } }, S.arrange ? "Done arranging" : "⠿ Arrange panels"));
+  bar.append(h("button", { class: "btn sm", style: "margin-left:auto", title: "Move, resize and hide panels on this tab", onclick: () => { S.arrange = !S.arrange; render(); } }, S.arrange ? "Done arranging" : "⠿ Arrange panels"));
   if (!S.arrange) return;
-  const save = () => store.set(key, JSON.stringify({ order: [...host.querySelectorAll(":scope > .blk")].map((b) => b.dataset.name), hidden: saved.hidden }));
+  const save = () => store.set(key, JSON.stringify({ order: [...host.querySelectorAll(":scope > .blk")].map((b) => b.dataset.name), hidden: saved.hidden, span: saved.span }));
   const move = (b, d) => { const sib = d < 0 ? b.previousElementSibling : b.nextElementSibling; if (!sib || !sib.classList.contains("blk")) return; d < 0 ? host.insertBefore(b, sib) : host.insertBefore(sib, b); save(); b.querySelector(".arr-bar button")?.focus(); };
   let drag = null;
   blocks.forEach((b, i) => {
     const n = names[i];
     const eye = h("button", { class: "btn sm", type: "button", onclick: () => { const off = saved.hidden.includes(n); saved.hidden = off ? saved.hidden.filter((x) => x !== n) : [...saved.hidden, n]; b.classList.toggle("hidden-blk", !off); eye.textContent = off ? "Hide" : "Show"; save(); } }, saved.hidden.includes(n) ? "Show" : "Hide");
+    const sizeBtns = SIZES.map(([k, t]) => h("button", { class: "btn sm" + (spanOf(b) === k ? " on" : ""), type: "button", title: t === "Full" ? "Full width" : "Width " + t, "aria-label": "Width " + t, onclick: () => { saved.span[n] = k; setSpan(b, k); sizeBtns.forEach((x, ix) => x.classList.toggle("on", SIZES[ix][0] === k)); save(); } }, t));
     const grip = h("div", { class: "arr-bar", draggable: "true", ondragstart: (e) => { drag = b; b.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", n); }, ondragend: () => { b.classList.remove("dragging"); host.querySelectorAll(".over").forEach((x) => x.classList.remove("over")); } },
-      h("span", { "aria-hidden": "true" }, "⠿"), h("b", {}, n), eye,
-      h("button", { class: "btn sm", type: "button", "aria-label": "Move " + n + " up", onclick: () => move(b, -1) }, "▲"), h("button", { class: "btn sm", type: "button", "aria-label": "Move " + n + " down", onclick: () => move(b, 1) }, "▼"));
+      h("span", { "aria-hidden": "true" }, "⠿"), h("b", {}, n), h("span", { class: "sizes" }, sizeBtns), eye,
+      h("button", { class: "btn sm", type: "button", "aria-label": "Move " + n + " earlier", onclick: () => move(b, -1) }, "◀"), h("button", { class: "btn sm", type: "button", "aria-label": "Move " + n + " later", onclick: () => move(b, 1) }, "▶"));
     b.prepend(grip);
+    // drag the right edge to make a panel wider or narrower; it snaps to the 12-column grid
+    const rz = h("div", { class: "rz", title: "Drag to resize", role: "separator", "aria-label": "Resize " + n });
+    rz.addEventListener("pointerdown", (e) => {
+      e.preventDefault(); rz.setPointerCapture(e.pointerId); rz.classList.add("on");
+      const col = host.getBoundingClientRect().width / 12, left = b.getBoundingClientRect().left;
+      const mv = (ev) => { const k = Math.min(12, Math.max(2, Math.round((ev.clientX - left) / col))); if (k !== saved.span[n]) { saved.span[n] = k; setSpan(b, k); sizeBtns.forEach((x, ix) => x.classList.toggle("on", SIZES[ix][0] === k)); } };
+      const up = () => { rz.classList.remove("on"); rz.removeEventListener("pointermove", mv); rz.removeEventListener("pointerup", up); save(); };
+      rz.addEventListener("pointermove", mv); rz.addEventListener("pointerup", up);
+    });
+    b.append(rz);
     b.addEventListener("dragover", (e) => { if (drag && drag !== b) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; b.classList.add("over"); } });
     b.addEventListener("dragleave", () => b.classList.remove("over"));
-    b.addEventListener("drop", (e) => { e.preventDefault(); b.classList.remove("over"); if (!drag || drag === b) return; const after = drag.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING; host.insertBefore(drag, after ? b.nextSibling : b); drag = null; save(); });
+    b.addEventListener("drop", (e) => {
+      e.preventDefault(); b.classList.remove("over"); if (!drag || drag === b) return;
+      const r = b.getBoundingClientRect(), side = spanOf(b) < 12 ? e.clientX < r.left + r.width / 2 : e.clientY < r.top + r.height / 2;   // side-by-side panels: left or right half; full-width ones: top or bottom
+      host.insertBefore(drag, side ? b : b.nextSibling); drag = null; save();
+    });
   });
   bar.append(h("button", { class: "btn sm", onclick: () => { store.set(key, "[]"); render(); } }, "Reset this tab"));
 }
