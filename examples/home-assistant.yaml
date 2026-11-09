@@ -1,0 +1,16 @@
+# Home Assistant: a sensor and a refresh button from one goblin. Make the token in the app: Settings, Sharing, API tokens.
+# Put the token in HA's secrets.yaml as goblin_token: gb_alice_xxxxxxxx
+sensor:
+  - platform: rest
+    name: Goblin Bank
+    resource: https://bank.example.com/api/v1/me/ha
+    headers:
+      Authorization: !secret goblin_bank_bearer      # "Bearer gb_alice_xxxxxxxx"
+    scan_interval: 900
+    value_template: "{{ value_json.net_worth }}"
+    json_attributes: [bills_next_7_days, alerts]
+rest_command:
+  goblin_refresh:
+    url: https://bank.example.com/api/v1/me/summary?refresh=1
+    headers:
+      Authorization: !secret goblin_bank_bearer

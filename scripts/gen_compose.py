@@ -33,7 +33,10 @@ def _stub(path, text):
         print(f"created {path.name}: fill in before starting")
 
 
-def main(src="goblins.yaml"):
+def main(src="goblins.yaml", *flags):
+    reset = None
+    if src == "--reset-token":                      # python scripts/gen_compose.py --reset-token bob : new login token, nothing else changes
+        reset, src = flags[0] if flags else sys.exit("usage: --reset-token <name>"), "goblins.yaml"
     spec = yaml.safe_load((ROOT / src).read_text())
     SEC.mkdir(exist_ok=True, mode=0o700)
     names = [g["name"] for g in spec["goblins"]]
@@ -47,6 +50,11 @@ def main(src="goblins.yaml"):
         f = SEC / f"{n}.env"
         kv = dict(l.split("=", 1) for l in f.read_text().splitlines() if "=" in l) if f.exists() else {}
         changed = False
+        if reset == n and kv:
+            token = secrets.token_urlsafe(32)
+            kv["USER_TOKEN_SHA256"] = sha256(token)
+            print(f"[{n}] NEW login token (shown once): {token}")
+            changed = True
         if "INTERNAL_SECRET" not in kv:
             kv["INTERNAL_SECRET"], kv["CONNECTOR_SECRET"] = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
             token = secrets.token_urlsafe(32)
@@ -96,6 +104,8 @@ def main(src="goblins.yaml"):
                                         "volumes": [f"./data/{n}/rh-live-session:/session"], "networks": [net, "egress"], "restart": "unless-stopped"}
             networks["egress"] = {}
         env["CONNECTOR_SECRET"] = connector
+    if reset and reset not in names:
+        sys.exit(f"{reset!r} is not in goblins.yaml (people added on the admin page: remove and re-add them there)")
     orb = []
     if spec.get("orb_key"):
         of = SEC / "orb.key.sha256"
@@ -117,6 +127,10 @@ def main(src="goblins.yaml"):
         print("hint: sudo chown -R 10001:10001 gateway-state")
     (ROOT / "gateway.yaml").write_text(yaml.safe_dump({"goblins": gw_goblins, "orb_keys": orb, "admin_token_sha256": af.read_text().strip()}))
     (ROOT / "gateway.yaml").chmod(0o600)
+    try:
+        os.chown(ROOT / "gateway.yaml", 10001, 10001)      # the gateway container runs as uid 10001 and must be able to read it
+    except PermissionError:
+        print("hint: sudo chown 10001:10001 gateway.yaml   (the gateway container cannot read it otherwise)")
     services["gateway"] = {"build": ".", "environment": {"ROLE": "gateway", "GATEWAY_CONFIG": "/config/gateway.yaml", "UI_DIR": "/app/ui", "GATEWAY_STATE": "/state/people.json"}, "user": "10001",
                            "volumes": ["./gateway.yaml:/config/gateway.yaml:ro", "./gateway-state:/state"], "networks": ["edge"],
                            "ports": ["127.0.0.1:8080:8000"], "restart": "unless-stopped"}

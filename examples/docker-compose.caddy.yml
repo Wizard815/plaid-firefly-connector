@@ -1,0 +1,13 @@
+# Optional override: puts Caddy (automatic HTTPS) in front of the gateway.
+# Edit examples/Caddyfile first, then:  docker compose -f docker-compose.generated.yml -f examples/docker-compose.caddy.yml up -d
+services:
+  caddy:
+    image: caddy:2
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./examples/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    networks: [edge]
+    restart: unless-stopped
+volumes:
+  caddy-data: {}

@@ -1,0 +1,9 @@
+# HTTPS in front of the gateway with automatic certificates. Replace the address with your own domain.
+# Use with:  docker compose -f docker-compose.generated.yml -f examples/docker-compose.caddy.yml up -d
+bank.example.com {
+	encode gzip
+	# Slow down anyone guessing logins: at most 30 requests a minute per address to the sign-in and API paths.
+	# (Needs the rate_limit plugin; delete these three lines if you use stock Caddy.)
+	# rate_limit { zone login { key {remote_host} events 30 window 1m } }
+	reverse_proxy gateway:8000
+}

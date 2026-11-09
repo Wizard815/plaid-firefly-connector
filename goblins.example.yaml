@@ -1,8 +1,13 @@
+# Copy to goblins.yaml and edit. Each entry below becomes one private container (a "goblin") for one person.
+# You can also add people later from the gateway's /admin page; this file is just the starting set.
 goblins:
-  - name: alice
-    share: [robinhood_agent]
-    rh_agent: true
-    rh_live: false
+  - name: alice            # lowercase letters, digits and hyphens. This is what the person signs in with.
+    share: []              # what the Pondering Orb may see. Leave empty to share nothing. Options:
+                           #   net_worth, subscriptions, bills, bill_list, alerts, alert_list, savings, goals, spending,
+                           #   robinhood_main, robinhood_agent   (people can also change this later in Settings, Sharing)
+    rh_agent: false        # true = also run the official Robinhood MCP connector for the agent account
+    rh_live: false         # true = also run the UNofficial robin_stocks connector (against Robinhood's terms; off by default)
   - name: bob
     share: []
-orb_key: true
+# orb_key: true            # uncomment to create a read-only key for Pondering Orb (printed once)
+orb_key: false

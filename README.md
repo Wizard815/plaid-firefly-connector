@@ -31,7 +31,9 @@ One image, many roles (`ROLE=`), so the repo stays small.
 * **Savings**: where the money sits (bank savings/CD accounts appear by themselves, plus anything you add by hand) and what it is for. Goals earmark part of the savings, so *free* money = saved minus earmarked. Free money is shared by every goal until you assign it. A new goal starts unfunded (tick "use free savings" to take what is free) and shows how long saving would take. "When your CDs mature" shows what each CD will be worth, what is pinned to goals, and where the free money would go, by priority. Move earmarks between goals, auto-fill by priority, mark bought.
 * **Budgets & notes**: a monthly plan (expected income - bills - budgets - goal contributions = left to assign; a budget covers its category's bills, never double counted), income sources (steady deposits are detected; the plan follows the real paydays, so a three-paycheck month shows three), your notes, goals, and an agent that drafts notes from your real data. Link a goal or note to an agent chat.
 * **Agent**: saved multi-chat (rename, delete, context meter, automatic + manual compaction, per-chat tools switch and model switch), over your data with tools (accounts, transactions, bills, recurring detection, savings, projections, budgets, calendar, notes, exact calculator). Any OpenAI-compatible endpoint (Ollama, LM Studio, llama.cpp, OpenRouter...) or Anthropic; add as many as you like. Cloud models are blocked until you allow each one. It can write notes and add a subscription when you ask in chat (with Undo); it cannot move money. Models without tool calling get a data snapshot instead.
-* **Settings** (tabs): Connect & import, Robinhood, Calendar (CalDAV), Models, Categories, Sharing with the Orb. Plaid usage + cost guard (call counts, budget warning, daily cap).
+* **Settings** (tabs): General (light/dark, accent colour, arrange mode), Alerts, Family links, Sharing with the Orb, Models, Categories, Calendar (CalDAV), Robinhood, Connect & import.
+* **Your layout**: every tab has "Arrange panels": drag panels anywhere on a 12-column grid, resize them, hide the ones you do not use.
+* **Family links**: link two goblins through the gateway (it only relays, stores nothing). Linking shares nothing by itself; each person then grants specific items (an account balance, a goal with a combined total and shared notes), revocable any time. Joint accounts count only your share. Plaid usage + cost guard (call counts, budget warning, daily cap).
 * **Sharing**: the Pondering Orb sees only the totals you tick (never transactions). API tokens (named, scoped, revocable, rate limited, read-only) let Home Assistant or scripts read `GET /api/v1/me/{summary|ha|bills|alerts|savings|goals|budgets|transactions}`; the UI generates the Home Assistant YAML.
 * **Fresh data**: automatic sync every 15 minutes (Settings, Connect & import; 0 turns it off). A token with the `refresh` scope can add `?refresh=1` to ask for a fresh sync on demand (at most once per 5 minutes); Home Assistant polls every 15 minutes and can call a `rest_command` for an immediate refresh.
 * **Projected spending**: Overview shows spending so far, a month-end projection built from your history (per category, with lumpy payments like rent handled separately) and both against your average monthly income. Shareable with the Orb as `spending`; the itemised `bill_list` and `alert_list` are separate opt-ins.
@@ -41,16 +43,89 @@ One image, many roles (`ROLE=`), so the repo stays small.
 
 Does the agent need embeddings? No. Your data is structured (amounts, dates, accounts), so exact queries through tools are more accurate than similarity search. Embeddings only help with free text; add them later for notes if you want.
 
-## Run
+## Install guide
+
+Everything runs in Docker. You do not need Python or anything else on the machine. A small home server, a NAS or a Raspberry Pi 4/5 (64-bit) is plenty.
+
+### 1. What you need
+* A machine that stays on, with **Docker Engine and the compose plugin** ([install Docker](https://docs.docker.com/engine/install/)). On Windows use WSL2.
+* About 1 GB of free disk space and 500 MB of RAM per person.
+* A free [Plaid](https://dashboard.plaid.com) account for the Client ID and Secret (to link real banks). Start in `sandbox` (fake banks).
+
+### 2. Install
 ```bash
-cp goblins.example.yaml goblins.yaml        # edit names / share / rh_agent / rh_live
-python3 scripts/gen_compose.py               # prints login tokens and the Orb key ONCE
-# fill .secrets/plaid.env, <name>.integrations.env (CalDAV), <name>.rh-agent.env
-docker compose -f docker-compose.generated.yml up --build
+git clone https://github.com/Wizard815/Goblin-Bank.git
+cd Goblin-Bank
+./scripts/install.sh
 ```
-Gateway listens on `127.0.0.1:8080`; put Tailscale / a Cloudflare Tunnel in front, never the open internet.
-Back up `.secrets/<name>.env`: losing `FIELD_KEY` means re-linking banks. Plaid webhooks need a public HTTPS URL
-(`PLAID_WEBHOOK_URL` -> `/webhooks/plaid`); without it, use Sync now.
+The first run creates `goblins.yaml` from `goblins.example.yaml` and stops so you can list your people (one name each, lowercase). Run `./scripts/install.sh` again (or `./scripts/install.sh --yes` to accept the example as it is). It builds the image, makes a separate encryption key and secrets for every person, and prints **each person's login token and the admin token, once**. Copy them somewhere safe now: only their hashes are stored.
+
+Nothing to edit later: people can also be added on the gateway's admin page (step 6).
+
+### 3. Add your Plaid keys
+Edit `.secrets/plaid.env` (see `examples/plaid.env.example`):
+```
+PLAID_CLIENT_ID=...
+PLAID_SECRET=...
+PLAID_ENV=sandbox
+```
+Skip this and add it later if you only want to look around: manual accounts, CSV imports and everything else work without Plaid. Optional per-person CalDAV settings are in `.secrets/<name>.integrations.env` (`examples/integrations.env.example`) or on the Settings page.
+
+### 4. Start it
+```bash
+docker compose -f docker-compose.generated.yml up -d --build
+docker compose -f docker-compose.generated.yml ps       # everything should say "healthy"
+```
+Open **http://127.0.0.1:8080**, sign in with a name from `goblins.yaml` and that person's token. In `sandbox` link a bank in Settings, Connect & import with Plaid's test login (`user_good` / `pass_good`).
+
+### 5. Reach it from your phone and other devices
+The gateway listens only on `127.0.0.1:8080` on purpose. Pick one:
+* **Tailscale (simplest, recommended):** install it on the server and your devices, then `tailscale serve --bg 8080` gives you an `https://your-machine.your-tailnet.ts.net` address that only your devices can open.
+* **Your own domain with automatic HTTPS:** edit `examples/Caddyfile` (your domain), point the domain at the server, open ports 80 and 443, then
+  `docker compose -f docker-compose.generated.yml -f examples/docker-compose.caddy.yml up -d`.
+* **Cloudflare Tunnel** also works. Whatever you use, it must be HTTPS: your login token travels with every request.
+Never expose port 8080 to the internet as plain HTTP.
+
+### 6. Add people, link them, share
+* **Add a person:** open `/admin` (use the admin token), type a name under People, press Add. It prints their login token once and the small compose file for their container, plus the one command to start it (a web page cannot start Docker). Their encryption key is made in your browser, so the gateway never sees it.
+* **Link two people:** each signs in, Settings, **Family links**, picks the other person from the list and asks. The other person gets a pop-up they must answer. A link only sets up the connection; each person then ticks exactly what the other can see (a savings account's balance, a goal), and can take it back any time.
+* **Plaid webhooks (optional):** give Plaid a public HTTPS address ending in `/webhooks/plaid` and set `PLAID_WEBHOOK_URL` in `.secrets/plaid.env`. Without it, data still syncs every 15 minutes.
+
+### 7. Back up, update, stop
+```bash
+./scripts/backup.sh        # a consistent copy of every database plus the secrets, in backups/ (owner-only). Keep it private and off this machine.
+./scripts/update.sh        # backup, git pull, rebuild, restart. Your data is untouched.
+docker compose -f docker-compose.generated.yml down        # stop (data stays in data/ and .secrets/)
+```
+**Back up `.secrets/` and `data/`.** Losing a person's `FIELD_KEY` (in `.secrets/<name>.env`) means re-linking their banks.
+
+### 8. Where things live
+| Path | What | Back up? |
+| --- | --- | --- |
+| `goblins.yaml` | who is on this server | yes |
+| `.secrets/` | encryption keys, secrets, Plaid keys | **yes, private** |
+| `data/<name>/db/` | one person's database | yes |
+| `data/<name>/imports/` | drop CSVs here (Cash App, PayPal, Venmo) | optional |
+| `gateway.yaml`, `gateway-state/` | the gateway's list of people (hashes only) | yes |
+
+### 9. Troubleshooting
+* `docker compose ... ps` shows a service restarting: `docker compose -f docker-compose.generated.yml logs <service>`.
+* **Gateway "Permission denied: /config/gateway.yaml"** or "cannot write state": the containers run as user 10001. `sudo chown 10001:10001 gateway.yaml && sudo chown -R 10001:10001 gateway-state data`.
+* **Lost a login token:** `./scripts/install.sh --reset-token bob` prints a new one (nothing else changes), then `docker compose -f docker-compose.generated.yml restart gateway`.
+* **"Plaid is not configured":** fill `.secrets/plaid.env`, then `docker compose ... up -d` again.
+* **Phone cannot reach it:** see step 5; the gateway is not on the open network by default.
+
+### 10. Safety checklist before real bank data
+* HTTPS in front of it, or Tailscale only (step 5).
+* `.secrets/` readable only by you, and backed up off the machine.
+* Use local models only for the agent unless you have deliberately allowed a cloud one (Settings, Models).
+* Keep the Plaid daily call cap on (Settings, Connect & import).
+
+## Run without the install script
+```bash
+cp goblins.example.yaml goblins.yaml && python3 scripts/gen_compose.py     # needs python3 with pyyaml + cryptography
+docker compose -f docker-compose.generated.yml up -d --build
+```
 
 ## Test without a Plaid account
 ```bash
@@ -61,7 +136,7 @@ python3 scripts/dev_stack.py          # gateway + goblin with random data + a fa
 The synthetic server follows Plaid's documented response shapes. It proves our services work together; it cannot prove real Plaid agrees. Get free sandbox keys from Plaid before trusting it with real banks.
 
 ## Not done yet
-* Plaid is untested against the real API (tests use mocks); try `PLAID_ENV=sandbox` first.
+* Plaid is tested against the real Sandbox, never production. Banks that use OAuth (Huntington, Capital One and others) need a registered HTTPS redirect address, and that return path is not built yet.
 * The agent is tested with scripted fake models. Try your real local model and see which tools it handles well.
 * rh-agent tool names/auth are unverified (Robinhood docs don't publish them); configure via env.
 * CalDAV *reading* (event -> money amount) and investments holdings via Plaid.
