@@ -77,12 +77,18 @@ Skip this and add it later if you only want to look around: manual accounts, CSV
 3. Banks that send you to **their own website** to sign in (OAuth: Capital One and many other large banks) also need a redirect address. Set `PLAID_REDIRECT_URI=https://your-address/` in `.secrets/plaid.env` (HTTPS, trailing slash, your app's own address from step 5 below) and add that exact string under Developers, API, **Allowed redirect URIs** in the Plaid dashboard. After you sign in at the bank, it sends you back to the app, which finishes the link by itself. Plaid may also ask you to complete an OAuth questionnaire in the dashboard before some banks appear in production.
 4. Link one bank first and check the numbers, then add the rest. The cost panel in the same tab shows what Plaid will bill.
 
+### Which Plaid site is which
+* **dashboard.plaid.com** is the developer dashboard: your Client ID, secrets, allowed redirect URIs, API version and usage. This is what Goblin Bank is set up with.
+* **my.plaid.com** is the consumer Plaid Portal, where a person sees and revokes the connections they made to apps through Plaid. It is not a connection point for developers: banks shown there belong to other apps' connections, and Goblin Bank cannot read them. To bring a bank into Goblin Bank, link it in Goblin Bank (Settings, Connect & import, Link an account), which creates a connection under your own Client ID.
+* **API version:** every request pins `Plaid-Version: 2020-09-14` (override with `PLAID_VERSION`), so a change of the default version in the dashboard cannot change what the app receives.
+
 ### Webhooks (Plaid tells the app when there is news)
 Without webhooks the app has to ask each bank on a schedule. With them, Plaid calls the gateway the moment new transactions, holdings or recurring payments exist, the app pulls only that bank, and banks on Automatic are only polled weekly as a safety net. Webhooks are free; the bill is the same, the data is fresher and there are fewer calls.
 1. Make one address reachable by Plaid over HTTPS: a domain with Caddy, a Cloudflare Tunnel or Tailscale Funnel. To expose only the webhook and nothing else, use `examples/Caddyfile.webhooks-only`.
 2. On the gateway's `/admin` page, Plaid limits, type it into **Public address** and Save. That is the only setting: every goblin then sends `https://your-address/webhooks/plaid` with each new link, tells banks that are already linked (one free call each, once), and uses `https://your-address/` as the OAuth return address unless you set `PLAID_REDIRECT_URI` yourself.
 3. Each bank shows a **live updates** badge once its first webhook has arrived, and the admin table shows how many banks per person have gone live. Webhooks are checked with Plaid's signature; an unsigned call is refused.
-4. If a bank's login breaks (Plaid says so by webhook), the app raises an alert to relink it; the other banks keep updating.
+4. **Test it in the Sandbox:** with a sandbox bank linked and the public address set, Settings, Connect & import has a **Send a test webhook** button. Plaid then sends a real signed webhook to your address and the app tells you whether it arrived and verified. Plaid wants an answer within 10 seconds and retries for a day, so the app answers at once and does the pull in the background; webhooks that fail verification get a 401, which Plaid does not retry.
+5. If a bank's login breaks (Plaid says so by webhook), the app raises an alert to relink it; the other banks keep updating.
 The gateway remembers which bank belongs to which goblin in memory only, so each goblin re-announces its banks every few minutes and after any restart.
 
 ### Keeping the Plaid bill small

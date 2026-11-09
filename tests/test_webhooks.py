@@ -58,7 +58,7 @@ def rig():
             return httpx.Response(200, json={})
         return httpx.Response(404, json={"error_code": "X", "error_message": p})
     db = DB(":memory:")
-    c = TestClient(goblin.create_app(db=db, plaid_transport=httpx.MockTransport(h)))
+    c = TestClient(goblin.create_app(db=db, plaid_transport=httpx.MockTransport(h), inline_webhooks=True))
     c.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "Huntington"})
     return c, db, n, posted
 
@@ -200,3 +200,84 @@ def test_the_gateway_admin_public_address_sets_the_webhook_and_banks_learn_it(tm
     assert gw2.post("/webhooks/plaid", json={"item_id": "item-1"}).json() == {"ignored": True}
     tc.post("/api/links/flush", headers=H)                                                               # any tick of the goblin's background round re-registers its banks
     assert gw2.post("/webhooks/plaid", json={"item_id": "item-1", "webhook_type": "TRANSACTIONS"}).json() != {"ignored": True}     # now it finds its way home (and is refused there: no signature)
+
+
+def test_the_webhook_is_answered_at_once_and_the_pull_happens_in_the_background():
+    n = Counter()
+
+    def h(req: httpx.Request):
+        p = req.url.path
+        n[p] += 1
+        if p == "/item/public_token/exchange":
+            return httpx.Response(200, json={"item_id": "item-1", "access_token": "tok"})
+        if p == "/webhook_verification_key/get":
+            return httpx.Response(200, json={"key": JWK})
+        if p == "/transactions/sync":
+            return httpx.Response(200, json={"added": [], "modified": [], "removed": [], "next_cursor": "c", "has_more": False, "accounts": [{"account_id": "x", "name": "C", "type": "depository", "balances": {"current": 1.0}}]})
+        return httpx.Response(200, json={"outflow_streams": []})
+    db = DB(":memory:")
+    c = TestClient(goblin.create_app(db=db, plaid_transport=httpx.MockTransport(h)))              # the default: not inline
+    c.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "B"})
+    before = n["/transactions/sync"]
+    r = hook(c, {"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE", "item_id": "item-1"})
+    assert r.status_code == 200 and r.json() == {"accepted": True}
+    for _ in range(50):
+        if n["/transactions/sync"] > before:
+            break
+        time.sleep(0.05)
+    assert n["/transactions/sync"] == before + 1
+
+
+def test_the_plaid_api_version_is_pinned(monkeypatch):
+    from goblinbank.plaid import Plaid
+    seen = []
+    monkeypatch.setenv("PLAID_CLIENT_ID", "c"); monkeypatch.setenv("PLAID_SECRET", "s"); monkeypatch.delenv("PLAID_VERSION", raising=False)
+    handler = lambda r: (seen.append(r.headers.get("plaid-version")), httpx.Response(200, json={}))[1]
+    Plaid(httpx.MockTransport(handler)).post("/x", {})
+    monkeypatch.setenv("PLAID_AUTH", "header")
+    Plaid(httpx.MockTransport(handler)).post("/x", {})
+    monkeypatch.setenv("PLAID_VERSION", "2020-09-14")
+    assert seen == ["2020-09-14", "2020-09-14"]
+
+
+def test_the_sandbox_test_webhook_button_reports_whether_it_arrived(monkeypatch):
+    import threading
+    monkeypatch.setenv("PLAID_ENV", "sandbox")
+    holder = {}
+
+    def h(req: httpx.Request):
+        p = req.url.path
+        if p == "/item/public_token/exchange":
+            return httpx.Response(200, json={"item_id": "item-1", "access_token": "tok"})
+        if p == "/webhook_verification_key/get":
+            return httpx.Response(200, json={"key": JWK})
+        if p == "/transactions/sync":
+            return httpx.Response(200, json={"added": [], "modified": [], "removed": [], "next_cursor": "c", "has_more": False, "accounts": [{"account_id": "x", "name": "C", "type": "depository", "balances": {"current": 1.0}}]})
+        if p == "/sandbox/item/fire_webhook":
+            if holder.get("deliver"):                                   # Plaid, a moment later, calls the public address
+                threading.Timer(0.2, lambda: hook(holder["c"], {"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE", "item_id": "item-1"})).start()
+            return httpx.Response(200, json={"webhook_fired": True})
+        if p == "/item/webhook/update":
+            return httpx.Response(200, json={})
+        return httpx.Response(200, json={"outflow_streams": []})
+    db = DB(":memory:")
+    c = TestClient(goblin.create_app(db=db, plaid_transport=httpx.MockTransport(h), inline_webhooks=True))
+    holder["c"] = c
+    c.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "B"})
+    assert c.post("/plaid/test-webhook", headers=H).status_code == 409                     # no public address yet
+    c2 = TestClient(goblin.create_app(db=DB(":memory:"), plaid_transport=httpx.MockTransport(h), inline_webhooks=True))
+    holder["c"] = c2
+    c2.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "B"})
+    monkeypatch.setenv("PLAID_WEBHOOK_URL", "https://hooks.example.com/webhooks/plaid")
+    c3 = TestClient(goblin.create_app(db=DB(":memory:"), plaid_transport=httpx.MockTransport(h), inline_webhooks=True))
+    holder["c"] = c3
+    c3.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "B"})
+    holder["deliver"] = True
+    r = c3.post("/plaid/test-webhook?wait=5", headers=H).json()
+    assert r["fired"] is True and r["arrived"] is True
+    holder["deliver"] = False
+    assert c3.post("/plaid/test-webhook?wait=1", headers=H).json()["arrived"] is False             # Plaid fired it but nothing reached us: the address is not public
+    monkeypatch.setenv("PLAID_ENV", "production"); monkeypatch.setenv("PLAID_BASE_URL", "")
+    c4 = TestClient(goblin.create_app(db=DB(":memory:"), plaid_transport=httpx.MockTransport(h), inline_webhooks=True))
+    c4.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "B"})
+    assert c4.post("/plaid/test-webhook", headers=H).status_code == 409                     # production: a real update is the test

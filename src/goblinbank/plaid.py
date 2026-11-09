@@ -35,6 +35,7 @@ class Plaid:
         self.header_auth = os.environ.get("PLAID_AUTH") == "header"       # send credentials as PLAID-CLIENT-ID / PLAID-SECRET headers instead of in the body
         self.base = os.environ.get("PLAID_BASE_URL") or HOSTS.get(os.environ.get("PLAID_ENV", "sandbox"), HOSTS["sandbox"])   # PLAID_BASE_URL: test servers only
         self.webhook_url = os.environ.get("PLAID_WEBHOOK_URL", "")
+        self.version = os.environ.get("PLAID_VERSION", "2020-09-14")        # pinned, so a change of the default version in the Plaid dashboard cannot change what this app receives
         self.redirect_uri = os.environ.get("PLAID_REDIRECT_URI", "")      # needed for banks that sign you in on their own site (OAuth); must be HTTPS and registered in the Plaid dashboard
         self.http = httpx.Client(timeout=30, transport=transport)
         self._keys: dict[str, dict] = {}
@@ -50,9 +51,9 @@ class Plaid:
             self.usage.before(path)
             self.usage.record(path)
         if self.header_auth:
-            r = self.http.post(self.base + path, json=body, headers={"PLAID-CLIENT-ID": self.client_id, "PLAID-SECRET": self.secret})
+            r = self.http.post(self.base + path, json=body, headers={"PLAID-CLIENT-ID": self.client_id, "PLAID-SECRET": self.secret, "Plaid-Version": self.version})
         else:
-            r = self.http.post(self.base + path, json={"client_id": self.client_id, "secret": self.secret, **body})
+            r = self.http.post(self.base + path, json={"client_id": self.client_id, "secret": self.secret, **body}, headers={"Plaid-Version": self.version})
         if r.status_code >= 400:
             try:
                 e = r.json()

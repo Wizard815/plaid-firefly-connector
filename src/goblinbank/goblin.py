@@ -5,6 +5,7 @@ authenticating the person), so nothing here is reachable without going through C
 Amounts are signed: positive = money in, negative = money out.
 """
 import os
+import queue
 import threading
 import time
 from datetime import date, timedelta
@@ -33,7 +34,7 @@ def _equity(bal) -> float | None:
     return None
 
 
-def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: DB | None = None, today=None, llm_transport=None, autosync: bool = False, autosync_tick: float | None = None, notify_transport=None) -> FastAPI:
+def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: DB | None = None, today=None, llm_transport=None, autosync: bool = False, inline_webhooks: bool = False, autosync_tick: float | None = None, notify_transport=None) -> FastAPI:
     name = os.environ.get("GOBLIN_NAME", "goblin")
     secret = os.environ.get("INTERNAL_SECRET", "")
     connector_secret = os.environ.get("CONNECTOR_SECRET", secret)
@@ -241,6 +242,31 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         except PlaidError as e:
             raise HTTPException(502, str(e))
 
+    @app.post("/plaid/test-webhook")
+    def plaid_test_webhook(request: Request, item_id: str | None = None, wait: int = 20):
+        """Sandbox only: ask Plaid to send a real, signed test webhook to your public address, then see whether it arrived."""
+        auth(request)
+        apply_policy(force=True)
+        if "sandbox" not in plaid.base:
+            raise HTTPException(409, "test webhooks only work in the Plaid Sandbox; in production a real bank update is the test")
+        if not plaid.webhook_url:
+            raise HTTPException(409, "set a Public address on the gateway admin page first, so Plaid knows where to send it")
+        row = store.one("SELECT * FROM plaid_items" + (" WHERE item_id=?" if item_id else " ORDER BY item_id LIMIT 1"), (item_id,) if item_id else ())
+        if not row:
+            raise HTTPException(404, "link a bank first")
+        update_item_webhooks()
+        before = row.get("last_hook") or 0
+        try:
+            plaid.post("/sandbox/item/fire_webhook", {"access_token": crypto.decrypt(row["token_enc"]), "webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE"})
+        except PlaidError as e:
+            raise HTTPException(502, str(e))
+        for _ in range(min(max(wait, 1), 30)):
+            time.sleep(1)
+            now_row = store.one("SELECT last_hook FROM plaid_items WHERE item_id=?", (row["item_id"],))
+            if (now_row.get("last_hook") or 0) > before:
+                return {"fired": True, "arrived": True, "webhook_url": plaid.webhook_url}
+        return {"fired": True, "arrived": False, "webhook_url": plaid.webhook_url}
+
     @app.post("/plaid/exchange")
     def plaid_exchange(request: Request, body: Exchange):
         auth(request)
@@ -268,10 +294,30 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             raise HTTPException(401, "webhook signature invalid")
         import json
         body = json.loads(raw)
-        return await run_in_threadpool(sync.handle_webhook, store, plaid, body)
+        if inline_webhooks:                                   # tests: do the work before answering
+            def now_():
+                with sync_lock:
+                    return sync.handle_webhook(store, plaid, body)
+            return await run_in_threadpool(now_)
+        hook_q.put(body)                                      # Plaid wants an answer within 10 seconds (and retries for a day), so answer now and do the pull in the background
+        if hook_state["t"] is None:
+            hook_state["t"] = threading.Thread(target=hook_worker, daemon=True, name="plaid-webhooks")
+            hook_state["t"].start()
+        return {"accepted": True}
 
     sync_state = {"last": 0.0, "at": None}
     sync_lock = threading.Lock()
+    hook_q: queue.Queue = queue.Queue()
+    hook_state = {"t": None}
+
+    def hook_worker():
+        while True:
+            body = hook_q.get()
+            try:
+                with sync_lock:                               # one at a time, and never alongside a scheduled pull
+                    sync.handle_webhook(store, plaid, body)
+            except Exception:
+                pass                                          # the weekly safety-net pull covers anything missed
 
     def do_sync(force: bool = False) -> dict:
         """One pull of everything: Plaid, Robinhood snapshots, drop-folder CSVs. One at a time, whoever asks."""

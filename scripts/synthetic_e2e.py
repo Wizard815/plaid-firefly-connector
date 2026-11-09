@@ -99,7 +99,11 @@ def main():
     hook = plaid.post("/_test/webhook").json()
     h = {"Content-Type": "application/json", "Plaid-Verification": hook["token"]}
     r = c.post("/webhooks/plaid", content=hook["body"], headers=h)
-    check("signed webhook relayed, verified, synced", r.status_code == 200 and r.json().get("synced", {}).get("added") == 1, r.text)
+    check("signed webhook relayed, verified, answered at once", r.status_code == 200 and r.json() == {"accepted": True}, r.text)
+    for _ in range(50):                                   # the pull itself happens in the background
+        if any("Coffee Shop" in e["title"] for e in c.get("/g/alice/api/events", headers=A).json()):
+            break
+        time.sleep(0.2)
     check("tampered webhook (still routed) rejected by signature check", c.post("/webhooks/plaid", content=hook["body"].replace("SYNC_UPDATES_AVAILABLE", "DEFAULT_UPDATE"), headers=h).status_code == 401)
     check("unsigned webhook rejected", c.post("/webhooks/plaid", content=hook["body"], headers={"Content-Type": "application/json"}).status_code == 401)
     check("new transaction appears in money movement", any("Coffee Shop" in e["title"] for e in c.get("/g/alice/api/events", headers=A).json()))
