@@ -1,5 +1,6 @@
 """Per-goblin settings stored in the DB (secrets Fernet-encrypted). Env vars are the fallback."""
 import os
+import re
 
 from goblinbank import crypto
 
@@ -9,6 +10,7 @@ SHAREABLE = ("net_worth", "subscriptions", "bills", "bill_list", "alerts", "aler
 SPEC = {
     "share": ("list", False, "SHARE"),
     "rh_main_source": ("choice", False, ""),
+    "plaid_client_id": ("str", False, "PLAID_CLIENT_ID"), "plaid_secret": ("str", True, "PLAID_SECRET"), "plaid_env": ("str", False, "PLAID_ENV"),
     "caldav_url": ("str", False, "CALDAV_URL"), "caldav_user": ("str", False, "CALDAV_USER"),
     "caldav_password": ("str", True, "CALDAV_PASSWORD"),
     "rh_mcp_url": ("str", False, "RH_MCP_URL"), "rh_mcp_token": ("str", True, "RH_MCP_TOKEN"),
@@ -62,6 +64,12 @@ def validate(key: str, value) -> str:
             assert n >= 0 and (kind == "num" or n == int(n))
         except (ValueError, AssertionError):
             raise ValueError(f"{key} must be a non-negative {'number' if kind == 'num' else 'whole number'}")
+    if key == "plaid_env" and v not in ("", "sandbox", "production"):
+        raise ValueError("plaid_env must be sandbox or production")
+    if key == "plaid_client_id" and v and not re.fullmatch(r"[A-Za-z0-9]{8,64}", v):
+        raise ValueError("that does not look like a Plaid Client ID (letters and digits only)")
+    if key == "plaid_secret" and v and not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", v):
+        raise ValueError("that does not look like a Plaid secret (letters and digits only)")
     if len(v) > 2000:
         raise ValueError(f"{key} too long")
     if ("_url" in key) and v and not v.startswith(("http://", "https://")):

@@ -40,6 +40,12 @@ class Plaid:
         self.http = httpx.Client(timeout=30, transport=transport)
         self._keys: dict[str, dict] = {}
 
+    def configure(self, client_id: str, secret: str, env: str) -> None:
+        """Use keys entered in the app instead of (or over) the environment. PLAID_BASE_URL, for test servers, still wins for the address."""
+        self.client_id, self.secret = client_id or "", secret or ""
+        if not os.environ.get("PLAID_BASE_URL"):
+            self.base = HOSTS.get(env or "sandbox", HOSTS["sandbox"])
+
     @property
     def configured(self) -> bool:
         return bool(self.client_id and self.secret)

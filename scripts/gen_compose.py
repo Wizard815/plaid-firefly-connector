@@ -30,7 +30,7 @@ def _stub(path, text):
     if not path.exists():
         path.write_text(text)
         path.chmod(0o600)
-        print(f"created {path.name}: fill in before starting")
+        print(f"created {path.name} (optional: everything in it can be entered in the app instead)")
 
 
 def main(src="goblins.yaml", *flags):

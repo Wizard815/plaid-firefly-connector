@@ -85,9 +85,18 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         if pub.startswith("https://"):
             plaid.webhook_url = pub + "/webhooks/plaid"          # one address on the admin page sets both of these for everyone
             if not os.environ.get("PLAID_REDIRECT_URI"):
-                plaid.redirect_uri = pub + "/"
+                plaid.redirect_uri = (pol.get("plaid_redirect_url") or "").rstrip("/") + "/" if pol.get("plaid_redirect_url") else pub + "/"
             update_item_webhooks()
         keys = set()
+        for k in ("plaid_client_id", "plaid_secret", "plaid_env"):                 # Plaid keys the admin entered once for everyone
+            if pol.get(k):
+                try:
+                    cfg.put(store, k, pol[k])
+                    keys.add(k)
+                except ValueError:
+                    pass
+        if keys:
+            apply_plaid_creds()
         for k in ("plaid_budget_month", "plaid_daily_cap", "plaid_min_minutes", "plaid_use_recurring"):
             if k in pol:
                 try:
@@ -147,6 +156,11 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                 c.execute("INSERT INTO plaid_usage VALUES(?,?,1) ON CONFLICT(day,endpoint) DO UPDATE SET calls=calls+1", (date.today().isoformat(), path))
 
     plaid = Plaid(plaid_transport, usage=Usage())
+
+    def apply_plaid_creds():
+        """Keys saved in the app (or set by the gateway admin) take over from the environment."""
+        plaid.configure(cfg.get(store, "plaid_client_id"), cfg.get(store, "plaid_secret"), cfg.get(store, "plaid_env") or "sandbox")
+    apply_plaid_creds()
     import_dir = os.environ.get("IMPORT_DIR", "/data/imports")
     csv_dir = os.environ.get("RH_CSV_DIR", "/data/robinhood-csv")
     app = FastAPI(title=f"goblin:{name}")
@@ -241,6 +255,18 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             return {"link_token": plaid.link_token(name, tok)}
         except PlaidError as e:
             raise HTTPException(502, str(e))
+
+    @app.post("/plaid/test")
+    def plaid_test(request: Request):
+        """Check the saved keys with a free call, so a typo shows up here and not later as a mysterious failure."""
+        auth(request)
+        if not plaid.configured:
+            raise HTTPException(409, "enter your Plaid Client ID and secret first")
+        try:
+            plaid.post("/institutions/get", {"count": 1, "offset": 0, "country_codes": ["US"]})
+        except PlaidError as e:
+            raise HTTPException(502, str(e))
+        return {"ok": True, "env": "production" if "production" in plaid.base else "sandbox"}
 
     @app.post("/plaid/test-webhook")
     def plaid_test_webhook(request: Request, item_id: str | None = None, wait: int = 20):
@@ -529,6 +555,8 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                 cfg.put(store, k, v)
         except ValueError as e:
             raise HTTPException(422, str(e))
+        if any(k.startswith("plaid_") and k in ("plaid_client_id", "plaid_secret", "plaid_env") for k in body):
+            apply_plaid_creds()
         return cfg.view(store)
 
     @app.post("/api/settings/test-caldav")
@@ -555,7 +583,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             except httpx.HTTPError:
                 return "down"
         csvs = sorted(os.listdir(csv_dir)) if os.path.isdir(csv_dir) else []
-        return {"plaid": {"configured": plaid.configured, "env": os.environ.get("PLAID_ENV", "sandbox"),
+        return {"plaid": {"configured": plaid.configured, "env": "production" if "production" in plaid.base else "sandbox", "webhook_set": bool(plaid.webhook_url),
                           "items": [item_view(r) for r in store.all("SELECT * FROM plaid_items ORDER BY institution")]},
                 "robinhood": {"agent": probe("agent"), "csv": probe("csv"), "live": probe("live"), "csv_files": csvs,
                               "agent_configured": bool(cfg.get(store, "rh_mcp_url") and cfg.get(store, "rh_mcp_read_tools"))},

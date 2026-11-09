@@ -182,7 +182,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             return {"delivered": False}
         return {"delivered": r.status_code == 200}
 
-    POLICY_KEYS = {"plaid_budget_month": float, "plaid_daily_cap": int, "plaid_min_minutes": int, "plaid_use_recurring": str, "public_url": str}
+    POLICY_KEYS = {"plaid_budget_month": float, "plaid_daily_cap": int, "plaid_min_minutes": int, "plaid_use_recurring": str, "public_url": str, "plaid_client_id": str, "plaid_secret": str, "plaid_env": str, "plaid_redirect_url": str}
 
     def effective_policy(name: str) -> dict:
         return {**policy["default"], **policy["people"].get(name, {})}
@@ -259,7 +259,13 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
                 out[k] = ""                                    # empty = no limit (budget) or the built-in default
                 continue
             try:
-                if k == "public_url":
+                if k in ("plaid_client_id", "plaid_secret", "plaid_env"):
+                    t = str(v).strip()
+                    if not re.fullmatch({"plaid_client_id": r"[A-Za-z0-9]{8,64}", "plaid_secret": r"[A-Za-z0-9_-]{8,128}", "plaid_env": r"sandbox|production"}[k], t):
+                        raise ValueError
+                    out[k] = t
+                    continue
+                if k in ("public_url", "plaid_redirect_url"):
                     u = str(v).strip().rstrip("/")
                     if not re.fullmatch(r"https://[A-Za-z0-9.-]+(:\d+)?(/[A-Za-z0-9._~/-]*)?", u):
                         raise ValueError
@@ -275,13 +281,21 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
                         raise ValueError
                     out[k] = int(n) if n == int(n) else n
             except (TypeError, ValueError):
-                raise HTTPException(422, f"{k} must be " + ("an https:// address" if k == "public_url" else "on or off" if k == "plaid_use_recurring" else "a non-negative number"))
+                raise HTTPException(422, f"{k} must be " + ("an https:// address" if k in ("public_url", "plaid_redirect_url") else "your Plaid Client ID" if k == "plaid_client_id" else "your Plaid secret" if k == "plaid_secret" else "sandbox or production" if k == "plaid_env" else "on or off" if k == "plaid_use_recurring" else "a non-negative number"))
         return out
+
+    def redacted() -> dict:
+        """The policy without the Plaid secret: the admin page is told only whether one is saved."""
+        d = {k: dict(v) if isinstance(v, dict) else v for k, v in policy.items()}
+        d["default"] = {k: v for k, v in policy["default"].items() if k != "plaid_secret"}
+        d["plaid_secret_set"] = bool(policy["default"].get("plaid_secret"))
+        d["people"] = {n: {k: v for k, v in o.items() if k != "plaid_secret"} for n, o in policy["people"].items()}
+        return d
 
     @app.get("/admin/policy")
     def admin_get_policy(request: Request):
         admin(request)
-        return {**policy, "built_in": {"public_url": "", "plaid_budget_month": 5, "plaid_daily_cap": 300, "plaid_min_minutes": 0, "plaid_use_recurring": "on"}}
+        return {**redacted(), "built_in": {"public_url": "", "plaid_budget_month": 5, "plaid_daily_cap": 300, "plaid_min_minutes": 0, "plaid_use_recurring": "on"}}
 
     @app.put("/admin/policy")
     async def admin_put_policy(request: Request):
@@ -289,6 +303,9 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         admin(request)
         body = await request.json()
         new = {"default": clean_policy(body.get("default", {})), "people": {n: clean_policy(v) for n, v in (body.get("people") or {}).items() if n in goblins and v}}
+        for k in ("plaid_client_id", "plaid_secret", "plaid_env", "plaid_redirect_url"):
+            if k not in (body.get("default") or {}) and policy["default"].get(k):
+                new["default"][k] = policy["default"][k]                                # saving the limits must not wipe the saved keys (send "" to clear one)
         old = dict(policy)
         policy.update(new)
         try:
@@ -296,7 +313,28 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         except HTTPException:
             policy.update(old)
             raise
-        return policy
+        return redacted()
+
+    @app.post("/admin/plaid/test")
+    async def admin_plaid_test(request: Request):
+        """Try the saved Plaid keys with a free call."""
+        admin(request)
+        d = policy["default"]
+        if not (d.get("plaid_client_id") and d.get("plaid_secret")):
+            raise HTTPException(409, "save a Client ID and secret first")
+        base = {"production": "https://production.plaid.com"}.get(d.get("plaid_env"), "https://sandbox.plaid.com")
+        try:
+            r = await run_in_threadpool(client.post, base + "/institutions/get", json={"count": 1, "offset": 0, "country_codes": ["US"]},
+                                        headers={"PLAID-CLIENT-ID": d["plaid_client_id"], "PLAID-SECRET": d["plaid_secret"], "Plaid-Version": "2020-09-14"})
+        except httpx.HTTPError:
+            raise HTTPException(502, "could not reach Plaid")
+        if r.status_code != 200:
+            try:
+                e = r.json()
+                raise HTTPException(502, f"{e.get('error_code')}: {e.get('error_message')}")
+            except ValueError:
+                raise HTTPException(502, f"Plaid answered {r.status_code}")
+        return {"ok": True, "env": d.get("plaid_env") or "sandbox"}
 
     @app.post("/admin/people")
     async def admin_add_person(request: Request):

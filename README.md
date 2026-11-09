@@ -57,24 +57,20 @@ Everything runs in Docker. You do not need Python or anything else on the machin
 git clone https://github.com/Wizard815/Goblin-Bank.git
 cd Goblin-Bank
 ./scripts/install.sh
+docker compose -f docker-compose.generated.yml up -d --build
 ```
-The first run creates `goblins.yaml` from `goblins.example.yaml` and stops so you can list your people (one name each, lowercase). Run `./scripts/install.sh` again (or `./scripts/install.sh --yes` to accept the example as it is). It builds the image, makes a separate encryption key and secrets for every person, and prints **each person's login token and the admin token, once**. Copy them somewhere safe now: only their hashes are stored.
+**There are no files to edit.** The script builds the image, makes a separate encryption key and secrets for each person, and prints each login token and the admin token **once**: copy them somewhere safe now, only their hashes are stored. It starts with one person called `me` (run `NAME=alice ./scripts/install.sh` for a different name). Check with `docker compose -f docker-compose.generated.yml ps`: everything should say "healthy".
 
-Nothing to edit later: people can also be added on the gateway's admin page (step 6).
-
-### 3. Add your Plaid keys
-Edit `.secrets/plaid.env` (see `examples/plaid.env.example`):
-```
-PLAID_CLIENT_ID=...
-PLAID_SECRET=...
-PLAID_ENV=sandbox
-```
-Skip this and add it later if you only want to look around: manual accounts, CSV imports and everything else work without Plaid. Optional per-person CalDAV settings are in `.secrets/<name>.integrations.env` (`examples/integrations.env.example`) or on the Settings page.
+### 3. Set everything up in the app
+1. **Admin page** at `http://127.0.0.1:8080/admin` (the admin token): add the other people, enter your **Plaid keys** once for everyone (Client ID and secret from dashboard.plaid.com, Developers, Keys, and Sandbox or Production), set the **public address** for webhooks, and set the budget and limits. Each person's login token and the one command to start their container are shown there.
+   Or skip the admin page: each person can enter their own keys under Settings, Connect & import, **Plaid keys** (stored encrypted in their own container).
+2. Open `http://127.0.0.1:8080`, sign in with your name and token, and in Settings, Connect & import, press **Test the keys**, then **Link an account**.
+3. CalDAV, Robinhood, models and notifications are all on the Settings page too. `.secrets/plaid.env` and `.secrets/<name>.integrations.env` still work if you prefer files, but nothing needs them.
 
 ### Connecting your real bank
-1. In the Plaid dashboard, copy your **Client ID** and your **Production** secret (Developers, Keys). Put them in `.secrets/plaid.env` with `PLAID_ENV=production`, then `docker compose -f docker-compose.generated.yml up -d`.
-2. Open the app, Settings, **Connect & import**, press **Link an account** and sign in to the bank in the window that opens.
-3. Banks that send you to **their own website** to sign in (OAuth: Capital One and many other large banks) also need a redirect address. Set `PLAID_REDIRECT_URI=https://your-address/` in `.secrets/plaid.env` (HTTPS, trailing slash, your app's own address from step 5 below) and add that exact string under Developers, API, **Allowed redirect URIs** in the Plaid dashboard. After you sign in at the bank, it sends you back to the app, which finishes the link by itself. Plaid may also ask you to complete an OAuth questionnaire in the dashboard before some banks appear in production.
+1. In the app, Settings, Connect & import, **Plaid keys**: choose **Production**, enter your Client ID and Production secret (or let the admin do it for everyone), Save, and press **Test the keys**. Plaid may need to approve production access first; until then use Sandbox with Plaid's test login (`user_good` / `pass_good`).
+2. Press **Link an account** and sign in to the bank in the window that opens.
+3. Banks that send you to **their own website** to sign in (OAuth: Capital One and many other large banks) need an HTTPS address. Set the **Public address** on the admin page (it is also used for webhooks) and add `https://your-address/` under Developers, API, **Allowed redirect URIs** in the Plaid dashboard. After you sign in at the bank it sends you back and the app finishes the link by itself. Plaid may also ask you to complete an OAuth questionnaire in the dashboard before some banks appear in production.
 4. Link one bank first and check the numbers, then add the rest. The cost panel in the same tab shows what Plaid will bill.
 
 ### Which Plaid site is which
@@ -103,14 +99,7 @@ Plaid bills per linked bank login per month, not per call: about $0.45 each at l
 * **Every person who links the same bank is billed again**, including a joint account linked by two people.
 * Banks generally do not email scheduled CSV reports: Huntington, Discover, Capital One and Axos offer manual downloads (CSV or QFX) and PDF statements, plus balance and transaction alerts. There is no setting that mails a recurring CSV that I could confirm, so a monthly manual download for the quiet accounts is the realistic no-Plaid route.
 
-### 4. Start it
-```bash
-docker compose -f docker-compose.generated.yml up -d --build
-docker compose -f docker-compose.generated.yml ps       # everything should say "healthy"
-```
-Open **http://127.0.0.1:8080**, sign in with a name from `goblins.yaml` and that person's token. In `sandbox` link a bank in Settings, Connect & import with Plaid's test login (`user_good` / `pass_good`).
-
-### 5. Reach it from your phone and other devices
+### 4. Reach it from your phone and other devices
 The gateway listens only on `127.0.0.1:8080` on purpose. Pick one:
 * **Tailscale (simplest, recommended):** install it on the server and your devices, then `tailscale serve --bg 8080` gives you an `https://your-machine.your-tailnet.ts.net` address that only your devices can open.
 * **Your own domain with automatic HTTPS:** edit `examples/Caddyfile` (your domain), point the domain at the server, open ports 80 and 443, then
@@ -118,12 +107,12 @@ The gateway listens only on `127.0.0.1:8080` on purpose. Pick one:
 * **Cloudflare Tunnel** also works. Whatever you use, it must be HTTPS: your login token travels with every request.
 Never expose port 8080 to the internet as plain HTTP.
 
-### 6. Add people, link them, share
+### 5. Add people, link them, share
 * **Add a person:** open `/admin` (use the admin token), type a name under People, press Add. It prints their login token once and the small compose file for their container, plus the one command to start it (a web page cannot start Docker). Their encryption key is made in your browser, so the gateway never sees it.
 * **Link two people:** each signs in, Settings, **Family links**, picks the other person from the list and asks. The other person gets a pop-up they must answer. A link only sets up the connection; each person then ticks exactly what the other can see (a savings account's balance, a goal), and can take it back any time.
-* **Plaid webhooks (optional):** give Plaid a public HTTPS address ending in `/webhooks/plaid` and set `PLAID_WEBHOOK_URL` in `.secrets/plaid.env`. Without it, data still syncs every 15 minutes.
+* **Plaid webhooks (optional):** set the Public address on the admin page (see "Webhooks" above). Without it, banks are still pulled on their schedules.
 
-### 7. Back up, update, stop
+### 6. Back up, update, stop
 ```bash
 ./scripts/backup.sh        # a consistent copy of every database plus the secrets, in backups/ (owner-only). Keep it private and off this machine.
 ./scripts/update.sh        # backup, git pull, rebuild, restart. Your data is untouched.
@@ -131,7 +120,7 @@ docker compose -f docker-compose.generated.yml down        # stop (data stays in
 ```
 **Back up `.secrets/` and `data/`.** Losing a person's `FIELD_KEY` (in `.secrets/<name>.env`) means re-linking their banks.
 
-### 8. Where things live
+### 7. Where things live
 | Path | What | Back up? |
 | --- | --- | --- |
 | `goblins.yaml` | who is on this server | yes |
@@ -140,15 +129,15 @@ docker compose -f docker-compose.generated.yml down        # stop (data stays in
 | `data/<name>/imports/` | drop CSVs here (Cash App, PayPal, Venmo) | optional |
 | `gateway.yaml`, `gateway-state/` | the gateway's list of people (hashes only) | yes |
 
-### 9. Troubleshooting
+### 8. Troubleshooting
 * `docker compose ... ps` shows a service restarting: `docker compose -f docker-compose.generated.yml logs <service>`.
 * **Gateway "Permission denied: /config/gateway.yaml"** or "cannot write state": the containers run as user 10001. `sudo chown 10001:10001 gateway.yaml && sudo chown -R 10001:10001 gateway-state data`.
 * **Lost a login token:** `./scripts/install.sh --reset-token bob` prints a new one (nothing else changes), then `docker compose -f docker-compose.generated.yml restart gateway`.
-* **"Plaid is not configured":** fill `.secrets/plaid.env`, then `docker compose ... up -d` again.
-* **Phone cannot reach it:** see step 5; the gateway is not on the open network by default.
+* **"Plaid is not configured":** enter the keys in Settings, Connect & import, Plaid keys (or on the admin page), then press Test the keys.
+* **Phone cannot reach it:** see step 4; the gateway is not on the open network by default.
 
-### 10. Safety checklist before real bank data
-* HTTPS in front of it, or Tailscale only (step 5).
+### 9. Safety checklist before real bank data
+* HTTPS in front of it, or Tailscale only (step 4).
 * `.secrets/` readable only by you, and backed up off the machine.
 * Use local models only for the agent unless you have deliberately allowed a cloud one (Settings, Models).
 * Keep the Plaid daily call cap on (Settings, Connect & import).

@@ -686,8 +686,17 @@ const secretField = (id, label, isSet) => field(id, label, "", { type: "password
 async function tabConnect(root, rerender) {
   const [cfg, st, use] = await Promise.all([api("/api/settings"), api("/api/status"), api("/api/plaid/usage")]);
   const dis = S.demo, stale = (d) => Math.round((Date.now() - new Date(d + "T00:00:00Z")) / 864e5);
-  add(root, 
-    h("div", { class: "panel" }, h("h3", {}, "Banks, cards, savings and IRA (Plaid)"), h("p", { class: "muted small" }, st.plaid.configured ? `Plaid is set up (${st.plaid.env}). Tokens are encrypted in your own container; the gateway never sees them.` : "Plaid is not configured. Add your client ID and secret to .secrets/plaid.env and restart."),
+  const mgd = new Set(cfg.managed || []), lockK = (k) => mgd.has(k);
+  add(root,
+    h("div", { class: "panel" }, h("h3", {}, "Plaid keys"),
+      h("p", { class: "muted small" }, mgd.has("plaid_client_id") ? "Your admin entered the Plaid keys for everyone on the gateway's admin page, so there is nothing to type here." : "Your Client ID and secret from dashboard.plaid.com (Developers, Keys). The secret is encrypted in your own container and never shown again. Use Sandbox to try fake banks, then switch to Production for real ones."),
+      h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); saveCfg(withSecret({ plaid_client_id: val("pk-id"), plaid_env: val("pk-env") }, "plaid_secret", "pk-sec"), rerender, "Plaid keys saved"); } },
+        h("input", { type: "text", id: "pk-id-dummy", hidden: true }),
+        field("pk-id", "Client ID", cfg.plaid_client_id, { disabled: lockK("plaid_client_id"), autocomplete: "off" }), h("label", {}, "Secret", h("input", { id: "pk-sec", type: "password", disabled: lockK("plaid_secret"), placeholder: cfg.plaid_secret?.set ? "saved, leave blank to keep" : "not set", autocomplete: "new-password" })),
+        select("pk-env", "Environment", [["sandbox", "Sandbox (fake banks)"], ["production", "Production (real banks)"]], cfg.plaid_env || "sandbox", { disabled: lockK("plaid_env") }),
+        h("div", { class: "formbtns" }, lockK("plaid_client_id") ? null : h("button", { class: "btn primary", type: "submit" }, "Save"),
+          h("button", { class: "btn", type: "button", onclick: async () => { try { const r = await api("/plaid/test", send("POST", {})); toast(`Plaid accepted the keys (${r.env})`); } catch (e) { fail(e); } } }, "Test the keys")))),
+    h("div", { class: "panel" }, h("h3", {}, "Banks, cards, savings and IRA (Plaid)"), h("p", { class: "muted small" }, st.plaid.configured ? `Plaid is set up (${st.plaid.env}). Tokens are encrypted in your own container; the gateway never sees them.` : "Plaid is not configured. Enter your Client ID and secret in the box above."),
       h("div", { class: "chips" }, h("button", { class: "btn primary", disabled: dis, onclick: async () => { try { await openLink(null, rerender); } catch (e) { fail(e); } } }, "Link an account"),
         h("button", { class: "btn", disabled: dis, onclick: async () => { try { await api("/sync", { method: "POST" }); toast("Synced"); } catch (e) { fail(e); } } }, "Sync now"),
         st.plaid.env === "sandbox" && st.plaid.items.length ? h("button", { class: "btn", title: "Plaid Sandbox only: Plaid sends a real signed webhook to your public address", onclick: async () => { toast("Asking Plaid to send a test webhook…"); try { const r = await api("/plaid/test-webhook", { method: "POST" }); toast(r.arrived ? "The webhook arrived and was verified" : `Plaid fired it but nothing arrived at ${r.webhook_url}. Check that address is public.`); rerender(); } catch (e) { fail(e); } } }, "Send a test webhook") : null),

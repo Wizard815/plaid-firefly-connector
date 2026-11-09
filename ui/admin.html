@@ -76,6 +76,11 @@ async function renderPlaid(rows) {
   const inp = (id, ph, v, step) => el("input", { id, type: "number", min: "0", step: step || "1", placeholder: ph, value: v ?? "", style: "width:110px" });
   const dflt = pol.default || {}, mine = pol.people || {};
   const fD = { b: inp("pd-b", "$" + bi.plaid_budget_month, dflt.plaid_budget_month, "0.01"), c: inp("pd-c", String(bi.plaid_daily_cap), dflt.plaid_daily_cap), m: inp("pd-m", String(bi.plaid_min_minutes), dflt.plaid_min_minutes) };
+  const kid = el("input", { id: "pk-i", placeholder: "Client ID", value: dflt.plaid_client_id || "", autocomplete: "off", style: "min-width:220px" }), ksec = el("input", { id: "pk-s", type: "password", placeholder: pol.plaid_secret_set ? "saved, leave blank to keep" : "Secret", autocomplete: "new-password", style: "min-width:220px" });
+  const kenv = el("select", { id: "pk-e" }, el("option", { value: "sandbox" }, "Sandbox (fake banks)"), el("option", { value: "production" }, "Production (real banks)")); kenv.value = dflt.plaid_env || "sandbox";
+  const kred = el("input", { id: "pk-r", type: "url", placeholder: "optional, if different from the public address", value: dflt.plaid_redirect_url || "", style: "min-width:260px" });
+  const ktest = el("button", { type: "button" }, "Test the keys");
+  ktest.addEventListener("click", async () => { try { const r = await call("/admin/plaid/test", "POST"); note.textContent = `Plaid accepted the keys (${r.env}).`; note.className = "small"; } catch (e) { note.textContent = e.message; note.className = "small err"; } });
   const pub = el("input", { id: "pd-u", type: "url", placeholder: "https://bank.example.com", value: dflt.public_url || "", style: "min-width:260px" });
   const rec = el("select", { id: "pd-r" }, el("option", { value: "" }, "default (on)"), el("option", { value: "on" }, "on"), el("option", { value: "off" }, "off")); rec.value = dflt.plaid_use_recurring || "";
   const per = rows.map((g) => ({ n: g.name, b: inp("pp-b-" + g.name, "default", (mine[g.name] || {}).plaid_budget_month, "0.01"), c: inp("pp-c-" + g.name, "default", (mine[g.name] || {}).plaid_daily_cap) }));
@@ -83,13 +88,16 @@ async function renderPlaid(rows) {
   const save = el("button", { class: "primary", type: "button" }, "Save limits");
   save.addEventListener("click", async () => {
     const people = {}; for (const p of per) { const o = {}; if (p.b.value.trim() !== "") o.plaid_budget_month = num(p.b); if (p.c.value.trim() !== "") o.plaid_daily_cap = num(p.c); if (Object.keys(o).length) people[p.n] = o; }
-    const d = {}; if (fD.b.value.trim() !== "") d.plaid_budget_month = num(fD.b); if (fD.c.value.trim() !== "") d.plaid_daily_cap = num(fD.c); if (fD.m.value.trim() !== "") d.plaid_min_minutes = num(fD.m); if (rec.value) d.plaid_use_recurring = rec.value; if (pub.value.trim()) d.public_url = pub.value.trim();
+    const d = {}; if (fD.b.value.trim() !== "") d.plaid_budget_month = num(fD.b); if (fD.c.value.trim() !== "") d.plaid_daily_cap = num(fD.c); if (fD.m.value.trim() !== "") d.plaid_min_minutes = num(fD.m); if (rec.value) d.plaid_use_recurring = rec.value; if (pub.value.trim()) d.public_url = pub.value.trim(); if (kid.value.trim()) d.plaid_client_id = kid.value.trim(); if (ksec.value.trim()) d.plaid_secret = ksec.value.trim(); d.plaid_env = kenv.value; if (kred.value.trim()) d.plaid_redirect_url = kred.value.trim();
     try { await call("/admin/policy", "PUT", { default: d, people }); note.textContent = "Saved. Each goblin picks it up within five minutes."; note.className = "small"; } catch (e) { note.textContent = e.message; note.className = "small err"; }
   });
   const total = rows.reduce((a, g) => a + ((g.plaid || {}).est_monthly_cost || 0), 0);
   box.replaceChildren(el("h2", { style: "margin:0 0 6px;font-size:1.1rem" }, "Plaid limits"),
     el("p", { class: "small muted" }, "These are enforced by every goblin and cannot be raised from inside the app. Empty = the built-in default. Budget is each person's own monthly maximum for Plaid (estimated at list price). Plaid bills you the combined total of everyone."),
+    el("p", { class: "small muted" }, "Plaid keys for everyone on this server, entered once (from dashboard.plaid.com, Developers, Keys). They are sent to each goblin, which keeps them encrypted; the secret is never shown again. Leave these empty to let each person enter their own."),
+    el("div", { class: "row" }, kid, ksec, kenv, ktest),
     el("div", { class: "row" }, el("label", { class: "small" }, "Public address (https) ", pub),
+      el("label", { class: "small" }, "Sign-in return address ", kred),
       el("span", { class: "small muted" }, "The address Plaid can reach (a domain, a Cloudflare Tunnel or Tailscale Funnel). Set it and every bank gets webhooks: Plaid tells the app when there is news, so banks are only polled weekly as a safety net, and the sign-in return for OAuth banks works.")),
     el("div", { class: "row" }, el("label", { class: "small" }, "Budget per person ($/month) ", fD.b), el("label", { class: "small" }, "Daily call cap ", fD.c), el("label", { class: "small" }, "Ask a bank at most every (minutes) ", fD.m), el("label", { class: "small" }, "Plaid recurring detection ", rec)),
     el("p", { class: "small muted" }, "Built-in: $5 a month, 300 calls a day, every 180 minutes. Most calls are free; Plaid bills per bank per month (Transactions $0.30, Recurring $0.15, Investments Holdings $0.18)."),
