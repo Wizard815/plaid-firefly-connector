@@ -25,6 +25,7 @@ docker run --rm -u 0 -v "$PWD":/work -w /work -e HOST_UID="$(id -u)" -e HOST_GID
   chown -R "$HOST_UID:$HOST_GID" .secrets docker-compose.generated.yml &&
   chmod 600 .secrets/*' sh ${ARGS[@]+"${ARGS[@]}"}
 
+PORT=$(sed -n 's/^port: *\([0-9]*\).*/\1/p' goblins.yaml | head -1); PORT=${PORT:-6767}
 cat <<MSG
 
 Done. The login tokens and the admin token above are shown ONCE. Save them now.
@@ -32,8 +33,8 @@ Done. The login tokens and the admin token above are shown ONCE. Save them now.
 Start everything:
   docker compose -f docker-compose.generated.yml up -d
 
-Then open http://127.0.0.1:8080 and sign in with a name from goblins.yaml and its token.
-The admin page is at http://127.0.0.1:8080/admin (use the admin token). Everything else is set up in the app, no files to edit:
+Then open http://127.0.0.1:$PORT and sign in with a name from goblins.yaml and its token.
+The admin page is at http://127.0.0.1:$PORT/admin (use the admin token). Everything else is set up in the app, no files to edit:
   - admin page: add people, enter the Plaid keys for everyone, set the public address for webhooks, set the budget
   - or, signed in as a person: Settings, Connect & import, Plaid keys
 For other devices and HTTPS, read "Reach it from your phone" in the README.

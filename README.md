@@ -62,9 +62,9 @@ docker compose -f docker-compose.generated.yml up -d --build
 **There are no files to edit.** The script builds the image, makes a separate encryption key and secrets for each person, and prints each login token and the admin token **once**: copy them somewhere safe now, only their hashes are stored. It starts with one person called `me` (run `NAME=alice ./scripts/install.sh` for a different name). Check with `docker compose -f docker-compose.generated.yml ps`: everything should say "healthy".
 
 ### 3. Set everything up in the app
-1. **Admin page** at `http://127.0.0.1:8080/admin` (the admin token): add the other people, enter your **Plaid keys** once for everyone (Client ID and secret from dashboard.plaid.com, Developers, Keys, and Sandbox or Production), set the **public address** for webhooks, and set the budget and limits. Each person's login token and the one command to start their container are shown there.
+1. **Admin page** at `http://127.0.0.1:6767/admin` (the admin token): add the other people, enter your **Plaid keys** once for everyone (Client ID and secret from dashboard.plaid.com, Developers, Keys, and Sandbox or Production), set the **public address** for webhooks, and set the budget and limits. Each person's login token and the one command to start their container are shown there.
    Or skip the admin page: each person can enter their own keys under Settings, Connect & import, **Plaid keys** (stored encrypted in their own container).
-2. Open `http://127.0.0.1:8080`, sign in with your name and token, and in Settings, Connect & import, press **Test the keys**, then **Link an account**.
+2. Open `http://127.0.0.1:6767`, sign in with your name and token, and in Settings, Connect & import, press **Test the keys**, then **Link an account**.
 3. CalDAV, Robinhood, models and notifications are all on the Settings page too. `.secrets/plaid.env` and `.secrets/<name>.integrations.env` still work if you prefer files, but nothing needs them.
 
 ### Connecting your real bank
@@ -100,12 +100,12 @@ Plaid bills per linked bank login per month, not per call: about $0.45 each at l
 * Banks generally do not email scheduled CSV reports: Huntington, Discover, Capital One and Axos offer manual downloads (CSV or QFX) and PDF statements, plus balance and transaction alerts. There is no setting that mails a recurring CSV that I could confirm, so a monthly manual download for the quiet accounts is the realistic no-Plaid route.
 
 ### 4. Reach it from your phone and other devices
-The gateway listens only on `127.0.0.1:8080` on purpose. Pick one:
-* **Tailscale (simplest, recommended):** install it on the server and your devices, then `tailscale serve --bg 8080` gives you an `https://your-machine.your-tailnet.ts.net` address that only your devices can open.
+The gateway listens only on `127.0.0.1:6767` on purpose (change it with `port:` in `goblins.yaml`). Pick one:
+* **Tailscale (simplest, recommended):** install it on the server and your devices, then `tailscale serve --bg 6767` gives you an `https://your-machine.your-tailnet.ts.net` address that only your devices can open.
 * **Your own domain with automatic HTTPS:** edit `examples/Caddyfile` (your domain), point the domain at the server, open ports 80 and 443, then
   `docker compose -f docker-compose.generated.yml -f examples/docker-compose.caddy.yml up -d`.
 * **Cloudflare Tunnel** also works. Whatever you use, it must be HTTPS: your login token travels with every request.
-Never expose port 8080 to the internet as plain HTTP.
+Never expose port 6767 to the internet as plain HTTP.
 
 ### 5. Add people, link them, share
 * **Add a person:** open `/admin` (use the admin token), type a name under People, press Add. It prints their login token once and the small compose file for their container, plus the one command to start it (a web page cannot start Docker). Their encryption key is made in your browser, so the gateway never sees it.
