@@ -9,14 +9,16 @@ LIST_AS_OF = "pay-as-you-go list price you provided"
 
 
 def estimate(db, use_recurring: bool, by_endpoint: dict) -> dict:
-    items = db.all("SELECT item_id, institution FROM plaid_items")
+    from goblinbank import plaidplan
+    items = db.all("SELECT * FROM plaid_items")
     lines = []
     n = len(items)
     if n:
         lines.append({"label": "Transactions", "qty": n, "unit": "item / month", "rate": PRICE["transactions"], "cost": round(n * PRICE["transactions"], 2)})
-    if n and use_recurring:
-        lines.append({"label": "Recurring transactions", "qty": n, "unit": "item / month", "rate": PRICE["recurring"], "cost": round(n * PRICE["recurring"], 2),
-                      "optional": "Turn off to rely on this app's own detection of repeating payments."})
+    rec = [i for i in items if plaidplan.recurring_on(db, i, use_recurring)]
+    if rec:
+        lines.append({"label": "Recurring transactions", "qty": len(rec), "unit": "item / month", "rate": PRICE["recurring"], "cost": round(len(rec) * PRICE["recurring"], 2),
+                      "optional": "Only on banks where it is switched on (by default: banks with a checking account or a card). Turn it off per bank to rely on this app's own detection."})
     inv = [i for i in items if db.one("SELECT 1 FROM accounts WHERE item_id=? AND kind='investment'", (i["item_id"],))]
     if inv:
         lines.append({"label": "Investments holdings", "qty": len(inv), "unit": "item / month", "rate": PRICE["investments"], "cost": round(len(inv) * PRICE["investments"], 2)})

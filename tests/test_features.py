@@ -332,7 +332,7 @@ def test_plaid_item_removal_deletes_data():
     db = DB(":memory:")
     c = TestClient(mk(db=db, plaid_transport=plaid_mock()))
     c.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "Huntington"})
-    assert c.get("/api/plaid/items", headers=H).json() == [{"item_id": "item-1", "institution": "Huntington"}]
+    assert [(x["item_id"], x["institution"]) for x in c.get("/api/plaid/items", headers=H).json()] == [("item-1", "Huntington")]
     assert c.delete("/api/plaid/items/item-1", headers=H).json()["accounts"] == 2
     assert c.get("/api/accounts", headers=H).json() == [] and c.get("/api/transactions?limit=500", headers=H).json()["items"] == []
     assert c.delete("/api/plaid/items/item-1", headers=H).status_code == 404

@@ -7,7 +7,7 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from devtools.seed import seed
-from goblinbank import external, gateway, goblin, settings
+from goblinbank import external, gateway, goblin
 from goblinbank.db import DB
 from goblinbank.security import sha256
 
@@ -158,9 +158,9 @@ def fresh_rig(monkeypatch, **kw):
     monkeypatch.setenv("PLAID_CLIENT_ID", "c"); monkeypatch.setenv("PLAID_SECRET", "s")
     t, calls = counting_plaid()
     db = DB(":memory:")
-    settings.put(db, "plaid_min_minutes", "0")                                  # these tests are about on-demand and automatic syncs, not the Plaid throttle
     g = TestClient(goblin.create_app(db=db, today=lambda: TODAY, plaid_transport=t, **kw))
     g.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "Bank"})
+    db.conn.execute("UPDATE plaid_items SET schedule='always'"); db.conn.commit()      # these tests are about on-demand and automatic syncs, not the per-bank schedule
     calls["sync"] = 0
 
     def to_goblin(req: httpx.Request):

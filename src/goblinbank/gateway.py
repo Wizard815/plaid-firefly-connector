@@ -275,7 +275,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     @app.get("/admin/policy")
     def admin_get_policy(request: Request):
         admin(request)
-        return {**policy, "built_in": {"plaid_budget_month": 5, "plaid_daily_cap": 300, "plaid_min_minutes": 180, "plaid_use_recurring": "on"}}
+        return {**policy, "built_in": {"plaid_budget_month": 5, "plaid_daily_cap": 300, "plaid_min_minutes": 0, "plaid_use_recurring": "on"}}
 
     @app.put("/admin/policy")
     async def admin_put_policy(request: Request):

@@ -4,6 +4,7 @@ Usage: python3 scripts/make_demo.py OUT.html [--artifact]   (--artifact strips t
 import json
 import os
 import sys
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -117,7 +118,7 @@ def main(out: str, artifact: bool):
     for a in rec["/api/accounts"]:
         rec[f"/api/accounts/{a['id']}"] = g(f"/api/accounts/{a['id']}")
     rec["/api/links/people"] = {"people": ["bob", "cara", "dana"]}
-    rec["/api/status"] = {"plaid": {"configured": True, "env": "sandbox", "items": [{"item_id": f"item-{i}", "institution": n} for i, n in enumerate(["Huntington", "Axos", "Capital One"])]},
+    rec["/api/status"] = {"plaid": {"configured": True, "env": "sandbox", "items": [{"item_id": f"item-{i}", "institution": n, "schedule": "auto", "schedule_effective": se, "recurring": "auto", "recurring_effective": rc, "interval_minutes": im, "last_sync": time.time() - 3600 * lh, "calls_per_day": cpd} for i, (n, se, rc, im, lh, cpd) in enumerate([("Huntington", "daily", True, 1440, 5, 2.1), ("Axos", "weekly", False, 10080, 40, 0.3), ("Capital One", "daily", True, 1440, 5, 2.1)])]},
                           "robinhood": {"agent": "up", "csv": "up", "live": "not deployed", "csv_files": ["import-2026-11-01.csv"], "agent_configured": True}, "caldav_configured": True,
                           "imports": [{"provider": "cashapp", "transactions": 41, "last_transaction": (TODAY - timedelta(days=38)).isoformat()}, {"provider": "paypal", "transactions": 12, "last_transaction": (TODAY - timedelta(days=6)).isoformat()}]}
     pos = lambda rows, eq, src: {"source": src, "as_of": sync.now(), "balances": {"equity": eq}, "positions": rows}

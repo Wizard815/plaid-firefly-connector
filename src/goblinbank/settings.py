@@ -21,8 +21,8 @@ SPEC = {
 }
 
 
-# Out of the box Plaid is kept cheap: at most $5 a month, a check of each bank at most every 3 hours, and a modest daily call cap.
-DEFAULTS = {"plaid_budget_month": "5", "plaid_min_minutes": "180", "plaid_daily_cap": "300"}
+# Out of the box Plaid is kept cheap: at most $5 a month and a modest daily call cap; each bank is asked on a schedule that suits what it holds (see plaidplan.py).
+DEFAULTS = {"plaid_budget_month": "5", "plaid_min_minutes": "0", "plaid_daily_cap": "300"}
 
 
 def get(db, key: str) -> str:

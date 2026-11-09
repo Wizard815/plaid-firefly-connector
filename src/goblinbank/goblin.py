@@ -14,7 +14,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from goblinbank import plaidcost, agent, api_links, api_money, api_plan, links, external, notify, plan, crypto, feed, importers, ledger, settings as cfg, sync
+from goblinbank import plaidcost, plaidplan, agent, api_links, api_money, api_plan, links, external, notify, plan, crypto, feed, importers, ledger, settings as cfg, sync
 from goblinbank.db import DB
 from goblinbank.plaid import Plaid, PlaidError
 from goblinbank.security import require_internal
@@ -68,6 +68,14 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                 except ValueError:
                     pass
         policy_state["keys"] = keys
+
+    def item_view(row: dict) -> dict:
+        floor = float(cfg.get(store, "plaid_min_minutes") or 0) * 60
+        glob = cfg.get(store, "plaid_use_recurring") != "off"
+        iv = plaidplan.interval(store, row, floor)
+        return {"item_id": row["item_id"], "institution": row["institution"], "schedule": row.get("schedule") or "auto", "schedule_effective": plaidplan.schedule_of(store, row),
+                "recurring": row.get("recurring") or "auto", "recurring_effective": plaidplan.recurring_on(store, row, glob), "interval_minutes": None if iv is None else round(iv / 60),
+                "last_sync": row.get("last_sync"), "calls_per_day": round(plaidplan.calls_per_day(store, row, floor, glob), 1)}
 
     def month_calls() -> dict:
         return {r["endpoint"]: r["calls"] for r in store.all("SELECT endpoint, SUM(calls) calls FROM plaid_usage WHERE day LIKE ? GROUP BY endpoint", (date.today().strftime("%Y-%m") + "%",))}
@@ -426,7 +434,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         b = budget_state()
         today_n = store.one("SELECT COALESCE(SUM(calls),0) n FROM plaid_usage WHERE day=?", (date.today().isoformat(),))["n"]
         return {"items": b["items"], "est_monthly_cost": b["est"], "budget": b["budget"], "calls_today": today_n, "daily_cap": int(float(cfg.get(store, "plaid_daily_cap") or 300)),
-                "calls_month": sum(month_calls().values()), "min_minutes": int(float(cfg.get(store, "plaid_min_minutes") or 180))}
+                "calls_month": sum(month_calls().values()), "min_minutes": int(float(cfg.get(store, "plaid_min_minutes") or 0))}
 
     @app.put("/api/settings")
     async def settings_put(request: Request):
@@ -472,7 +480,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                 return "down"
         csvs = sorted(os.listdir(csv_dir)) if os.path.isdir(csv_dir) else []
         return {"plaid": {"configured": plaid.configured, "env": os.environ.get("PLAID_ENV", "sandbox"),
-                          "items": store.all("SELECT item_id, institution FROM plaid_items")},
+                          "items": [item_view(r) for r in store.all("SELECT * FROM plaid_items ORDER BY institution")]},
                 "robinhood": {"agent": probe("agent"), "csv": probe("csv"), "live": probe("live"), "csv_files": csvs,
                               "agent_configured": bool(cfg.get(store, "rh_mcp_url") and cfg.get(store, "rh_mcp_read_tools"))},
                 "caldav_configured": bool(cfg.get(store, "caldav_url")),
@@ -488,14 +496,14 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         today = store.one("SELECT COALESCE(SUM(calls),0) n FROM plaid_usage WHERE day=?", (date.today().isoformat(),))["n"]
         b = budget_state()
         rate = cfg.get(store, "plaid_rate_item_month")
-        gap = float(cfg.get(store, "plaid_min_minutes") or 180)
-        inv = sum(1 for x in b["detail"]["lines"] if x["label"] == "Investments holdings" for _ in range(x["qty"]))
-        per_day = round(b["items"] * (max(1.0, 1440 / max(gap, 1)) * 2 + (2 if b["use_recurring"] else 0)) + inv, 0)     # accounts + transactions per pass, plus recurring and holdings once a day
+        gap = float(cfg.get(store, "plaid_min_minutes") or 0)
+        views = [item_view(r) for r in store.all("SELECT * FROM plaid_items")]
+        per_day = round(sum(v["calls_per_day"] for v in views))
         return {"month": month, "calls_month": sum(by.values()), "calls_today": today, "daily_cap": int(float(cfg.get(store, "plaid_daily_cap") or 300)),
                 "by_endpoint": dict(sorted(by.items(), key=lambda kv: -kv[1])), "items": b["items"], "est_monthly_cost": b["est"], "breakdown": b["detail"]["lines"], "list_total": b["detail"]["total"],
                 "custom_rate": float(rate) if rate else None, "use_recurring": b["use_recurring"], "budget": b["budget"], "over_budget": bool(b["budget"] and b["est"] > b["budget"] + 0.005),
                 "room_for_items": (int((b["budget"] - b["est"] + 0.005) // b["per_item"]) if b["budget"] and b["per_item"] else None), "per_item": b["per_item"],
-                "min_minutes": int(gap), "calls_per_day_estimate": int(per_day)}
+                "min_minutes": int(gap), "calls_per_day_estimate": int(per_day), "calls_per_month_estimate": int(round(sum(v["calls_per_day"] for v in views) * 30))}
 
     @app.get("/internal/connector-config/rh-agent")
     def agent_config(request: Request):
@@ -524,7 +532,29 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     @app.get("/api/plaid/items")
     def plaid_items(request: Request):
         auth(request)
-        return store.all("SELECT item_id, institution FROM plaid_items")
+        return [item_view(r) for r in store.all("SELECT * FROM plaid_items ORDER BY institution")]
+
+    class ItemPatch(BaseModel):
+        schedule: str | None = None        # auto, 15m, 3h, daily, weekly, biweekly, monthly, manual
+        recurring: str | None = None       # auto, on, off: Plaid's paid recurring-payment detection for this bank
+
+    @app.put("/api/plaid/items/{item_id}")
+    def plaid_item_update(request: Request, item_id: str, b: ItemPatch):
+        """When this bank is asked, and whether it uses Plaid's recurring detection. Saves calls, and (recurring) money."""
+        auth(request)
+        row = store.one("SELECT * FROM plaid_items WHERE item_id=?", (item_id,))
+        if not row:
+            raise HTTPException(404, "not found")
+        if b.schedule is not None and b.schedule != "auto" and b.schedule not in plaidplan.SCHEDULES:
+            raise HTTPException(422, "schedule must be auto, 15m, 3h, daily, weekly, biweekly, monthly or manual")
+        if b.recurring is not None and b.recurring not in ("auto", "on", "off"):
+            raise HTTPException(422, "recurring must be auto, on or off")
+        with store.tx() as c:
+            if b.schedule is not None:
+                c.execute("UPDATE plaid_items SET schedule=? WHERE item_id=?", (b.schedule, item_id))
+            if b.recurring is not None:
+                c.execute("UPDATE plaid_items SET recurring=? WHERE item_id=?", (b.recurring, item_id))
+        return item_view(store.one("SELECT * FROM plaid_items WHERE item_id=?", (item_id,)))
 
     @app.delete("/api/plaid/items/{item_id}")
     def plaid_remove(request: Request, item_id: str):
