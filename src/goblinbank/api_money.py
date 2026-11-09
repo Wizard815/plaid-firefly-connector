@@ -37,6 +37,8 @@ class AccountIn(BaseModel):
     balance: float | None = None
     min_balance: float | None = None
     savings_mode: str | None = None        # auto | yes | no: does this account count as savings?
+    nickname: str | None = None            # your own label for any account ("" clears it)
+    pinned: bool | None = None             # show its balance on the Overview
 
 
 class TxIn(BaseModel):
@@ -195,6 +197,10 @@ def register(app, ctx):
                 c.execute("UPDATE accounts SET savings_pool=? WHERE id=?", ({"auto": None, "yes": 1, "no": 0}[a.savings_mode], aid))
             if a.min_balance is not None:
                 c.execute("UPDATE accounts SET min_balance=? WHERE id=?", (a.min_balance if a.min_balance >= 0 else None, aid))
+            if a.nickname is not None:
+                c.execute("UPDATE accounts SET nickname=? WHERE id=?", (a.nickname.strip()[:60] or None, aid))
+            if a.pinned is not None:
+                c.execute("UPDATE accounts SET pinned=? WHERE id=?", (1 if a.pinned else 0, aid))
             if manual:
                 if a.name:
                     c.execute("UPDATE accounts SET name=? WHERE id=?", (a.name, aid))

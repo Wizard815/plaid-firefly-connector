@@ -368,3 +368,30 @@ def test_extra_paycheck_month_points_at_the_top_goal():
     assert c.get("/api/plan?month=2027-04", headers=H).json()["extra_for_goal"]["amount"] == 900                    # capped at what the goal still needs
     jan = c.get("/api/plan?month=2027-01", headers=H).json()
     assert not jan["extra_paycheck_month"] and jan["extra_income"] == 0 and jan["extra_for_goal"] is None
+
+
+# ---------------------------------------------------------------- editing goals, pinned and nicknamed accounts, several accounts per login
+def test_a_goal_can_be_edited_and_its_deadline_cleared():
+    c, db = api()
+    g = c.post("/api/goals", headers=H, json={"name": "Laptop", "target": 1200, "deadline": "2027-03-01", "auto_allocate": False}).json()
+    r = c.put(f"/api/goals/{g['id']}", headers=H, json={"name": "Better laptop", "target": 1500, "deadline": "", "priority": 1, "monthly": 100, "note": "n"})
+    assert r.status_code == 200
+    got = next(x for x in c.get("/api/goals", headers=H).json()["items"] if x["id"] == g["id"])
+    assert (got["name"], got["target"], got["deadline"], got["priority"], got["monthly"], got["note"]) == ("Better laptop", 1500, None, 1, 100, "n")
+    assert c.put(f"/api/goals/{g['id']}", headers=H, json={"target": 0}).status_code in (400, 422)
+
+
+def test_nickname_and_pin_survive_a_bank_sync_and_a_login_can_hold_several_accounts():
+    c, db = api()
+    for i, (n, mask) in enumerate([("Checking", "4821"), ("Savings", "0099"), ("Bills", "1234")]):
+        db.conn.execute("INSERT INTO accounts(id,item_id,source,institution,name,kind,balance,mask) VALUES(?,?,?,?,?,?,?,?)", (f"h{i}", "item-1", "plaid", "Huntington", n, "cash", 100.0 * (i + 1), mask))
+    db.conn.commit()
+    assert c.put("/api/accounts/h1", headers=H, json={"nickname": "Rainy day", "pinned": True}).status_code == 200
+    from goblinbank import sync
+    with db.tx() as cur:                                            # what the next sync does to a linked account
+        cur.execute("""INSERT INTO accounts(id,item_id,source,institution,name,kind,balance,updated,subtype,mask) VALUES('h1','item-1','plaid','Huntington','Savings','cash',555,'x','savings','0099')
+                       ON CONFLICT(id) DO UPDATE SET balance=excluded.balance,name=excluded.name,updated=excluded.updated,subtype=excluded.subtype,mask=excluded.mask""")
+    rows = {a["id"]: a for a in c.get("/api/accounts", headers=H).json()}
+    assert rows["h1"]["nickname"] == "Rainy day" and rows["h1"]["pinned"] == 1 and rows["h1"]["balance"] == 555 and rows["h1"]["mask"] == "0099"
+    assert len({a["item_id"] for a in rows.values()}) == 1 and len(rows) == 3
+    assert c.put("/api/accounts/h1", headers=H, json={"nickname": ""}).json()["nickname"] is None

@@ -56,7 +56,7 @@ COLUMNS = {  # added after the first release: (table, column) -> DDL fragment
     ("subscriptions", "payer"): "TEXT DEFAULT 'me'", ("subscriptions", "payer_name"): "TEXT DEFAULT ''",
     ("subscriptions", "notify_days"): "INTEGER DEFAULT 3", ("subscriptions", "end_date"): "TEXT", ("subscriptions", "created"): "TEXT", ("subscriptions", "match_key"): "TEXT", ("incomes", "match_key"): "TEXT",
     ("transactions", "plaid_category"): "TEXT", ("transactions", "category_locked"): "INTEGER DEFAULT 0", ("transactions", "notes"): "TEXT DEFAULT ''",
-    ("accounts", "min_balance"): "REAL", ("accounts", "subtype"): "TEXT", ("accounts", "savings_pool"): "INTEGER", ("providers", "context_tokens"): "INTEGER DEFAULT 8192",
+    ("accounts", "min_balance"): "REAL", ("accounts", "subtype"): "TEXT", ("accounts", "savings_pool"): "INTEGER", ("accounts", "mask"): "TEXT", ("accounts", "nickname"): "TEXT", ("accounts", "pinned"): "INTEGER DEFAULT 0", ("providers", "context_tokens"): "INTEGER DEFAULT 8192",
 }
 DEFAULT_CATEGORIES = [("Income", "income"), ("Food", "expense"), ("Groceries", "expense"), ("Clothes", "expense"), ("Fun", "expense"), ("Games", "expense"),
                       ("Gas", "expense"), ("Transport", "expense"), ("Bills", "expense"), ("Housing", "expense"), ("Health", "expense"), ("Shopping", "expense"),

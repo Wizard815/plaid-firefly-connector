@@ -64,7 +64,7 @@ async def exchange(request: Request):
 @app.post("/accounts/get")
 async def accounts(request: Request):
     await authed(request)
-    A = lambda i, n, t, cur: {"account_id": i, "name": n, "type": t, "balances": {"current": cur, "iso_currency_code": "USD"}}
+    A = lambda i, n, t, cur: {"account_id": i, "name": n, "mask": str(abs(hash(i)) % 10000).zfill(4), "type": t, "balances": {"current": cur, "iso_currency_code": "USD"}}
     return {"accounts": [A("chk", "Plaid Checking", "depository", 1250.55), A("sav", "Plaid Saving", "depository", 8000.00),
                          A("crd", "Plaid Credit Card", "credit", 430.20), A("brk", "Plaid Brokerage", "investment", 5000.00)]}
 

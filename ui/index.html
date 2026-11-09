@@ -164,6 +164,7 @@ const fill = (el, ...kids) => el.replaceChildren(...kids.flat(9).filter((k) => k
 const add = (el, ...kids) => el.append(...kids.flat(9).filter((k) => k != null && k !== false));   // native append() would print "null"
 const usd = (n, signed) => (n == null ? "–" : (signed && n > 0 ? "+" : n < 0 ? "−" : "") + "$" + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+const an = (a) => (a.nickname || a.name || "") + (a.mask && !a.nickname && !String(a.name).includes(a.mask) ? " ••" + a.mask : "");
 const today = () => new Date().toISOString().slice(0, 10);
 const addDays = (d, n) => { const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
 const ago = (iso) => { const d = Math.round((Date.now() - new Date(iso)) / 36e5); return d < 1 ? "now" : d < 24 ? d + "h ago" : Math.round(d / 24) + "d ago"; };
@@ -276,14 +277,23 @@ function forecastPanel(fc) {
     fc.history.length ? h("details", { style: "margin-top:12px" }, h("summary", { class: "muted small" }, "Past months"), h("table", {}, h("tbody", {}, fc.history.slice().reverse().map((m) => h("tr", {}, h("td", { class: "mono" }, m.month), h("td", { class: "num r" }, usd(m.spent)), h("td", { class: "muted small" }, "spent"), h("td", { class: "num r pos" }, usd(m.income)), h("td", { class: "muted small" }, "income"), h("td", { class: "small r" }, m.income ? Math.round((m.spent / m.income) * 100) + "%" : "–"))))) ) : null,
     h("p", { class: "muted small" }, "An estimate from your past months, scaled by how this month is going, plus bills still due. Big one-off purchases cannot be predicted."));
 }
+function pinnedPanel(accts, rerender) {
+  const pinned = accts.filter((a) => a.pinned), tog = async (a, on) => { try { await api("/api/accounts/" + encodeURIComponent(a.id), send("PUT", { pinned: on })); rerender(); } catch (e) { fail(e); } };
+  const neg = (a) => a.kind === "credit" || a.kind === "loan";
+  return h("div", { class: "panel", "data-title": "My accounts" }, h("div", { class: "bar" }, h("h3", {}, "My accounts"), h("button", { class: "btn sm", onclick: () => { S.pinEdit = !S.pinEdit; rerender(); } }, S.pinEdit ? "Done" : "Choose")),
+    S.pinEdit ? h("div", {}, h("p", { class: "muted small" }, "Tick the accounts whose balance you want to see here."), accts.map((a) => h("label", { class: "check", style: "padding:3px 0" }, h("input", { type: "checkbox", checked: !!a.pinned, onchange: (e) => tog(a, e.target.checked) }), `${a.institution} · ${an(a)}`)))
+      : pinned.length ? pinned.map((a) => h("div", { class: "ev", style: "grid-template-columns:1fr auto", tabindex: 0, role: "link", onclick: () => { S.tab = "accounts"; S.acct = a.id; render(); } }, h("span", {}, an(a), h("div", { class: "muted small" }, a.institution)), h("span", { class: "num " + (neg(a) ? "neg" : "") }, usd(a.balance))))
+      : h("p", { class: "muted" }, "Pick the accounts you want to keep an eye on (checking, a card, one savings account) and their balances show here."));
+}
 async function viewOverview(root, rerender) {
-  const [o, hist, up, fc] = await Promise.all([api("/api/overview"), api("/api/history").catch(() => []), api("/api/upcoming?days=" + S.days), api("/api/forecast")]);
+  const [o, hist, up, fc, allAcc] = await Promise.all([api("/api/overview"), api("/api/history").catch(() => []), api("/api/upcoming?days=" + S.days), api("/api/forecast"), api("/api/accounts")]);
   const owed = (o.by_kind.credit || 0) + (o.by_kind.loan || 0), gross = Object.values(o.by_kind).reduce((s, v) => s + Math.abs(v), 0) || 1;
   const setDays = (d) => { S.days = Math.min(Math.max(parseInt(d) || 30, 1), 3650); store.set("gb_days", S.days); rerender(); };
   add(root, 
     o.alerts.length ? h("div", { class: "panel wide" }, h("h3", {}, "Needs attention"), h("div", { class: "alerts" }, o.alerts.slice(0, 6).map(alertRow))) : null,
     h("div", { class: "grid wide", "data-title": "Key numbers" }, kpi("Net worth", usd(o.net_worth), o.savings_total ? `savings ${usd(o.savings_total)}, ${usd(o.savings_free)} free` : `${o.accounts.length} accounts`), kpi("Owed on cards", usd(owed), "Credit + loans", "neg"),
       kpi("Subscriptions / month", usd(o.subscriptions_monthly), usd(o.subscriptions_monthly * 12) + " a year"), kpi(`Bills, next ${up.days} days`, usd(up.total), `${up.count} payments${up.others_total ? " · others pay " + usd(up.others_total) : ""}`)),
+    pinnedPanel(allAcc, rerender),
     h("div", { class: "panel wide" }, h("div", { class: "bar" }, h("h3", {}, "Net worth, last 30 days")), spark(hist)),
     h("div", { class: "panel" }, h("h3", {}, "Where the money sits"), h("div", { class: "comp" }, Object.entries(o.by_kind).map(([k, v]) => h("i", { style: `width:${(Math.abs(v) / gross) * 100}%;background:${(KIND[k] || ["", "var(--muted)"])[1]}`, title: `${(KIND[k] || [k])[0]} ${usd(v)}` }))),
       h("div", { class: "legend" }, Object.entries(o.by_kind).map(([k, v]) => h("span", {}, h("b", { style: "background:" + (KIND[k] || ["", "var(--muted)"])[1] }), `${(KIND[k] || [k])[0]} ${usd(v)}`)))),
@@ -329,7 +339,7 @@ async function txBrowser(root, fixed = {}, accounts = null) {
   }
   add(out, h("div", { class: "panel" },
     h("div", { class: "filters" }, field("f-q", "Search", "", { placeholder: "e.g. starbucks", oninput: (e) => { clearTimeout(F.t); F.t = setTimeout(() => { F.q = e.target.value; F.offset = 0; load(); }, 250); } }),
-      fixed.account_id ? null : select("f-acct", "Account", [["", "All accounts"], ...accts.map((a) => [a.id, `${a.institution} · ${a.name}`])], "", bind("f-acct", "account_id")),
+      fixed.account_id ? null : select("f-acct", "Account", [["", "All accounts"], ...accts.map((a) => [a.id, `${a.institution} · ${an(a)}`])], "", bind("f-acct", "account_id")),
       select("f-cat", "Category", [["", "All categories"], ...cats.map((c) => [c.name, c.name])], "", bind("f-cat", "category")),
       select("f-dir", "Direction", [["", "In and out"], ["out", "Money out"], ["in", "Money in"]], "", bind("f-dir", "direction")),
       field("f-min", "Min $", "", { type: "number", min: "0", step: "0.01", ...bind("f-min", "min_amount") }), field("f-max", "Max $", "", { type: "number", min: "0", step: "0.01", ...bind("f-max", "max_amount") }),
@@ -347,11 +357,15 @@ async function viewMovement(root) { await txBrowser(root); }
 async function viewAccounts(root, rerender) {
   if (S.acct) return accountDetail(root, rerender);
   const acc = await api("/api/accounts");
-  const groups = {}; for (const a of acc) (groups[a.kind] ||= []).push(a);
-  add(root, 
-    ...Object.entries(groups).map(([k, list]) => h("div", { class: "panel scroll" }, h("div", { class: "bar" }, h("h3", {}, (KIND[k] || [k])[0]), h("span", { class: "num " + (k === "credit" || k === "loan" ? "neg" : "") }, usd(list.reduce((s, a) => s + (a.balance || 0), 0)))),
-      h("table", {}, h("tbody", {}, list.map((a) => h("tr", { class: "click", tabindex: 0, onclick: () => { S.acct = a.id; rerender(); }, onkeydown: (e) => e.key === "Enter" && (S.acct = a.id, rerender()) },
-        h("td", {}, a.name, a.source === "manual" ? h("span", { class: "pill" }, "manual") : null), h("td", { class: "muted" }, a.institution), h("td", { class: "num r" }, usd(a.balance)), h("td", { class: "r muted" }, "›"))))))),
+  const groups = {}; for (const a of acc) (groups[a.item_id || "m:" + a.institution] ||= []).push(a);          // one panel per bank login, however many accounts it holds
+  const entries = Object.entries(groups), seen = {};
+  const signed = (a) => (a.kind === "credit" || a.kind === "loan" ? -1 : 1) * (a.balance || 0);
+  add(root,
+    ...entries.map(([k, list]) => { const inst = list[0].institution; seen[inst] = (seen[inst] || 0) + 1; const dupe = entries.filter(([, l]) => l[0].institution === inst).length > 1;
+      return h("div", { class: "panel scroll" }, h("div", { class: "bar" }, h("h3", {}, inst + (dupe ? ` (login ${seen[inst]})` : ""), h("span", { class: "muted small", style: "margin-left:8px;font-family:var(--body);font-weight:400" }, `${list.length} account${list.length === 1 ? "" : "s"}`)), h("span", { class: "num " + (list.reduce((t, a) => t + signed(a), 0) < 0 ? "neg" : "") }, usd(list.reduce((t, a) => t + signed(a), 0)))),
+        h("table", { style: "table-layout:fixed" }, h("colgroup", {}, h("col"), h("col", { style: "width:110px" }), h("col", { style: "width:130px" }), h("col", { style: "width:56px" }), h("col", { style: "width:24px" })), h("tbody", {}, list.map((a) => h("tr", { class: "click", tabindex: 0, onclick: () => { S.acct = a.id; rerender(); }, onkeydown: (e) => e.key === "Enter" && (S.acct = a.id, rerender()) },
+          h("td", {}, an(a), a.source === "manual" ? h("span", { class: "pill" }, "manual") : null), h("td", { class: "muted small" }, (KIND[a.kind] || [a.kind])[0]), h("td", { class: "num r " + (a.kind === "credit" || a.kind === "loan" ? "neg" : "") }, usd(a.balance)),
+          h("td", { class: "r" }, h("button", { class: "btn sm", title: a.pinned ? "Shown on Overview. Click to remove" : "Show this balance on Overview", "aria-pressed": !!a.pinned, onclick: async (e) => { e.stopPropagation(); try { await api("/api/accounts/" + encodeURIComponent(a.id), send("PUT", { pinned: !a.pinned })); rerender(); } catch (err) { fail(err); } } }, a.pinned ? "★" : "☆")), h("td", { class: "r muted" }, "›")))))); }),
     h("div", { class: "panel" }, h("h3", {}, "Add an account by hand"), h("p", { class: "muted small" }, "For cash, a card Plaid cannot reach, or anything you want to track yourself. Bind subscriptions and savings to it like any other account."),
       h("form", { class: "row", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/accounts", send("POST", { name: val("na-name"), institution: val("na-inst") || "Manual", kind: val("na-kind"), balance: num("na-bal") ?? 0, min_balance: num("na-min") })); toast("Added"); rerender(); } catch (err) { fail(err); } } },
         field("na-name", "Name", "", { required: true }), field("na-inst", "Where it is", ""), select("na-kind", "Type", [["cash", "Cash / bank"], ["credit", "Credit card"], ["investment", "Investment"], ["loan", "Loan"]], "cash"),
@@ -364,12 +378,12 @@ async function accountDetail(root, rerender) {
   add(root, 
     h("div", { class: "bar" }, h("button", { class: "btn sm", onclick: () => { S.acct = null; rerender(); } }, "‹ All accounts"), h("span", { class: "muted small" }, `${a.institution} · ${a.kind}${manual ? " · tracked by hand" : " · linked"}`)),
     d.alerts.length ? h("div", { class: "panel" }, h("div", { class: "alerts" }, d.alerts.map(alertRow))) : null,
-    h("div", { class: "grid" }, kpi(a.name, usd(a.balance), a.updated ? "updated " + ago(a.updated) : ""), kpi("In, last 30 days", usd(d.last_30_days.in), "", "pos"), kpi("Out, last 30 days", usd(d.last_30_days.out), `${d.last_30_days.count} transactions`, "neg")),
+    h("div", { class: "grid" }, kpi(an(a), usd(a.balance), a.updated ? "updated " + ago(a.updated) : ""), kpi("In, last 30 days", usd(d.last_30_days.in), "", "pos"), kpi("Out, last 30 days", usd(d.last_30_days.out), `${d.last_30_days.count} transactions`, "neg")),
     h("div", { class: "panel" }, h("h3", {}, "Balance history"), spark(d.history.map((x) => ({ balance: x.balance, date: x.ts })), 560, 110, "balance", "date")),
     h("div", { class: "panel" }, h("h3", {}, "Settings for this account"),
-      h("form", { class: "row", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/accounts/" + encodeURIComponent(a.id), send("PUT", { min_balance: num("ad-min") ?? -1, ...(manual ? { balance: num("ad-bal"), name: val("ad-name") } : {}) })); toast("Saved"); rerender(); } catch (err) { fail(err); } } },
-        manual ? field("ad-name", "Name", a.name) : null, manual ? field("ad-bal", "Balance", a.balance, { type: "number", step: "0.01" }) : null,
-        field("ad-min", "Warn me below ($)", a.min_balance ?? "", { type: "number", step: "0.01", min: "0", placeholder: "no warning" }), h("button", { class: "btn primary", type: "submit" }, "Save"),
+      h("form", { class: "row", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/accounts/" + encodeURIComponent(a.id), send("PUT", { min_balance: num("ad-min") ?? -1, nickname: val("ad-nick"), pinned: $("#ad-pin").checked, ...(manual ? { balance: num("ad-bal"), name: val("ad-name") } : {}) })); toast("Saved"); rerender(); } catch (err) { fail(err); } } },
+        field("ad-nick", "Nickname", a.nickname || "", { placeholder: a.name }), manual ? field("ad-name", "Name", a.name) : null, manual ? field("ad-bal", "Balance", a.balance, { type: "number", step: "0.01" }) : null,
+        field("ad-min", "Warn me below ($)", a.min_balance ?? "", { type: "number", step: "0.01", min: "0", placeholder: "no warning" }), h("label", { class: "check" }, h("input", { type: "checkbox", id: "ad-pin", checked: !!a.pinned }), "Show on Overview"), h("button", { class: "btn primary", type: "submit" }, "Save"),
         manual ? h("button", { class: "btn danger", type: "button", onclick: sure(null, "Sure? Deletes its data", async () => { try { await api("/api/accounts/" + encodeURIComponent(a.id), { method: "DELETE" }); S.acct = null; rerender(); } catch (err) { fail(err); } }) }, "Delete account") : null),
       manual ? null : h("p", { class: "muted small" }, "Balance and type come from your bank. You can still set a warning level.")),
     d.subscriptions.length ? h("div", { class: "panel" }, h("h3", {}, "Bills paid from this account"), d.subscriptions.map((s) => h("div", { class: "ev", style: "grid-template-columns:auto 1fr auto" }, h("span", { class: "when" }, s.next_due?.slice(5) || ""), h("span", {}, s.name, " ", h("span", { class: "muted small" }, s.label)), h("span", { class: "num neg" }, usd(-s.amount))))) : null,
@@ -436,6 +450,11 @@ const SK = [["savings", "Savings account"], ["cd", "Certificate of deposit"], ["
 const PRIO = [[1, "High"], [2, "Normal"], [3, "Low"]];
 const goalCard = (g, v, rerender) => {
   const placeOpts = [["", "Any savings"], ...v.places.filter((p) => p.free > 0.005).map((p) => [p.key, `${p.name} (${usd(p.free)} free)`])];
+  if (S.edit?.goal === g.id) return h("form", { class: "card", style: "display:grid;gap:8px", onsubmit: async (ev) => { ev.preventDefault();
+      try { await api(`/api/goals/${g.id}`, send("PUT", { name: val(`ge-name-${g.id}`), target: num(`ge-target-${g.id}`), deadline: val(`ge-due-${g.id}`), priority: parseInt(val(`ge-prio-${g.id}`)), monthly: num(`ge-monthly-${g.id}`) || 0, note: val(`ge-note-${g.id}`) })); S.edit = null; toast("Saved"); rerender(); } catch (e) { fail(e); } } },
+    h("b", {}, "Edit goal"), field(`ge-name-${g.id}`, "Name", g.name, { required: true }), field(`ge-target-${g.id}`, "Cost ($)", g.target, { type: "number", min: "0.01", step: "0.01", required: true }),
+    field(`ge-due-${g.id}`, "Needed by (empty for none)", g.deadline ?? "", { type: "date" }), select(`ge-prio-${g.id}`, "Priority", PRIO, g.priority), field(`ge-monthly-${g.id}`, "I will save per month ($)", g.monthly || "", { type: "number", min: "0", step: "0.01" }), field(`ge-note-${g.id}`, "Note", g.note || ""),
+    h("div", { class: "formbtns" }, h("button", { class: "btn primary", type: "submit" }, "Save goal"), h("button", { class: "btn", type: "button", onclick: () => { S.edit = null; rerender(); } }, "Cancel")));
   return h("div", { class: "card" + (g.status !== "active" ? " done" : "") },
     h("div", { class: "bar" }, h("b", {}, g.name, g.status !== "active" ? h("span", { class: "pill" }, g.status) : null, g.priority === 1 ? h("span", { class: "pill b" }, "high priority") : null), h("span", { class: "num" }, usd(g.target))),
     h("div", { style: "margin:8px 0" }, bar(g.pct, g.funded ? "var(--teal)" : "var(--brass)")),
@@ -449,7 +468,7 @@ const goalCard = (g, v, rerender) => {
         g.allocated > 0 ? h("button", { class: "btn sm", onclick: async () => { try { await api(`/api/goals/${g.id}/release`, send("POST", {})); toast("Released to free savings"); rerender(); } catch (e) { fail(e); } } }, "Release all") : null,
         h("button", { class: "btn sm", onclick: sure(null, "Sure? Marks it bought", async () => { await api(`/api/goals/${g.id}/close`, send("POST", { status: "done" })); rerender(); }) }, "Bought it")] :
         h("button", { class: "btn sm", onclick: async () => { await api(`/api/goals/${g.id}/close`, send("POST", { status: "active" })); rerender(); } }, "Reopen"),
-      h("button", { class: "btn sm", onclick: () => { S.edit = { goal: g.id }; rerender(); window.scrollTo(0, 0); } }, "Edit"),
+      h("button", { class: "btn sm", onclick: () => { S.edit = { goal: g.id }; rerender(); } }, "Edit"),
       h("button", { class: "btn sm", onclick: () => discuss({ kind: "goal", ref_id: g.id }, `About my goal: ${g.name}`) }, "Discuss with agent"),
       h("button", { class: "btn sm danger", onclick: sure(null, "Sure?", async () => { await api(`/api/goals/${g.id}`, { method: "DELETE" }); rerender(); }) }, "Delete")));
 };
@@ -458,7 +477,7 @@ async function discuss(link, title) {
 }
 async function viewSavings(root, rerender) {
   const [v, accts, mat] = await Promise.all([api("/api/goals"), api("/api/accounts"), api("/api/maturities")]);
-  const editing = S.edit?.goal ? v.items.find((g) => g.id === S.edit.goal) : null, ep = S.edit?.place ? S.edit.place : null;
+  const editing = null, ep = S.edit?.place ? S.edit.place : null;
   const active = v.items.filter((g) => g.status === "active"), closed = v.items.filter((g) => g.status !== "active");
   const gform = h("form", { class: "subform", onsubmit: async (ev) => { ev.preventDefault();
     const body = { name: val("gl-name"), target: num("gl-target"), deadline: editing ? val("gl-due") : val("gl-due") || null, priority: parseInt(val("gl-prio")), monthly: num("gl-monthly") || 0, note: val("gl-note"), ...(editing ? {} : { auto_allocate: $("#gl-use").checked }) };
@@ -480,7 +499,7 @@ async function viewSavings(root, rerender) {
           h("td", { class: "num r" }, usd(p.earmarked)), h("td", { class: "num r " + (p.free < 0 ? "neg" : "pos") }, usd(p.free)),
           h("td", { class: "r", style: "white-space:nowrap" }, p.origin === "manual" || p.origin === "linked" ? [h("button", { class: "btn sm", onclick: () => { S.edit = { place: p.id }; rerender(); window.scrollTo(0, 0); } }, "Edit"), " ", h("button", { class: "btn sm danger", onclick: sure(null, "Sure?", async () => { await api(`/api/savings/${p.id}`, { method: "DELETE" }); rerender(); }) }, "Remove")] :
             h("button", { class: "btn sm", onclick: async () => { await api(`/api/accounts/${encodeURIComponent(p.account_id)}`, send("PUT", { savings_mode: "no" })); rerender(); } }, "Not savings")))))) : h("p", { class: "muted" }, "No savings yet."),
-      h("div", { class: "filters", style: "margin-top:14px" }, select("cs-acct", "Count another account as savings", [["", "Choose an account…"], ...accts.filter((a) => a.kind === "cash" && !v.places.some((p) => p.account_id === a.id)).map((a) => [a.id, `${a.institution} · ${a.name}`])], ""),
+      h("div", { class: "filters", style: "margin-top:14px" }, select("cs-acct", "Count another account as savings", [["", "Choose an account…"], ...accts.filter((a) => a.kind === "cash" && !v.places.some((p) => p.account_id === a.id)).map((a) => [a.id, `${a.institution} · ${an(a)}`])], ""),
         h("button", { class: "btn", onclick: async () => { const id = val("cs-acct"); if (!id) return toast("Choose an account"); await api(`/api/accounts/${encodeURIComponent(id)}`, send("PUT", { savings_mode: "yes" })); rerender(); } }, "Count it"))),
     h("div", { class: "panel" }, h("h3", {}, ep ? "Edit savings item" : "Add savings or a CD by hand"), h("p", { class: "muted small" }, "For a CD, bond or savings jar your bank does not share. Type its balance, or follow a linked account's balance."),
       (() => { const e = ep ? v.places.find((p) => p.id === ep && p.origin !== "account") : null; return h("form", { class: "subform", onsubmit: async (ev) => { ev.preventDefault();
@@ -488,7 +507,7 @@ async function viewSavings(root, rerender) {
         try { await api(e ? `/api/savings/${e.id}` : "/api/savings", send(e ? "PUT" : "POST", body)); S.edit = null; toast("Saved"); rerender(); } catch (err) { fail(err); } } },
         field("sv-name", "Name", e?.name, { required: true }), select("sv-kind", "Type", SK, e?.kind ?? "savings"), field("sv-inst", "Institution", e?.institution), field("sv-bal", "Balance", e?.balance, { type: "number", step: "0.01", min: "0" }),
         field("sv-apy", "APY %", e?.apy ?? "", { type: "number", step: "0.001", min: "0", max: "100" }), field("sv-open", "Opened", "", { type: "date" }), field("sv-mat", "Matures (CDs)", e?.maturity ?? "", { type: "date" }), field("sv-term", "Term (months)", "", { type: "number", min: "1" }),
-        select("sv-acct", "Follow an account's balance", [["", "None, I type the balance"], ...accts.filter((a) => a.kind === "cash").map((a) => [a.id, `${a.institution} · ${a.name}`])], e?.account_id ?? ""),
+        select("sv-acct", "Follow an account's balance", [["", "None, I type the balance"], ...accts.filter((a) => a.kind === "cash").map((a) => [a.id, `${a.institution} · ${an(a)}`])], e?.account_id ?? ""),
         h("div", { class: "formbtns" }, h("button", { class: "btn primary", type: "submit" }, e ? "Save" : "Add"), e ? h("button", { class: "btn", type: "button", onclick: () => { S.edit = null; rerender(); } }, "Cancel") : null)); })()),
     mat.length ? h("div", { class: "panel" }, h("h3", {}, "When your CDs and bonds mature"), h("p", { class: "muted small" }, "What each one is worth then, what is already pinned to goals, and where the free money would go (your highest-priority goals first)."),
       h("div", { class: "cards" }, mat.map((m) => h("div", { class: "card" }, h("div", { class: "bar" }, h("b", {}, m.name), h("span", { class: "small" }, `${m.maturity} · ${m.days}d`)),
@@ -536,7 +555,7 @@ async function viewPlanner(root, rerender) {
           h("button", { class: "btn sm", onclick: async () => { await api("/api/suggestions/dismiss", send("POST", { key: s.key })); rerender(); } }, "Not income"))))) : null,
       h("form", { class: "subform", style: "margin-top:12px", onsubmit: async (e) => { e.preventDefault(); const preset = val("in-cycle"); try { await api("/api/incomes", send("POST", { name: val("in-name"), amount: num("in-amt"), next_date: val("in-next"), cycle: preset, account_id: val("in-acct") || null })); rerender(); } catch (err) { fail(err); } } },
         field("in-name", "Source", "", { required: true }), field("in-amt", "Amount", "", { type: "number", step: "0.01", min: "0.01", required: true }), select("in-cycle", "Paid", PRESETS.filter(([k]) => k !== "custom"), "monthly"), field("in-next", "Next payday", today(), { type: "date", required: true }),
-        select("in-acct", "Into account", [["", "Not set"], ...accts.map((a) => [a.id, `${a.institution} · ${a.name}`])], ""), h("button", { class: "btn primary", type: "submit" }, "Add income"))),
+        select("in-acct", "Into account", [["", "Not set"], ...accts.map((a) => [a.id, `${a.institution} · ${an(a)}`])], ""), h("button", { class: "btn primary", type: "submit" }, "Add income"))),
     /* ---------- goals ---------- */
     h("div", { class: "panel" }, h("div", { class: "bar" }, h("h3", {}, "Goals"), h("button", { class: "btn sm", onclick: () => { S.tab = "savings"; render(); } }, "Manage on Savings")),
       h("p", { class: "muted small" }, `Free savings: ${usd(gv.free)}. A goal's monthly amount comes out of the plan above.`),
