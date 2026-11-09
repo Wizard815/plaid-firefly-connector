@@ -9,7 +9,7 @@ Pondering Orb ──(read-only key)──► CoinGateway ──► goblin-alice 
 
 * **CoinGateway** (`ROLE=gateway`): login + routing, Plaid webhook relay (item_id → goblin map only),
   and `/api/v1/summary` for Pondering Orb. Stores no tokens, balances or transactions.
-* **Goblin** (`ROLE=goblin`): one person's data. Shares with the gateway/Orb only what `share:` allows.
+* **Goblin** (`ROLE=goblin`): one person's data. Shares with the gateway/Orb only what that person ticks under Settings, Sharing (or `share:` in `goblins.yaml` as a starting value).
   Shareable: `net_worth`, `subscriptions`, `bills` (totals), `bill_list` (each bill for the next 30 days), `alerts` (counts),
   `alert_list` (each alert), `savings`, `goals`, `robinhood_main`, `robinhood_agent`. The lists are separate opt-ins from the totals.
 * **Connectors** (one container each, read-only, GET-only, secret-protected):
@@ -65,13 +65,22 @@ docker compose -f docker-compose.generated.yml up -d --build
 1. **Admin page** at `http://127.0.0.1:6767/admin` (the admin token): add the other people, enter your **Plaid keys** once for everyone (Client ID and secret from dashboard.plaid.com, Developers, Keys, and Sandbox or Production), set the **public address** for webhooks, and set the budget and limits. Each person's login token and the one command to start their container are shown there.
    Or skip the admin page: each person can enter their own keys under Settings, Connect & import, **Plaid keys** (stored encrypted in their own container).
 2. Open `http://127.0.0.1:6767`, sign in with your name and token, and in Settings, Connect & import, press **Test the keys**, then **Link an account**.
-3. CalDAV, Robinhood, models and notifications are all on the Settings page too. `.secrets/plaid.env` and `.secrets/<name>.integrations.env` still work if you prefer files, but nothing needs them.
+3. The Pondering Orb key, CalDAV, Robinhood, models and notifications are all set up in the app too (admin page for the Orb key, Settings for the rest). `.secrets/plaid.env` and `.secrets/<name>.integrations.env` still work if you prefer files, but nothing needs them.
 
 ### Connecting your real bank
 1. In the app, Settings, Connect & import, **Plaid keys**: choose **Production**, enter your Client ID and Production secret (or let the admin do it for everyone), Save, and press **Test the keys**. Plaid may need to approve production access first; until then use Sandbox with Plaid's test login (`user_good` / `pass_good`).
 2. Press **Link an account** and sign in to the bank in the window that opens.
 3. Banks that send you to **their own website** to sign in (OAuth: Capital One and many other large banks) need an HTTPS address. Set the **Public address** on the admin page (it is also used for webhooks) and add `https://your-address/` under Developers, API, **Allowed redirect URIs** in the Plaid dashboard. After you sign in at the bank it sends you back and the app finishes the link by itself. Plaid may also ask you to complete an OAuth questionnaire in the dashboard before some banks appear in production.
 4. Link one bank first and check the numbers, then add the rest. The cost panel in the same tab shows what Plaid will bill.
+
+### Pondering Orb
+1. On the gateway's admin page, under **Pondering Orb**, press **Make a key**. It is shown once; only its hash is kept. (`orb_key: true` in `goblins.yaml` still works if you prefer a file.)
+2. Each person chooses what the Orb may see under Settings, **Sharing** (totals like net worth, bills, goals, savings; the itemised lists are separate opt-ins; never transactions).
+3. In Pondering Orb, set `GOBLIN_ORB_KEY` to that key and point its Goblin-Bank widget at the gateway: `http://gateway:8000` if the Orb runs in the same Docker network, otherwise this server's address (the one from step 4 below, or `http://<server>:6767` on your network). The Orb calls `GET /api/v1/summary` with `Authorization: Bearer <key>`. Revoke the key on the admin page any time.
+Nothing about this changed with the new setup: the key, the endpoint and the shape of the summary are the same.
+
+### Calendar (CalDAV)
+Settings, **Calendar**: enter your CalDAV calendar address, user and password (stored encrypted in that person's container; `.secrets/<name>.integrations.env` is only an optional fallback) and press **Test connection**. Then, on the Subscriptions tab, **Push to CalDAV now** puts every bill into the calendar and **Download .ics** gives the same bills for any calendar app. Reading calendar events as money amounts is not built yet.
 
 ### Which Plaid site is which
 * **dashboard.plaid.com** is the developer dashboard: your Client ID, secrets, allowed redirect URIs, API version and usage. This is what Goblin Bank is set up with.

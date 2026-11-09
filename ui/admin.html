@@ -19,6 +19,7 @@ input,button{font:inherit;color:inherit;background:var(--bg);border:1px solid va
   <div class="panel" id="out" hidden></div>
   <div class="panel" id="people" hidden></div>
   <div class="panel" id="plaid" hidden></div>
+  <div class="panel" id="orb" hidden></div>
 </main>
 <script>
 const $ = (s) => document.querySelector(s), out = $("#out"), msg = $("#msg");
@@ -107,6 +108,22 @@ async function renderPlaid(rows) {
     el("div", { class: "row" }, save), note);
   box.hidden = false;
 }
+const orbRes = el("div");
+async function renderOrb() {
+  const box = $("#orb"), d = await call("/admin/orb"), note = el("p", { class: "small muted" });
+  const name = el("input", { id: "ok-n", placeholder: "name, e.g. Pondering Orb", value: "Pondering Orb", style: "flex:1;min-width:200px" }), go = el("button", { class: "primary", type: "button" }, "Make a key");
+  go.addEventListener("click", async () => {
+    try { const r = await call("/admin/orb/key", "POST", { name: name.value.trim() });
+      orbRes.replaceChildren(el("p", { class: "small" }, "Copy this key now. It is shown once and only its hash is kept:"), el("pre", { style: "white-space:pre-wrap;word-break:break-all;margin:0" }, r.key),
+        el("p", { class: "small muted" }, "In Pondering Orb set GOBLIN_ORB_KEY to this key and point its Goblin-Bank widget at this gateway's address (inside Docker: http://gateway:8000, from another machine: this server's address). The Orb calls GET /api/v1/summary."));
+      renderOrb(); } catch (e) { note.textContent = e.message; note.className = "small err"; } });
+  box.replaceChildren(el("h2", { style: "margin:0 0 6px;font-size:1.1rem" }, "Pondering Orb"),
+    el("p", { class: "small muted" }, "A read-only key lets the Pondering Orb read the summary each person has chosen to share (Settings, Sharing). It can never see transactions or change anything. Revoke it here any time."),
+    d.keys.length ? el("table", {}, el("tbody", {}, d.keys.map((k) => el("tr", {}, el("td", {}, k.name), el("td", { class: "small muted" }, "made " + k.created), el("td", { class: "n" }, (() => { const b = el("button", {}, "Revoke"); b.addEventListener("click", async () => { if (!confirm("Revoke this key? The Orb stops getting data until you give it a new one.")) return; try { await call("/admin/orb/key/" + k.id, "DELETE"); renderOrb(); } catch (e) { note.textContent = e.message; note.className = "small err"; } }); return b; })())))))
+      : el("p", { class: "small muted" }, d.from_config ? `${d.from_config} key from the config file is active.` : "No key yet."),
+    el("div", { class: "row", style: "margin-top:10px" }, name, go), orbRes, note);
+  box.hidden = false;
+}
 async function show() {
   msg.textContent = "Checking…"; msg.className = "small muted";
   try {
@@ -119,7 +136,7 @@ async function show() {
           el("td", { class: "n" }, ["app", "api_token", "webhook"].reduce((a, k) => a + calls(g, k, "client_errors") + calls(g, k, "server_errors"), 0)))))),
       el("p", { class: "small muted" }, `Pondering Orb summary calls: ${d.orb.calls || 0}. All calls: ${d.total.calls} (${d.total.client_errors} refused or invalid, ${d.total.server_errors} server errors), since the gateway last started or was cleared ${Math.round(d.since_seconds / 60)} minutes ago.`),
       el("p", { class: "small muted" }, d.note));
-    out.hidden = false; renderPeople(rows); renderPlaid(rows).catch(() => {}); msg.textContent = "Updated " + new Date().toLocaleTimeString();
+    out.hidden = false; renderPeople(rows); renderPlaid(rows).catch(() => {}); renderOrb().catch(() => {}); msg.textContent = "Updated " + new Date().toLocaleTimeString();
   } catch (e) { msg.textContent = e.message; msg.className = "small err"; out.hidden = true; }
 }
 $("#login").addEventListener("submit", (e) => { e.preventDefault(); show(); });

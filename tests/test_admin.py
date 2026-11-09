@@ -150,3 +150,36 @@ def test_people_can_be_added_from_the_admin_page_and_survive_a_restart(tmp_path,
     assert gw2.delete("/admin/people/alice", headers=A).status_code == 404
     assert gw2.delete("/admin/people/bob", headers=A).status_code == 200
     assert [g["name"] for g in gw2.get("/admin/status", headers=A).json()["goblins"]] == ["alice"]
+
+
+def test_a_pondering_orb_key_made_on_the_admin_page_works_survives_a_restart_and_can_be_revoked(tmp_path, monkeypatch):
+    import httpx
+    from cryptography.fernet import Fernet
+    from fastapi.testclient import TestClient
+    from goblinbank import gateway, goblin
+    from goblinbank.db import DB
+    from goblinbank.security import sha256
+    for k, v in {"GOBLIN_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode()}.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("GATEWAY_STATE", str(tmp_path / "s.json"))
+    db = DB(":memory:")
+    db.conn.execute("INSERT INTO accounts(id,source,institution,name,kind,balance) VALUES('c','manual','M','Cash','cash',1234.5)"); db.conn.commit()
+    g = TestClient(goblin.create_app(db=db))
+    g.put("/api/settings", headers={"X-Internal-Secret": "isec"}, json={"share": ["net_worth"]})
+
+    def to_goblin(req: httpx.Request):
+        r = g.request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
+        return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
+    cfg = {"goblins": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("t")}], "orb_keys": [], "admin_token_sha256": sha256("adm")}
+    make = lambda: TestClient(gateway.create_app(dict(cfg), transport=httpx.MockTransport(to_goblin)))
+    gw, A = make(), {"Authorization": "Bearer adm"}
+    assert gw.post("/admin/orb/key", json={}).status_code == 401
+    assert gw.get("/api/v1/summary", headers={"Authorization": "Bearer nope"}).status_code == 401
+    k = gw.post("/admin/orb/key", headers=A, json={"name": "Orb"}).json()
+    summ = gw.get("/api/v1/summary", headers={"Authorization": "Bearer " + k["key"]})
+    assert summ.status_code == 200 and summ.json()["goblins"]["alice"]["net_worth"] == 1234.5 and "transactions" not in summ.text      # only what was ticked
+    assert k["key"] not in str(gw.get("/admin/orb", headers=A).json()) and k["key"] not in (tmp_path / "s.json").read_text()        # the key itself is never kept
+    gw2 = make()                                                                                                                    # a restart keeps it
+    assert gw2.get("/api/v1/summary", headers={"Authorization": "Bearer " + k["key"]}).status_code == 200
+    assert gw2.delete("/admin/orb/key/" + k["id"], headers=A).status_code == 200
+    assert gw2.get("/api/v1/summary", headers={"Authorization": "Bearer " + k["key"]}).status_code == 401

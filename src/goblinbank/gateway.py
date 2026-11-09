@@ -52,12 +52,17 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     cfg = config or load_config(os.environ.get("GATEWAY_CONFIG", "/config/gateway.yaml"))
     metrics = Metrics()
     goblins = {g["name"]: g for g in cfg.get("goblins", [])}
+    orb_keys = list(cfg.get("orb_keys", []))                    # from gateway.yaml; keys made on the admin page are added to this same list (they are remembered in the state file)
+    orb_added: list[dict] = []
     state_path = Path(os.environ.get("GATEWAY_STATE", cfg.get("state_file", "")) or "")
     policy: dict = {"default": {}, "people": {}}               # Plaid limits set on the admin page; goblins fetch theirs and obey (budget, daily call cap, how often to ask Plaid)
     added: dict[str, dict] = {}                               # people added from the admin page (name, address, secrets' hash): the same facts gateway.yaml holds
     if str(state_path) not in ("", "."):
         try:
             saved = json.loads(state_path.read_text())
+            for k in saved.get("orb", []):
+                orb_added.append(k)
+                orb_keys.append({"sha256": k["sha256"], "scopes": ["summary:read"]})
             policy.update({k: v for k, v in (saved.get("policy") or {}).items() if k in policy})
             for g in saved.get("people", []):
                 if g["name"] not in goblins:
@@ -70,10 +75,9 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             raise HTTPException(409, "this gateway has no writable state folder; add people with goblins.yaml instead")
         state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"people": list(added.values()), "policy": policy}))
+        tmp.write_text(json.dumps({"people": list(added.values()), "policy": policy, "orb": orb_added}))
         tmp.chmod(0o600)
         tmp.replace(state_path)
-    orb_keys = cfg.get("orb_keys", [])
     items: dict[str, str] = {}
     client = httpx.Client(timeout=20, transport=transport)
     app = FastAPI(title="CoinGateway")
@@ -335,6 +339,39 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             except ValueError:
                 raise HTTPException(502, f"Plaid answered {r.status_code}")
         return {"ok": True, "env": d.get("plaid_env") or "sandbox"}
+
+    @app.get("/admin/orb")
+    def admin_orb_list(request: Request):
+        """Pondering Orb keys made here (name, id, date; never the key itself) and how many come from the config file."""
+        admin(request)
+        return {"keys": [{"id": k["id"], "name": k["name"], "created": k["created"]} for k in orb_added], "from_config": len(cfg.get("orb_keys", []))}
+
+    @app.post("/admin/orb/key")
+    async def admin_orb_create(request: Request):
+        """Make a read-only key for Pondering Orb. Shown once; only its hash is kept. The Orb sees only what each person ticked under Settings, Sharing."""
+        admin(request)
+        name = str((await request.json()).get("name", "") or "Pondering Orb").strip()[:60]
+        key = "orb_" + secrets.token_urlsafe(32)
+        entry = {"id": sha256(key)[:10], "name": name, "created": time.strftime("%Y-%m-%d"), "sha256": sha256(key)}
+        orb_added.append(entry)
+        orb_keys.append({"sha256": entry["sha256"], "scopes": ["summary:read"]})
+        try:
+            save_state()
+        except HTTPException:
+            orb_added.pop(); orb_keys.pop()
+            raise
+        return {"id": entry["id"], "name": name, "key": key}
+
+    @app.delete("/admin/orb/key/{kid}")
+    def admin_orb_delete(request: Request, kid: str):
+        admin(request)
+        hit = next((k for k in orb_added if k["id"] == kid), None)
+        if not hit:
+            raise HTTPException(404, "not found")
+        orb_added.remove(hit)
+        orb_keys[:] = [k for k in orb_keys if k["sha256"] != hit["sha256"]]
+        save_state()
+        return {"removed": kid}
 
     @app.post("/admin/people")
     async def admin_add_person(request: Request):
