@@ -71,6 +71,19 @@ PLAID_ENV=sandbox
 ```
 Skip this and add it later if you only want to look around: manual accounts, CSV imports and everything else work without Plaid. Optional per-person CalDAV settings are in `.secrets/<name>.integrations.env` (`examples/integrations.env.example`) or on the Settings page.
 
+### Connecting your real bank
+1. In the Plaid dashboard, copy your **Client ID** and your **Production** secret (Developers, Keys). Put them in `.secrets/plaid.env` with `PLAID_ENV=production`, then `docker compose -f docker-compose.generated.yml up -d`.
+2. Open the app, Settings, **Connect & import**, press **Link an account** and sign in to the bank in the window that opens.
+3. Banks that send you to **their own website** to sign in (OAuth: Capital One and many other large banks) also need a redirect address. Set `PLAID_REDIRECT_URI=https://your-address/` in `.secrets/plaid.env` (HTTPS, trailing slash, your app's own address from step 5 below) and add that exact string under Developers, API, **Allowed redirect URIs** in the Plaid dashboard. After you sign in at the bank, it sends you back to the app, which finishes the link by itself. Plaid may also ask you to complete an OAuth questionnaire in the dashboard before some banks appear in production.
+4. Link one bank first and check the numbers, then add the rest. The cost panel in the same tab shows what Plaid will bill.
+
+### Keeping the Plaid bill small
+Plaid bills per linked bank login per month, about $0.45 each at the list price (Transactions $0.30 + Recurring $0.15), plus $0.18 if it has an investment account. Ways to lower it:
+* **Turn off Plaid's recurring detection** (Settings, Connect & import): saves $0.15 per item per month. The app finds repeating payments itself.
+* **Link only the accounts that change a lot.** A savings account or IRA that you look at once a month does not need a live feed: add it by hand, or drop its CSV in `data/<name>/imports/` (on a hand-added account, open it and use **Import a CSV from your bank**: it finds the date, description and amount, or Debit/Credit, columns by name, picks up a running Balance column, and never double counts an overlapping download; Cash App, PayPal and Venmo files have their own importer).
+* **Every person who links the same bank is billed again**, including a joint account linked by two people.
+* Banks generally do not email scheduled CSV reports: Huntington, Discover, Capital One and Axos offer manual downloads (CSV or QFX) and PDF statements, plus balance and transaction alerts. There is no setting that mails a recurring CSV that I could confirm, so a monthly manual download for the quiet accounts is the realistic no-Plaid route.
+
 ### 4. Start it
 ```bash
 docker compose -f docker-compose.generated.yml up -d --build
@@ -136,7 +149,7 @@ python3 scripts/dev_stack.py          # gateway + goblin with random data + a fa
 The synthetic server follows Plaid's documented response shapes. It proves our services work together; it cannot prove real Plaid agrees. Get free sandbox keys from Plaid before trusting it with real banks.
 
 ## Not done yet
-* Plaid is tested against the real Sandbox, never production. Banks that use OAuth (Huntington, Capital One and others) need a registered HTTPS redirect address, and that return path is not built yet.
+* Plaid is tested against the real Sandbox, never production. Banks that sign you in on their own website (OAuth) need `PLAID_REDIRECT_URI` set and registered with Plaid; the return step is built but has not been tried against a real bank.
 * The agent is tested with scripted fake models. Try your real local model and see which tools it handles well.
 * rh-agent tool names/auth are unverified (Robinhood docs don't publish them); configure via env.
 * CalDAV *reading* (event -> money amount) and investments holdings via Plaid.

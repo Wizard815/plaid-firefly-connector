@@ -391,6 +391,10 @@ async function accountDetail(root, rerender) {
         manual ? h("button", { class: "btn danger", type: "button", onclick: sure(null, "Sure? Deletes its data", async () => { try { await api("/api/accounts/" + encodeURIComponent(a.id), { method: "DELETE" }); S.acct = null; rerender(); } catch (err) { fail(err); } }) }, "Delete account") : null),
       h("p", { class: "muted small" }, (manual ? "" : "Balance and type come from your bank. You can still set a warning level. ") + "For a joint account that you and another goblin both link, set your share so it is not counted twice."),),
     d.subscriptions.length ? h("div", { class: "panel" }, h("h3", {}, "Bills paid from this account"), d.subscriptions.map((s) => h("div", { class: "ev", style: "grid-template-columns:auto 1fr auto" }, h("span", { class: "when" }, s.next_due?.slice(5) || ""), h("span", {}, s.name, " ", h("span", { class: "muted small" }, s.label)), h("span", { class: "num neg" }, usd(-s.amount))))) : null,
+    manual ? h("div", { class: "panel" }, h("h3", {}, "Import a CSV from your bank"),
+      h("p", { class: "muted small" }, "Download the transactions from your bank or card website (Capital One, Discover, Huntington, Axos and most others offer CSV) and choose the file here. A file with a Balance column also updates this account's balance. Importing an overlapping file twice never double counts. This costs nothing, unlike a live bank feed."),
+      h("div", { class: "chips" }, h("input", { type: "file", id: "bank-csv", accept: ".csv,text/csv" }), h("label", { class: "check" }, h("input", { type: "checkbox", id: "bank-flip" }), "Purchases are positive numbers in this file (typical for credit cards)"),
+        h("button", { class: "btn", onclick: async () => { const f = $("#bank-csv").files[0]; if (!f) return toast("Choose a CSV first"); try { const r = await api(`/import/bank-csv?account_id=${encodeURIComponent(a.id)}&flip=${$("#bank-flip").checked}`, { method: "POST", headers: { "Content-Type": "text/csv" }, body: await f.text() }); toast(`${r.added} new of ${r.rows} rows` + (r.balance != null ? `. Balance set to ${usd(r.balance)}` : "")); rerender(); } catch (e) { fail(e); } } }, "Import"))) : null,
     manual ? h("div", { class: "panel" }, h("h3", {}, "Add a transaction"),
       h("form", { class: "row", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/transactions", send("POST", { account_id: a.id, date: val("at-date"), name: val("at-name"), amount: (val("at-dir") === "out" ? -1 : 1) * Math.abs(num("at-amt")) })); toast("Added"); rerender(); } catch (err) { fail(err); } } },
         field("at-date", "Date", today(), { type: "date", required: true }), field("at-name", "Description", "", { required: true }), select("at-dir", "Direction", [["out", "Money out"], ["in", "Money in"]], "out"), field("at-amt", "Amount", "", { type: "number", step: "0.01", min: "0", required: true }), h("button", { class: "btn primary", type: "submit" }, "Add"))) : null);
@@ -684,10 +688,10 @@ async function tabConnect(root, rerender) {
   const dis = S.demo, stale = (d) => Math.round((Date.now() - new Date(d + "T00:00:00Z")) / 864e5);
   add(root, 
     h("div", { class: "panel" }, h("h3", {}, "Banks, cards, savings and IRA (Plaid)"), h("p", { class: "muted small" }, st.plaid.configured ? `Plaid is set up (${st.plaid.env}). Tokens are encrypted in your own container; the gateway never sees them.` : "Plaid is not configured. Add your client ID and secret to .secrets/plaid.env and restart."),
-      h("div", { class: "chips" }, h("button", { class: "btn primary", disabled: dis, onclick: async () => { try { const { link_token } = await api("/plaid/link-token", { method: "POST" }); await loadPlaid(); Plaid.create({ token: link_token, onSuccess: async (pt, meta) => { const r = await api("/plaid/exchange", send("POST", { public_token: pt, institution: meta.institution?.name || "" })); toast(`Linked. ${r.sync.added} transactions pulled.`); rerender(); } }).open(); } catch (e) { fail(e); } } }, "Link an account"),
+      h("div", { class: "chips" }, h("button", { class: "btn primary", disabled: dis, onclick: async () => { try { await openLink(null, rerender); } catch (e) { fail(e); } } }, "Link an account"),
         h("button", { class: "btn", disabled: dis, onclick: async () => { try { await api("/sync", { method: "POST" }); toast("Synced"); } catch (e) { fail(e); } } }, "Sync now")),
       st.plaid.items.length ? h("div", { style: "margin-top:12px" }, st.plaid.items.map((it) => h("div", { class: "ev", style: "grid-template-columns:1fr auto auto" }, h("span", {}, it.institution || "Bank"),
-        h("button", { class: "btn sm", disabled: dis, onclick: async () => { try { const { link_token } = await api("/plaid/link-token?item_id=" + encodeURIComponent(it.item_id), { method: "POST" }); await loadPlaid(); Plaid.create({ token: link_token, onSuccess: () => toast("Relinked") }).open(); } catch (e) { fail(e); } } }, "Relink"),
+        h("button", { class: "btn sm", disabled: dis, onclick: async () => { try { await openLink(it.item_id, rerender); } catch (e) { fail(e); } } }, "Relink"),
         h("button", { class: "btn sm danger", onclick: sure(null, "Sure? Deletes its data", async () => { try { await api("/api/plaid/items/" + encodeURIComponent(it.item_id), { method: "DELETE" }); toast("Unlinked"); rerender(); } catch (e) { fail(e); } }) }, "Unlink")))) : null),
     h("div", { class: "panel" }, h("h3", {}, "Automatic sync"), h("p", { class: "muted small" }, "Pulls your banks and imports on its own, so the numbers are fresh without pressing Sync. Every call counts toward the Plaid usage below."),
       h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); saveCfg({ sync_minutes: val("s-sync") }, rerender); } }, field("s-sync", "Every (minutes, 0 = off)", cfg.sync_minutes, { type: "number", min: "0", placeholder: "15" }), h("button", { class: "btn primary", type: "submit" }, "Save"))),
@@ -704,6 +708,20 @@ async function tabConnect(root, rerender) {
       h("form", { class: "row", onsubmit: (e) => { e.preventDefault(); saveCfg({ plaid_rate_item_month: val("s-rate"), plaid_budget_month: val("s-bud"), plaid_daily_cap: val("s-cap"), plaid_use_recurring: $("#s-rec").checked ? "on" : "off" }, rerender); } },
         h("label", { class: "check", style: "grid-column:1/-1" }, h("input", { type: "checkbox", id: "s-rec", checked: use.use_recurring }), "Use Plaid's recurring-payment detection (adds $0.15 per item a month). Off: this app finds repeating payments itself."),
         field("s-rate", "Own rate per item per month ($, optional)", cfg.plaid_rate_item_month, { type: "number", step: "0.01", min: "0" }), field("s-bud", "Monthly budget ($)", cfg.plaid_budget_month, { type: "number", step: "0.01", min: "0" }), field("s-cap", "Daily call cap", cfg.plaid_daily_cap, { type: "number", min: "0", placeholder: "500" }), h("button", { class: "btn primary", type: "submit" }, "Save"))));
+}
+/* Plaid Link, including banks that sign you in on their own site: the token is kept so the page can finish the link when the bank sends you back with ?oauth_state_id= */
+async function openLink(itemId, rerender, resume) {
+  await loadPlaid();
+  let token;
+  if (resume) { token = localStorage.getItem("gb_link_token"); itemId = localStorage.getItem("gb_link_item") || null; }
+  else { token = (await api("/plaid/link-token" + (itemId ? "?item_id=" + encodeURIComponent(itemId) : ""), { method: "POST" })).link_token; try { localStorage.setItem("gb_link_token", token); localStorage.setItem("gb_link_item", itemId || ""); } catch {} }
+  if (!token) throw new Error("This sign-in expired. Start again with Link an account.");
+  const cfg = { token, onExit: (err) => { if (err) fail(new Error(err.display_message || err.error_message || "Linking stopped")); },
+    onSuccess: async (pt, meta) => { try { localStorage.removeItem("gb_link_token"); } catch {}
+      if (itemId) { toast("Relinked"); return rerender(); }
+      const r = await api("/plaid/exchange", send("POST", { public_token: pt, institution: meta.institution?.name || "" })); toast(`Linked. ${r.sync.added} transactions pulled.`); rerender(); } };
+  if (resume) cfg.receivedRedirectUri = location.href;
+  Plaid.create(cfg).open();
 }
 const loadPlaid = () => new Promise((ok, no) => { if (window.Plaid) return ok(); const sc = document.createElement("script"); sc.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js"; sc.onload = ok; sc.onerror = no; document.head.append(sc); });
 const dot = (st) => h("span", { class: "pill " + (st === "up" ? "t" : st === "down" || st === "error" ? "r" : "") }, st);
@@ -967,6 +985,11 @@ async function checkRequests() {
   if (!old) box.firstChild.focus();
 }
 setInterval(() => { if (S.authed || S.demo) checkRequests(); }, 20000);
+function resumeOAuth() {
+  if (!new URLSearchParams(location.search).has("oauth_state_id") || S.demo) return;
+  S.tab = "settings"; S.settingsTab = "connect";
+  setTimeout(async () => { try { await openLink(null, render, true); } catch (e) { fail(e); } history.replaceState(null, "", location.pathname + "#settings"); }, 400);
+}
 async function render() {
   const [, title, view] = TABS.find((t) => t[0] === S.tab);
   try { S.badge = (await api("/api/suggestions")).filter((x) => x.source === "detected" || x.source === "agent").length; } catch { S.badge = 0; }
@@ -993,7 +1016,7 @@ function login() {
     S.demo = true; S.provider = DEMO.chatProvider; return render();
   }
   S.name = sessionStorage.getItem("gb_name") || ""; S.token = sessionStorage.getItem("gb_tok") || "";
-  if (S.name && S.token) { try { await api("/api/overview"); S.authed = true; return render(); } catch {} }
+  if (S.name && S.token) { try { await api("/api/overview"); S.authed = true; resumeOAuth(); return render(); } catch {} }
   login();
 })();
 </script>

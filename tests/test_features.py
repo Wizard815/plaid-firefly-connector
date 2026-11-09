@@ -395,3 +395,17 @@ def test_plaid_header_auth_mode_keeps_credentials_out_of_the_body(monkeypatch):
     Plaid(httpx.MockTransport(h)).link_token("alice")
     headers, body = seen[0]
     assert body["client_id"] == "cid" and body["secret"] == "sec" and "plaid-secret" not in headers                 # the default is unchanged
+
+
+def test_link_token_carries_the_oauth_redirect_only_when_configured(monkeypatch):
+    seen = []
+
+    def handler(req):
+        seen.append(json.loads(req.content)); return httpx.Response(200, json={"link_token": "link-x"})
+    monkeypatch.setenv("PLAID_CLIENT_ID", "c"); monkeypatch.setenv("PLAID_SECRET", "s")
+    monkeypatch.delenv("PLAID_REDIRECT_URI", raising=False)
+    Plaid(httpx.MockTransport(handler)).link_token("alice")
+    assert "redirect_uri" not in seen[-1]
+    monkeypatch.setenv("PLAID_REDIRECT_URI", "https://bank.example.com/")
+    Plaid(httpx.MockTransport(handler)).link_token("alice")
+    assert seen[-1]["redirect_uri"] == "https://bank.example.com/" and seen[-1]["products"] == ["transactions"]

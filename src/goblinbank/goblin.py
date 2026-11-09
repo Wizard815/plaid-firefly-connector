@@ -260,6 +260,21 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             raise HTTPException(422, str(e))
         return {"provider": prov, "rows": len(rows), "added": importers.store(store, prov, rows)}
 
+    @app.post("/import/bank-csv")
+    async def import_bank_csv(request: Request, account_id: str, flip: bool = False):
+        """A CSV downloaded from a bank's own site, into an account you track by hand (a linked account already has its own feed)."""
+        auth(request)
+        a = store.one("SELECT * FROM accounts WHERE id=?", (account_id,))
+        if not a:
+            raise HTTPException(404, "account not found")
+        if a["source"] == "plaid":
+            raise HTTPException(409, "that account is linked through Plaid already; import into an account you track by hand")
+        try:
+            rows, bal = importers.parse_bank((await request.body()).decode("utf-8", "replace"), flip)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return {"rows": len(rows), "added": importers.store_bank(store, account_id, rows, bal), "balance": bal}
+
     def link_send(peer: str, kind: str, payload: dict) -> bool:
         """Hand a message for another goblin to the gateway, which relays it and keeps nothing."""
         if not gateway_url:

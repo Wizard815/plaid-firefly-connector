@@ -31,6 +31,7 @@ class Plaid:
         self.header_auth = os.environ.get("PLAID_AUTH") == "header"       # send credentials as PLAID-CLIENT-ID / PLAID-SECRET headers instead of in the body
         self.base = os.environ.get("PLAID_BASE_URL") or HOSTS.get(os.environ.get("PLAID_ENV", "sandbox"), HOSTS["sandbox"])   # PLAID_BASE_URL: test servers only
         self.webhook_url = os.environ.get("PLAID_WEBHOOK_URL", "")
+        self.redirect_uri = os.environ.get("PLAID_REDIRECT_URI", "")      # needed for banks that sign you in on their own site (OAuth); must be HTTPS and registered in the Plaid dashboard
         self.http = httpx.Client(timeout=30, transport=transport)
         self._keys: dict[str, dict] = {}
 
@@ -65,6 +66,8 @@ class Plaid:
             body["optional_products"] = ["investments", "liabilities"]
         if self.webhook_url:
             body["webhook"] = self.webhook_url
+        if self.redirect_uri:
+            body["redirect_uri"] = self.redirect_uri
         return self.post("/link/token/create", body)["link_token"]
 
     def exchange(self, public_token: str) -> dict:
