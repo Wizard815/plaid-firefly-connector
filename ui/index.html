@@ -42,6 +42,9 @@ main.free>.blk{grid-column:span var(--span,12)}
 .sizes{display:flex;gap:2px}.sizes .btn{padding:2px 7px}.sizes .btn.on{background:var(--teal);color:#fff;border-color:var(--teal)}
 .blk{position:relative}.rz{position:absolute;top:0;right:-6px;bottom:0;width:12px;cursor:ew-resize;z-index:3;touch-action:none}.rz::after{content:"";position:absolute;top:30%;bottom:30%;left:4px;width:4px;border-radius:2px;background:var(--line)}.rz:hover::after,.rz.on::after{background:var(--teal)}
 @media(max-width:999px){.rz,.sizes{display:none}}
+.modal-back{position:fixed;inset:0;background:rgba(5,15,20,.62);display:grid;place-items:center;z-index:50;padding:16px}
+.modal{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;max-width:460px;width:100%;max-height:90vh;overflow:auto;display:grid;gap:12px}
+.modal .req{border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--bg);display:grid;gap:8px}
 .blk.hidden-blk{opacity:.45}.blk[hidden]{display:none!important}
 .swatches{display:flex;gap:10px;flex-wrap:wrap}.swatch{width:34px;height:34px;border-radius:50%;border:3px solid var(--panel);box-shadow:0 0 0 1px var(--line);padding:0}.swatch[aria-pressed="true"]{box-shadow:0 0 0 3px var(--fg)}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}
@@ -492,7 +495,8 @@ async function discuss(link, title) {
   try { const c = await api("/api/chats", send("POST", { title, links: [link] })); S.chatId = c.chat.id; S.tab = "agent"; render(); } catch (e) { fail(e); }
 }
 async function viewSavings(root, rerender) {
-  const [v, accts, mat, lk] = await Promise.all([api("/api/goals"), api("/api/accounts"), api("/api/maturities"), api("/api/links").catch(() => ({ me: "", links: [] }))]);
+  const [v, accts, mat, lk, shr] = await Promise.all([api("/api/goals"), api("/api/accounts"), api("/api/maturities"), api("/api/links").catch(() => ({ me: "", links: [] })), api("/api/sharing").catch(() => [])]);
+  const theirs = shr.flatMap((p) => p.from_them.map((x) => ({ ...x, peer: p.peer })));
   const editing = null, ep = S.edit?.place ? S.edit.place : null;
   const active = v.items.filter((g) => g.status === "active"), closed = v.items.filter((g) => g.status !== "active");
   const gform = h("form", { class: "subform", onsubmit: async (ev) => { ev.preventDefault();
@@ -536,6 +540,7 @@ async function viewSavings(root, rerender) {
       h("p", { class: "muted small" }, "A goal sets money aside inside your savings. Free money is what is saved minus what is set aside. Free money is shared by every goal until you assign it. A new goal starts unfunded (tick the box to take what is free) and tells you how long saving would take."),
       active.length ? h("div", { class: "cards" }, active.map((g) => goalCard(g, v, rerender, lk))) : h("p", { class: "muted" }, "No goals yet. Add one below."),
       closed.length ? h("details", { style: "margin-top:14px" }, h("summary", { class: "muted" }, `${closed.length} closed goal${closed.length === 1 ? "" : "s"}`), h("div", { class: "cards" }, closed.map((g) => goalCard(g, v, rerender, lk)))) : null),
+    theirs.length ? h("div", { class: "panel", "data-title": "Shared with me" }, h("h3", {}, "Shared with me"), h("p", { class: "muted small" }, "Balances other people chose to show you. They are not counted in your own totals."), theirs.map((x) => h("div", { class: "ev", style: "grid-template-columns:1fr auto" }, h("span", {}, x.name, h("div", { class: "muted small" }, `${x.peer} · ${x.institution}`)), h("span", { class: "num" }, usd(x.balance))))) : null,
     h("div", { class: "panel" }, h("h3", {}, editing ? "Edit goal" : "Add a goal"), gform));
 }
 
@@ -800,18 +805,25 @@ async function tabGeneral(root, rerender) {
       h("div", { class: "chips", style: "margin-top:10px" }, h("button", { class: "btn sm", onclick: () => { for (const [id] of TABS) store.set("gb_layout_" + id, "[]"); toast("Every tab is back to the default layout"); } }, "Reset every tab's layout"))));
 }
 async function tabLinks(root, rerender) {
-  const r = await api("/api/links").catch(() => ({ me: "", links: [], waiting: 0 }));
+  const [r, ppl, sh] = await Promise.all([api("/api/links").catch(() => ({ me: "", links: [], waiting: 0 })), api("/api/links/people").catch(() => ({ people: [] })), api("/api/sharing").catch(() => [])]);
   const lab = { active: "Linked", invited: "Waiting for them to accept", pending: "Wants to link with you" };
+  const taken = new Set(r.links.map((l) => l.peer)), free = ppl.people.filter((x) => !taken.has(x));
   add(root, h("div", { class: "panel" }, h("h3", {}, "Family links"),
-    h("p", { class: "muted small" }, "Link with another goblin to share a goal: you each set money aside, see the total, and leave notes for each other. Only that goal's name, cost, date, notes and how much each of you has set aside travel. Never an account, balance or transaction. Either of you can unlink any time."),
+    h("p", { class: "muted small" }, "A link only sets up the connection between two goblins. It shares nothing by itself. Below, you choose exactly what each person can see, one item at a time, and you can take it back any time."),
     r.links.length ? h("table", {}, h("tbody", {}, r.links.map((l) => h("tr", {}, h("td", {}, h("b", {}, l.peer)), h("td", { class: "muted small" }, lab[l.status] || l.status),
       h("td", { class: "r", style: "white-space:nowrap" }, l.status === "pending" ? [h("button", { class: "btn sm primary", onclick: async () => { try { await api(`/api/links/${l.peer}/accept`, send("POST", {})); rerender(); } catch (e) { fail(e); } } }, "Accept"), " "] : null,
-        h("button", { class: "btn sm danger", onclick: sure(null, l.status === "active" ? "Sure? Shared goals stay with you as private goals" : "Sure?", async () => { await api(`/api/links/${l.peer}`, { method: "DELETE" }); rerender(); }) }, l.status === "pending" ? "Decline" : l.status === "active" ? "Unlink" : "Cancel"))))))
+        h("button", { class: "btn sm danger", onclick: sure(null, l.status === "active" ? "Sure? Everything you shared stops" : "Sure?", async () => { await api(`/api/links/${l.peer}`, { method: "DELETE" }); rerender(); }) }, l.status === "pending" ? "Decline" : l.status === "active" ? "Unlink" : "Cancel"))))))
       : h("p", { class: "muted" }, "Not linked with anyone yet."),
     r.waiting ? h("p", { class: "small" }, `${r.waiting} update${r.waiting === 1 ? "" : "s"} waiting to be delivered (the other goblin is offline). `, h("button", { class: "btn sm", onclick: async () => { await api("/api/links/flush", send("POST", {})); rerender(); } }, "Try now")) : null,
-    h("form", { class: "row", style: "margin-top:12px", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/links", send("POST", { peer: val("lk-peer") })); toast("Request sent"); rerender(); } catch (err) { fail(err); } } },
-      field("lk-peer", "Their goblin's name", "", { required: true, placeholder: "e.g. bob" }), h("button", { class: "btn primary", type: "submit" }, "Ask to link")),
-    h("p", { class: "muted small" }, `You are ${r.me || "this goblin"}. They have to enter your name too, or accept your request on their Family links tab.`)));
+    free.length ? h("form", { class: "row", style: "margin-top:12px", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/links", send("POST", { peer: val("lk-peer") })); toast("Request sent. They will be asked right away"); rerender(); } catch (err) { fail(err); } } },
+      select("lk-peer", "Link with", free.map((x) => [x, x]), free[0]), h("button", { class: "btn primary", type: "submit" }, "Ask to link"))
+      : h("p", { class: "muted small", style: "margin-top:10px" }, ppl.people.length ? "You are linked or waiting with everyone on this server." : "No other goblins on this server yet. The server's admin adds people on the admin page."),
+    h("p", { class: "muted small" }, `You are ${r.me || "this goblin"}.`)),
+  sh.map((p) => h("div", { class: "panel" }, h("h3", {}, "Sharing with " + p.peer),
+    h("p", { class: "muted small" }, `${p.peer} sees only what is ticked here: the account's name and your part of its balance, kept up to date. Nothing else about it.`),
+    p.accounts.length ? p.accounts.map((a) => h("label", { class: "check", style: "padding:3px 0" }, h("input", { type: "checkbox", checked: a.shared, onchange: async (e) => { try { await api(`/api/links/${p.peer}/shares`, send("PUT", { kind: "account", ref: a.id, on: e.target.checked })); toast(e.target.checked ? "Shared" : "No longer shared"); } catch (err) { e.target.checked = !e.target.checked; fail(err); } } }), `${a.institution} · ${a.name}`)) : h("p", { class: "muted small" }, "No accounts yet."),
+    h("h3", { style: "margin-top:14px;font-size:.95rem" }, "Goals you share"), p.goals.length ? p.goals.map((g) => h("div", { class: "small" }, g.name)) : h("p", { class: "muted small" }, "None. Share a goal from its card on the Savings tab."),
+    h("h3", { style: "margin-top:14px;font-size:.95rem" }, p.peer + " shares with you"), p.from_them.length ? p.from_them.map((x) => h("div", { class: "ev", style: "grid-template-columns:1fr auto" }, h("span", {}, x.name, h("div", { class: "muted small" }, x.institution)), h("span", { class: "num" }, usd(x.balance)))) : h("p", { class: "muted small" }, "Nothing yet."))));
 }
 async function tabAlerts(root, rerender) {
   const [cfg, ns] = await Promise.all([api("/api/settings"), api("/api/notify/status").catch(() => ({ configured: false, min_severity: "warning" }))]);
@@ -926,6 +938,31 @@ function arrangeable(main) {
   });
   bar.append(h("button", { class: "btn sm", onclick: () => { store.set(key, "[]"); render(); } }, "Reset this tab"));
 }
+/* ---------- requests from linked goblins: a pop-up that stays until every one is answered ---------- */
+async function checkRequests() {
+  if (!S.authed && !S.demo) return;
+  let r; try { r = await api("/api/requests"); } catch { return; }
+  const done = S.answered || (S.answered = new Set());
+  const items = [...(r.links || []).map((p) => ({ k: "l:" + p, kind: "link", peer: p })), ...(r.goals || []).map((g) => ({ k: "g:" + g.id, kind: "goal", g }))].filter((x) => !done.has(x.k));
+  const old = $("#reqmodal"); if (!items.length) { old?.remove(); return; }
+  const answer = async (x, ok) => {
+    try {
+      if (!S.demo) { if (x.kind === "link") await (ok ? api(`/api/links/${x.peer}/accept`, send("POST", {})) : api(`/api/links/${x.peer}`, { method: "DELETE" })); else await api(`/api/goals/${x.g.id}/${ok ? "accept" : "decline"}`, send("POST", {})); }
+      done.add(x.k); await checkRequests(); if (!$("#reqmodal")) render();
+    } catch (e) { fail(e); }
+  };
+  const box = h("div", { class: "modal-back", id: "reqmodal" }, h("div", { class: "modal", role: "alertdialog", "aria-modal": "true", "aria-labelledby": "reqtitle", tabindex: "-1" },
+    h("h3", { id: "reqtitle" }, items.length === 1 ? "Someone is waiting for your answer" : `${items.length} requests are waiting for your answer`),
+    items.map((x) => h("div", { class: "req" }, x.kind === "link"
+      ? [h("div", {}, h("b", {}, x.peer), " wants to link with you."), h("div", { class: "small muted" }, "A link only sets up the connection. It shares nothing until you choose what to share, one item at a time.")]
+      : [h("div", {}, h("b", {}, (x.g.from || []).join(", ")), " shared a goal with you: ", h("b", {}, x.g.name), ` (${usd(x.g.target)}).`), h("div", { class: "small muted" }, "You each set money aside and see the total and each other's notes. Your accounts stay private.")],
+      h("div", { class: "chips" }, h("button", { class: "btn primary", onclick: () => answer(x, true) }, "Accept"), h("button", { class: "btn", onclick: () => answer(x, false) }, "Decline")))),
+    h("p", { class: "small muted" }, "You need to answer each one to continue.")));
+  box.addEventListener("keydown", (e) => { if (e.key === "Escape") e.preventDefault(); });
+  if (old) old.replaceWith(box); else document.body.append(box);
+  if (!old) box.firstChild.focus();
+}
+setInterval(() => { if (S.authed || S.demo) checkRequests(); }, 20000);
 async function render() {
   const [, title, view] = TABS.find((t) => t[0] === S.tab);
   try { S.badge = (await api("/api/suggestions")).filter((x) => x.source === "detected" || x.source === "agent").length; } catch { S.badge = 0; }
@@ -935,6 +972,7 @@ async function render() {
     h("div", { class: "foot" }, S.demo ? null : h("button", { class: "btn sm", onclick: () => { sessionStorage.clear(); location.reload(); } }, "Sign out"))), main));
   try { await view(main, render); } catch (e) { add(main, h("div", { class: "panel" }, h("p", { class: "neg" }, "Could not load: " + e.message))); }
   try { arrangeable(main); } catch (e) { console.warn("arrange", e); }
+  checkRequests();
 }
 function login() {
   $("#app").replaceChildren(h("form", { class: "panel login", onsubmit: async (e) => { e.preventDefault(); S.name = $("#ln").value.trim().toLowerCase(); S.token = $("#lt").value.trim();

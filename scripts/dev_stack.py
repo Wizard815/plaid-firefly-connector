@@ -34,7 +34,7 @@ def main():
     env = {**os.environ, "PYTHONPATH": f"{ROOT / 'src'}:{ROOT}"}
     procs = [subprocess.Popen([sys.executable, "-m", "uvicorn", "devtools.fake_llm_server:app", "--port", "9202", "--log-level", "warning", "--no-access-log"], env=env, cwd=ROOT),
              subprocess.Popen([sys.executable, "-m", "uvicorn", "--factory", "goblinbank.main:app", "--port", "9203", "--log-level", "warning", "--no-access-log"], cwd=ROOT,
-                              env={**env, "ROLE": "goblin", "GOBLIN_DB": str(tmp / "goblin.db"), "RH_CSV_DIR": str(tmp / "csv"), "IMPORT_DIR": str(tmp / "imp")}),
+                              env={**env, "GATEWAY_URL": "http://127.0.0.1:9204", "ROLE": "goblin", "GOBLIN_DB": str(tmp / "goblin.db"), "RH_CSV_DIR": str(tmp / "csv"), "IMPORT_DIR": str(tmp / "imp")}),
              subprocess.Popen([sys.executable, "-m", "uvicorn", "--factory", "goblinbank.main:app", "--port", "9204", "--log-level", "warning", "--no-access-log"], cwd=ROOT,
                               env={**env, "ROLE": "gateway", "GATEWAY_CONFIG": str(tmp / "gw.yaml"), "UI_DIR": str(ROOT / "ui")})]
     for port in (9203, 9204):

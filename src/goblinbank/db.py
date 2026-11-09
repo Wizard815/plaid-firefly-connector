@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS links(peer TEXT PRIMARY KEY, status TEXT NOT NULL, cr
 CREATE TABLE IF NOT EXISTS goal_partners(goal_id INTEGER NOT NULL, peer TEXT NOT NULL, amount REAL NOT NULL DEFAULT 0, PRIMARY KEY(goal_id, peer));
 CREATE TABLE IF NOT EXISTS goal_notes(id TEXT PRIMARY KEY, goal_id INTEGER NOT NULL, author TEXT NOT NULL, ts TEXT NOT NULL, text TEXT NOT NULL, deleted INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS outbox(peer TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL DEFAULT '', payload TEXT NOT NULL, PRIMARY KEY(peer, kind, ref));
+CREATE TABLE IF NOT EXISTS link_shares(peer TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL, sent_sig TEXT, PRIMARY KEY(peer, kind, ref));   -- what I have chosen to let a linked person see
+CREATE TABLE IF NOT EXISTS shared_in(peer TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL, name TEXT, institution TEXT, acct_kind TEXT, balance REAL, updated TEXT, PRIMARY KEY(peer, kind, ref));   -- what linked people let me see
 CREATE TABLE IF NOT EXISTS allocations(id INTEGER PRIMARY KEY AUTOINCREMENT, goal_id INTEGER NOT NULL, place TEXT NOT NULL DEFAULT '', amount REAL NOT NULL, UNIQUE(goal_id, place));
 CREATE TABLE IF NOT EXISTS incomes(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, amount REAL NOT NULL, every INTEGER DEFAULT 1, unit TEXT DEFAULT 'month', next_date TEXT NOT NULL, account_id TEXT, active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS chat_links(chat_id INTEGER NOT NULL, kind TEXT NOT NULL, ref_id INTEGER NOT NULL, PRIMARY KEY(chat_id, kind, ref_id));

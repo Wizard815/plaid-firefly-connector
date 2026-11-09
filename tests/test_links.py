@@ -168,3 +168,40 @@ def test_joint_account_counts_only_my_share(monkeypatch):
     assert c["alice"].put("/api/accounts/j", headers=H("alice"), json={"my_share": 150}).status_code == 422
     c["alice"].put("/api/accounts/j", headers=H("alice"), json={"my_share": -1})                              # cleared: the whole balance again
     assert c["alice"].get("/api/goals", headers=H("alice")).json()["total"] == 10000
+
+
+def test_a_link_alone_shares_nothing_and_each_grant_is_a_saved_permission(monkeypatch):
+    c, dbs, _ = world(monkeypatch)
+    for n in ("alice", "bob"):
+        dbs[n].conn.execute("INSERT INTO accounts(id,source,institution,name,kind,balance) VALUES('s1','plaid','Axos','HYSA','cash',5000)")
+        dbs[n].conn.execute("INSERT INTO accounts(id,source,institution,name,kind,balance) VALUES('c1','plaid','Huntington','Checking','cash',900)"); dbs[n].conn.commit()
+    assert c["alice"].get("/api/links/people", headers=H("alice")).json() == {"people": ["bob"]}
+    assert c["alice"].put("/api/links/bob/shares", headers=H("alice"), json={"ref": "s1", "on": True}).status_code == 422       # not linked yet
+    link(c)
+    assert c["bob"].get("/api/sharing", headers=H("bob")).json()[0]["from_them"] == []                                         # linked, still nothing visible
+    assert c["alice"].put("/api/links/bob/shares", headers=H("alice"), json={"ref": "s1", "on": True}).status_code == 200
+    seen = c["bob"].get("/api/sharing", headers=H("bob")).json()[0]["from_them"]
+    assert [(x["name"], x["balance"]) for x in seen] == [("HYSA", 5000)]                                                       # only the account she chose
+    dbs["alice"].conn.execute("UPDATE accounts SET balance=5200, my_share=50 WHERE id='s1'"); dbs["alice"].conn.commit()
+    c["alice"].post("/api/links/flush", headers=H("alice"))                                                                    # the next round carries the new balance, my part only
+    assert c["bob"].get("/api/sharing", headers=H("bob")).json()[0]["from_them"][0]["balance"] == 2600
+    mine = c["alice"].get("/api/sharing", headers=H("alice")).json()[0]["accounts"]                                           # saved on her side
+    assert {a["id"]: a["shared"] for a in mine} == {"s1": True, "c1": False}
+    c["alice"].put("/api/links/bob/shares", headers=H("alice"), json={"ref": "s1", "on": False})
+    assert c["bob"].get("/api/sharing", headers=H("bob")).json()[0]["from_them"] == []                                         # revoked
+    c["alice"].put("/api/links/bob/shares", headers=H("alice"), json={"ref": "s1", "on": True})
+    c["alice"].delete("/api/links/bob", headers=H("alice"))
+    assert dbs["bob"].all("SELECT * FROM shared_in") == [] and dbs["alice"].all("SELECT * FROM link_shares") == []              # unlinking removes every permission
+
+
+def test_requests_wait_until_answered(monkeypatch):
+    c, dbs, _ = world(monkeypatch)
+    c["alice"].post("/api/links", headers=H("alice"), json={"peer": "bob"})
+    assert c["bob"].get("/api/requests", headers=H("bob")).json() == {"links": ["alice"], "goals": []}
+    c["bob"].post("/api/links/alice/accept", headers=H("bob"))
+    g = c["alice"].post("/api/goals", headers=H("alice"), json={"name": "Trip", "target": 500}).json()
+    c["alice"].post(f"/api/goals/{g['id']}/share", headers=H("alice"), json={"peers": ["bob"]})
+    r = c["bob"].get("/api/requests", headers=H("bob")).json()
+    assert r["links"] == [] and [(x["name"], x["from"]) for x in r["goals"]] == [("Trip", ["alice"])]
+    c["bob"].post(f"/api/goals/{r['goals'][0]['id']}/accept", headers=H("bob"))
+    assert c["bob"].get("/api/requests", headers=H("bob")).json() == {"links": [], "goals": []}

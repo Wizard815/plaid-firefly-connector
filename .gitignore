@@ -7,3 +7,4 @@ goblins.yaml
 gateway.yaml
 docker-compose.generated.yml
 .env
+gateway-state/

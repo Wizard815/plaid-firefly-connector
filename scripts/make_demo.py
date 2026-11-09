@@ -69,6 +69,9 @@ def main(out: str, artifact: bool):
     for nid, who, txt, back in [("n1", "bob", "Found flights for $1,150 for the two of us in July.", 3), ("n2", "alice", "Great. I will put in $100 each payday.", 2)]:
         db.conn.execute("INSERT INTO goal_notes VALUES(?,?,?,?,?,0)", (nid, gid_v, who, (sync.now()[:10] + "T00:00:00+00:00") if back == 0 else (TODAY - timedelta(days=back)).isoformat() + "T12:00:00+00:00", txt))
     db.conn.execute("INSERT INTO goals(name,target,deadline,priority,monthly,note,status,created,shared_id,members,shared_state,rev,edited_by) VALUES('New couch',1400,NULL,3,0,'','active',?,?,?,'offered',1,'bob')", (TODAY.isoformat(), "demo-shared-couch-0001", _json.dumps(["bob"])))
+    db.conn.execute("INSERT INTO links VALUES('cara','pending',?)", (sync.now(),))
+    db.conn.execute("INSERT INTO link_shares(peer,kind,ref) VALUES('bob','account','sav')")
+    db.conn.execute("INSERT INTO shared_in VALUES('bob','account','bob-joint','Joint Savings','Axos','cash',4000,?)", (sync.now(),))
     db.conn.commit()
     inc = c.get("/api/incomes", headers=H).json()
     for sg in inc["suggestions"]:
@@ -107,12 +110,13 @@ def main(out: str, artifact: bool):
     g = lambda p: c.get(p, headers=H).json()
     rec = {"transactions": g("/api/transactions?limit=500")}
     for p in ["/api/overview", "/api/history", "/api/spending", f"/api/spending?start={TODAY:%Y-%m}-01", "/api/categories", "/api/accounts", "/api/subscriptions", "/api/suggestions", "/api/alerts", "/api/savings", "/api/notes",
-              "/api/budgets", "/api/links", "/api/agent/providers", "/api/agent/presets", "/api/settings", "/api/plaid/usage", "/api/category-rules"]:
+              "/api/budgets", "/api/links", "/api/links/people", "/api/requests", "/api/sharing", "/api/agent/providers", "/api/agent/presets", "/api/settings", "/api/plaid/usage", "/api/category-rules"]:
         rec[p] = g(p)
     for dd in list(range(1, 121)) + [365]:
         rec[f"/api/upcoming?days={dd}"] = g(f"/api/upcoming?days={dd}")
     for a in rec["/api/accounts"]:
         rec[f"/api/accounts/{a['id']}"] = g(f"/api/accounts/{a['id']}")
+    rec["/api/links/people"] = {"people": ["bob", "cara", "dana"]}
     rec["/api/status"] = {"plaid": {"configured": True, "env": "sandbox", "items": [{"item_id": f"item-{i}", "institution": n} for i, n in enumerate(["Huntington", "Axos", "Capital One"])]},
                           "robinhood": {"agent": "up", "csv": "up", "live": "not deployed", "csv_files": ["import-2026-11-01.csv"], "agent_configured": True}, "caldav_configured": True,
                           "imports": [{"provider": "cashapp", "transactions": 41, "last_transaction": (TODAY - timedelta(days=38)).isoformat()}, {"provider": "paypal", "transactions": 12, "last_transaction": (TODAY - timedelta(days=6)).isoformat()}]}

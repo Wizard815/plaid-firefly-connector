@@ -17,6 +17,12 @@ class NoteIn(BaseModel):
     text: str
 
 
+class GrantIn(BaseModel):
+    kind: str = "account"
+    ref: str
+    on: bool
+
+
 class InboxIn(BaseModel):
     type: str
     payload: dict = {}
@@ -71,6 +77,29 @@ def register(app, ctx):
         auth(request)
         ctx.shared_changed()
         return {"waiting": store.one("SELECT COUNT(*) n FROM outbox")["n"]}
+
+    @app.get("/api/links/people")
+    def link_people(request: Request):
+        """The other goblins on this gateway (names only), so linking is a pick, not a guess."""
+        auth(request)
+        return {"people": [x for x in ctx.link_people() if x != name]}
+
+    @app.get("/api/requests")
+    def requests(request: Request):
+        auth(request)
+        return links.requests(store)
+
+    @app.get("/api/sharing")
+    def sharing(request: Request):
+        auth(request)
+        return links.sharing_overview(store)
+
+    @app.put("/api/links/{peer}/shares")
+    def share_set(request: Request, peer: str, b: GrantIn):
+        auth(request)
+        run(links.grant, store, name, peer, b.kind, b.ref, b.on)
+        ctx.link_flush()
+        return {"ok": True}
 
     @app.post("/internal/link/inbox")
     def inbox(request: Request, m: InboxIn):

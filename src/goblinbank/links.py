@@ -83,6 +83,8 @@ def unlink(db, peer: str, notify: bool = True) -> None:
     with db.tx() as c:
         c.execute("DELETE FROM links WHERE peer=?", (peer,))
         c.execute("DELETE FROM outbox WHERE peer=?", (peer,))
+        c.execute("DELETE FROM link_shares WHERE peer=?", (peer,))
+        c.execute("DELETE FROM shared_in WHERE peer=?", (peer,))
         for g in c.execute("SELECT id, members FROM goals WHERE shared_id IS NOT NULL").fetchall():
             members = [m for m in json.loads(g["members"] or "[]") if m != peer]
             c.execute("DELETE FROM goal_partners WHERE goal_id=? AND peer=?", (g["id"], peer))
@@ -271,6 +273,19 @@ def receive(db, me: str, sender: str, kind: str, p: dict) -> dict:
         return {"ok": True}
     if kind == "goal":
         return _receive_goal(db, me, sender, p)
+    if kind == "acct":
+        try:
+            ref, name, bal = str(p["ref"])[:64], str(p["name"])[:80], round(float(p["balance"]), 2)
+        except (KeyError, TypeError, ValueError):
+            return {"ignored": "malformed"}
+        with db.tx() as c:
+            c.execute("INSERT INTO shared_in(peer,kind,ref,name,institution,acct_kind,balance,updated) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(peer,kind,ref) DO UPDATE SET name=excluded.name,institution=excluded.institution,acct_kind=excluded.acct_kind,balance=excluded.balance,updated=excluded.updated",
+                      (sender, "account", ref, name, str(p.get("institution", ""))[:80], str(p.get("kind", ""))[:20], bal, now()))
+        return {"ok": True}
+    if kind == "unshare":
+        with db.tx() as c:
+            c.execute("DELETE FROM shared_in WHERE peer=? AND kind=? AND ref=?", (sender, str(p.get("kind", "")), str(p.get("ref", ""))))
+        return {"ok": True}
     return {"ignored": "unknown message"}
 
 
@@ -321,3 +336,63 @@ def decorate(db, items: list[dict]) -> None:
         v["members"] = json.loads(v.get("members") or "[]")
         v["partners"] = partners
         v["notes"] = [n for n in _notes(db, v["id"]) if not n["deleted"]]
+
+
+# ------------------------------------------------------------------ permissions: what I let a linked person see (a link alone shares nothing)
+def grant(db, me: str, peer: str, kind: str, ref: str, on: bool) -> None:
+    if kind != "account":
+        raise LinkError("unknown thing to share")
+    if status(db, peer) != "active":
+        raise LinkError(f"you are not linked with {peer}")
+    if not db.one("SELECT 1 FROM accounts WHERE id=?", (ref,)):
+        raise KeyError(ref)
+    with db.tx() as c:
+        if on:
+            c.execute("INSERT INTO link_shares(peer,kind,ref) VALUES(?,?,?) ON CONFLICT(peer,kind,ref) DO NOTHING", (peer, kind, ref))
+        else:
+            c.execute("DELETE FROM link_shares WHERE peer=? AND kind=? AND ref=?", (peer, kind, ref))
+            c.execute("DELETE FROM outbox WHERE peer=? AND kind='acct' AND ref=?", (peer, ref))
+    if on:
+        push_accounts(db)
+    else:
+        queue(db, peer, "unshare", {"kind": kind, "ref": ref}, "acct:" + ref)
+
+
+def push_accounts(db) -> int:
+    """Send each granted account's name and my part of its balance, whenever either changed."""
+    from goblinbank import ledger
+    n = 0
+    for g in db.all("SELECT * FROM link_shares WHERE kind='account'"):
+        a = db.one("SELECT * FROM accounts WHERE id=?", (g["ref"],))
+        if not a or status(db, g["peer"]) != "active":
+            continue
+        msg = {"ref": a["id"], "name": a.get("nickname") or a["name"], "institution": a["institution"], "kind": a["kind"], "balance": round(ledger.mine(a), 2)}
+        sig = hashlib.sha256(json.dumps(msg, sort_keys=True).encode()).hexdigest()
+        if sig == g["sent_sig"]:
+            continue
+        queue(db, g["peer"], "acct", msg, g["ref"])
+        with db.tx() as c:
+            c.execute("UPDATE link_shares SET sent_sig=? WHERE peer=? AND kind=? AND ref=?", (sig, g["peer"], g["kind"], g["ref"]))
+        n += 1
+    return n
+
+
+def sharing_overview(db) -> list[dict]:
+    """For each linked person: which of my accounts they can see, what they let me see, and the goals we share."""
+    mine = db.all("SELECT id, name, nickname, institution, kind, balance FROM accounts ORDER BY institution, name")
+    out = []
+    for l in db.all("SELECT peer, status FROM links WHERE status='active' ORDER BY peer"):
+        p = l["peer"]
+        granted = {r["ref"] for r in db.all("SELECT ref FROM link_shares WHERE peer=? AND kind='account'", (p,))}
+        goals = [{"id": g["id"], "name": g["name"]} for g in db.all("SELECT id, name, members FROM goals WHERE shared_id IS NOT NULL AND shared_state='active'") if p in json.loads(g["members"] or "[]")]
+        out.append({"peer": p, "accounts": [{"id": a["id"], "name": a["nickname"] or a["name"], "institution": a["institution"], "kind": a["kind"], "shared": a["id"] in granted} for a in mine],
+                    "from_them": [dict(r) for r in db.all("SELECT * FROM shared_in WHERE peer=? ORDER BY institution, name", (p,))], "goals": goals})
+    return out
+
+
+def requests(db) -> dict:
+    """Things waiting for an answer: people asking to link, and goals offered to me. The app shows these until they are answered."""
+    offered = []
+    for g in db.all("SELECT id, name, target, members FROM goals WHERE shared_state='offered' ORDER BY id"):
+        offered.append({"id": g["id"], "name": g["name"], "target": g["target"], "from": json.loads(g["members"] or "[]")})
+    return {"links": [r["peer"] for r in db.all("SELECT peer FROM links WHERE status='pending' ORDER BY created")], "goals": offered}

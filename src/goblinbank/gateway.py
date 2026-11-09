@@ -6,6 +6,8 @@ goblin name -> url + secrets, and plaid item_id -> goblin name.
 import json
 import logging
 import os
+import re
+import secrets
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -15,7 +17,7 @@ import yaml
 from fastapi.concurrency import run_in_threadpool
 from fastapi import FastAPI, HTTPException, Request, Response
 
-from goblinbank.security import bearer, check_token, require_internal
+from goblinbank.security import bearer, check_token, require_internal, sha256
 
 
 def load_config(path: str) -> dict:
@@ -50,6 +52,24 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     cfg = config or load_config(os.environ.get("GATEWAY_CONFIG", "/config/gateway.yaml"))
     metrics = Metrics()
     goblins = {g["name"]: g for g in cfg.get("goblins", [])}
+    state_path = Path(os.environ.get("GATEWAY_STATE", cfg.get("state_file", "")) or "")
+    added: dict[str, dict] = {}                               # people added from the admin page (name, address, secrets' hash): the same facts gateway.yaml holds
+    if str(state_path) not in ("", "."):
+        try:
+            for g in json.loads(state_path.read_text()).get("people", []):
+                if g["name"] not in goblins:
+                    goblins[g["name"]] = added[g["name"]] = g
+        except (OSError, ValueError, KeyError):
+            pass
+
+    def save_state():
+        if str(state_path) in ("", "."):
+            raise HTTPException(409, "this gateway has no writable state folder; add people with goblins.yaml instead")
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = state_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"people": list(added.values())}))
+        tmp.chmod(0o600)
+        tmp.replace(state_path)
     orb_keys = cfg.get("orb_keys", [])
     items: dict[str, str] = {}
     client = httpx.Client(timeout=20, transport=transport)
@@ -159,6 +179,15 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             return {"delivered": False}
         return {"delivered": r.status_code == 200}
 
+    @app.get("/internal/link/people")
+    def link_people(request: Request):
+        """Names of the other goblins, for the 'link with…' picker. Names only."""
+        g = goblins.get(request.headers.get("x-goblin", ""))
+        if not g:
+            raise HTTPException(401, "unauthorized")
+        require_internal(request, g["internal_secret"])
+        return {"people": sorted(n for n in goblins if n != g["name"])}
+
     @app.post("/webhooks/plaid")
     async def plaid_webhook(request: Request):
         """Relay to the owning goblin. The goblin verifies Plaid's JWT signature (it holds the
@@ -192,10 +221,38 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
                 up = client.get(f"{g['url']}/health", timeout=3).status_code == 200
             except httpx.HTTPError:
                 up = False
-            rows.append({"name": n, "up": up, "calls": {k: dict(metrics.n[(n, k)]) for k in KINDS if (n, k) in metrics.n}})
+            rows.append({"name": n, "up": up, "added_here": n in added, "calls": {k: dict(metrics.n[(n, k)]) for k in KINDS if (n, k) in metrics.n}})
         total = {k: sum(metrics.n[key][k] for key in metrics.n) for k in ("calls", "ok", "client_errors", "server_errors")}
         return {"goblins": rows, "orb": dict(metrics.n[("", "orb")]) if ("", "orb") in metrics.n else {}, "unmatched": {k: dict(v) for (n, k), v in metrics.n.items() if n == "" and k != "orb"},
                 "total": total, "since_seconds": int(time.time() - metrics.started), "note": "Counts only. Nothing here shows what anyone asked for or any of their data."}
+
+    @app.post("/admin/people")
+    async def admin_add_person(request: Request):
+        """Register a new person without touching any yaml. Returns their login token and internal secret once; only the token's hash is kept."""
+        admin(request)
+        name = str((await request.json()).get("name", "")).strip().lower()
+        if not re.fullmatch(r"[a-z][a-z0-9-]{0,30}", name):
+            raise HTTPException(422, "a name is lowercase letters, digits and hyphens, starting with a letter")
+        if name in goblins:
+            raise HTTPException(409, "that name is taken")
+        token, internal = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+        entry = {"name": name, "url": f"http://goblin-{name}:8000", "internal_secret": internal, "user_token_sha256": sha256(token)}
+        goblins[name] = added[name] = entry
+        try:
+            save_state()
+        except HTTPException:
+            del goblins[name], added[name]
+            raise
+        return {"name": name, "login_token": token, "internal_secret": internal, "service": f"goblin-{name}"}
+
+    @app.delete("/admin/people/{name}")
+    def admin_remove_person(request: Request, name: str):
+        admin(request)
+        if name not in added:
+            raise HTTPException(404, "only people added on this page can be removed here")
+        del goblins[name], added[name]
+        save_state()
+        return {"removed": name}
 
     @app.post("/admin/reset")
     def admin_reset(request: Request):

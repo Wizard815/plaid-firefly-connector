@@ -17,16 +17,56 @@ input,button{font:inherit;color:inherit;background:var(--bg);border:1px solid va
   <p class="muted small">General health and call counts, only when you ask. Nothing here shows what anyone asked for or any of their data, and the gateway keeps no log of requests: no addresses, search terms, tokens or bodies.</p>
   <form class="panel row" id="login"><input id="tok" type="password" placeholder="Admin token" autocomplete="current-password" required style="flex:1;min-width:200px"><button class="primary" type="submit">Check now</button><button type="button" id="reset">Clear counts</button><span id="msg" class="small muted"></span></form>
   <div class="panel" id="out" hidden></div>
+  <div class="panel" id="people" hidden></div>
 </main>
 <script>
 const $ = (s) => document.querySelector(s), out = $("#out"), msg = $("#msg");
 const el = (t, a = {}, ...k) => { const e = document.createElement(t); for (const [x, v] of Object.entries(a)) e.setAttribute(x, v); k.flat().forEach((c) => e.append(c?.nodeType ? c : document.createTextNode(String(c)))); return e; };
 const get = (o, k, f) => (o && o[k] ? o[k][f] : 0);
-async function call(path, method = "GET") {
-  const r = await fetch(path, { method, headers: { Authorization: "Bearer " + $("#tok").value.trim() } });
+async function call(path, method = "GET", body) {
+  const r = await fetch(path, { method, headers: { Authorization: "Bearer " + $("#tok").value.trim(), ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
   if (r.status === 401) throw new Error("That is not the admin token.");
-  if (!r.ok) throw new Error("The gateway answered " + r.status);
+  if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(typeof j.detail === "string" ? j.detail : "The gateway answered " + r.status); }
   return r.json();
+}
+
+const b64 = () => { const a = crypto.getRandomValues(new Uint8Array(32)); return btoa(String.fromCharCode(...a)).replace(/\+/g, "-").replace(/\//g, "_"); };   // a Fernet key; made here, so the gateway never sees it
+const composeFor = (n, secret) => `services:
+  goblin-${n}:
+    build: .
+    environment:
+      ROLE: goblin
+      GOBLIN_NAME: ${n}
+      INTERNAL_SECRET: ${secret}
+      FIELD_KEY: ${b64()}
+      GATEWAY_URL: http://gateway:8000
+    env_file: [.secrets/plaid.env]
+    volumes: ["./data/${n}/db:/data"]
+    user: "10001"
+    networks: [edge, egress]
+    restart: unless-stopped
+`;
+const res = el("div");                                    // kept across refreshes so a just-issued login token is not wiped
+function renderPeople(rows) {
+  const box = $("#people"), note = el("p", { class: "small muted" });
+  const add = el("form", { class: "row" }, el("input", { id: "pn", placeholder: "new person's name, e.g. bob", pattern: "[a-z][a-z0-9\\-]{0,30}", required: "", style: "flex:1;min-width:200px" }), el("button", { class: "primary", type: "submit" }, "Add person"));
+  add.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const r = await call("/admin/people", "POST", { name: $("#pn").value.trim() });
+      const file = composeFor(r.name, r.internal_secret);
+      res.replaceChildren(el("p", {}, el("b", {}, r.name + " is registered.")), el("p", { class: "small" }, "Give them this login token. It is shown once and is not stored: "), el("pre", { style: "white-space:pre-wrap;word-break:break-all;margin:0" }, r.login_token),
+        el("p", { class: "small" }, "Their own container still has to be started once (this page cannot start Docker). Save this as docker-compose." + r.name + ".yml next to your other compose file:"), el("pre", { style: "overflow:auto;background:var(--bg);padding:10px;border-radius:8px;font-size:.8rem" }, file),
+        el("p", { class: "small" }, "Then run:"), el("pre", { style: "overflow:auto;background:var(--bg);padding:10px;border-radius:8px;font-size:.8rem" }, `mkdir -p data/${r.name}/db && sudo chown -R 10001:10001 data/${r.name}\ndocker compose -f docker-compose.generated.yml -f docker-compose.${r.name}.yml up -d --build`),
+        el("p", { class: "small muted" }, "The encryption key in that file was made in your browser, so the gateway never sees it. Back the file up: losing it means re-linking their banks. Once the container is up they sign in at the normal address with their name and token."));
+      $("#pn").value = ""; show();
+    } catch (err) { note.textContent = err.message; note.className = "small err"; }
+  });
+  box.replaceChildren(el("h2", { style: "margin:0 0 6px;font-size:1.1rem" }, "People"), el("p", { class: "small muted" }, "Everyone on this gateway. A person you add here can link with the others from their own Family links tab."),
+    el("table", {}, el("tbody", {}, rows.map((g) => el("tr", {}, el("td", {}, g.name), el("td", { class: "small muted" }, g.added_here ? "added here" : "from goblins.yaml"),
+      el("td", { class: "n" }, g.added_here ? (() => { const b = el("button", {}, "Remove"); b.addEventListener("click", async () => { if (!confirm("Remove " + g.name + " from the gateway? Their container keeps its data; they just cannot sign in or link.")) return; try { await call("/admin/people/" + encodeURIComponent(g.name), "DELETE"); show(); } catch (err) { note.textContent = err.message; note.className = "small err"; } }); return b; })() : ""))))),
+    el("div", { style: "margin-top:12px" }, add), note, res);
+  box.hidden = false;
 }
 async function show() {
   msg.textContent = "Checking…"; msg.className = "small muted";
@@ -40,7 +80,7 @@ async function show() {
           el("td", { class: "n" }, ["app", "api_token", "webhook"].reduce((a, k) => a + calls(g, k, "client_errors") + calls(g, k, "server_errors"), 0)))))),
       el("p", { class: "small muted" }, `Pondering Orb summary calls: ${d.orb.calls || 0}. All calls: ${d.total.calls} (${d.total.client_errors} refused or invalid, ${d.total.server_errors} server errors), since the gateway last started or was cleared ${Math.round(d.since_seconds / 60)} minutes ago.`),
       el("p", { class: "small muted" }, d.note));
-    out.hidden = false; msg.textContent = "Updated " + new Date().toLocaleTimeString();
+    out.hidden = false; renderPeople(rows); msg.textContent = "Updated " + new Date().toLocaleTimeString();
   } catch (e) { msg.textContent = e.message; msg.className = "small err"; out.hidden = true; }
 }
 $("#login").addEventListener("submit", (e) => { e.preventDefault(); show(); });

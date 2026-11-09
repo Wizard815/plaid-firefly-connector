@@ -267,6 +267,15 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         r = client.post(f"{gateway_url}/internal/link/send", json={"to": peer, "type": kind, "payload": payload}, headers={"X-Goblin": name, "X-Internal-Secret": secret})
         return r.status_code == 200 and bool(r.json().get("delivered"))
 
+    def link_people() -> list[str]:
+        if not gateway_url:
+            return []
+        try:
+            r = client.get(f"{gateway_url}/internal/link/people", headers={"X-Goblin": name, "X-Internal-Secret": secret})
+            return r.json().get("people", []) if r.status_code == 200 else []
+        except Exception:
+            return []
+
     def link_flush() -> int:
         return links.flush(store, link_send)
 
@@ -274,11 +283,12 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         """A goal I share changed (or my set-aside amount did): tell the others. Never lets a link problem break the edit."""
         try:
             links.bump(store, name, gid) if edited and gid else links.push(store, name)
+            links.push_accounts(store)
             link_flush()
         except Exception:
             pass
 
-    ctx = api_money.make_ctx(store, auth, today or date.today, name=name, plaid=plaid, client=client, caldav_transport=caldav_transport, shared_changed=shared_changed, link_flush=link_flush)
+    ctx = api_money.make_ctx(store, auth, today or date.today, name=name, plaid=plaid, client=client, caldav_transport=caldav_transport, shared_changed=shared_changed, link_flush=link_flush, link_people=link_people)
     ctx.llm_transport = llm_transport
     api_money.register(app, ctx)
     api_plan.register(app, ctx)

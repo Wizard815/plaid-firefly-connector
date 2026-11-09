@@ -123,3 +123,30 @@ def test_containers_start_without_an_access_log():
     assert "--no-access-log" in (ROOT / "Dockerfile").read_text()                                    # uvicorn's default access log prints every path and query string
     for f in ("scripts/dev_stack.py", "scripts/synthetic_e2e.py"):
         assert "--no-access-log" in (ROOT / f).read_text(), f
+
+
+def test_people_can_be_added_from_the_admin_page_and_survive_a_restart(tmp_path, monkeypatch):
+    import httpx
+    from fastapi.testclient import TestClient
+    from goblinbank import gateway
+    from goblinbank.security import sha256
+    state = tmp_path / "people.json"
+    monkeypatch.setenv("GATEWAY_STATE", str(state))
+    cfg = {"goblins": [{"name": "alice", "url": "http://alice", "internal_secret": "sa", "user_token_sha256": sha256("t")}], "orb_keys": [], "admin_token_sha256": sha256("adm")}
+    A = {"Authorization": "Bearer adm"}
+    gw = TestClient(gateway.create_app(dict(cfg), transport=httpx.MockTransport(lambda r: httpx.Response(200, json={}))))
+    assert gw.post("/admin/people", json={"name": "bob"}).status_code == 401
+    assert gw.post("/admin/people", headers=A, json={"name": "Bad Name"}).status_code == 422
+    assert gw.post("/admin/people", headers=A, json={"name": "alice"}).status_code == 409
+    r = gw.post("/admin/people", headers=A, json={"name": "bob"}).json()
+    assert r["name"] == "bob" and r["login_token"] and r["internal_secret"] and "sha256" not in str(r)
+    # the new person can sign in and sees the others by name, and the gateway kept only the token's hash
+    assert gw.get("/g/bob/health", headers={"Authorization": "Bearer " + r["login_token"]}).status_code != 401
+    assert gw.get("/internal/link/people", headers={"X-Goblin": "bob", "X-Internal-Secret": r["internal_secret"]}).json() == {"people": ["alice"]}
+    assert r["login_token"] not in state.read_text() and r["login_token"] not in str(gw.get("/admin/status", headers=A).json())
+    # a restart (new app, same state file) still knows bob; yaml people cannot be removed from the page, added ones can
+    gw2 = TestClient(gateway.create_app(dict(cfg), transport=httpx.MockTransport(lambda r: httpx.Response(200, json={}))))
+    assert [g["name"] for g in gw2.get("/admin/status", headers=A).json()["goblins"]] == ["alice", "bob"]
+    assert gw2.delete("/admin/people/alice", headers=A).status_code == 404
+    assert gw2.delete("/admin/people/bob", headers=A).status_code == 200
+    assert [g["name"] for g in gw2.get("/admin/status", headers=A).json()["goblins"]] == ["alice"]

@@ -109,10 +109,16 @@ def main(src="goblins.yaml"):
         ak = secrets.token_urlsafe(32)
         print(f"[admin] admin token for /admin (shown once): {ak}")
         af.write_text(sha256(ak))
+    st = ROOT / "gateway-state"                                         # people added from the admin page live here
+    st.mkdir(exist_ok=True)
+    try:
+        os.chown(st, 10001, 10001)
+    except PermissionError:
+        print("hint: sudo chown -R 10001:10001 gateway-state")
     (ROOT / "gateway.yaml").write_text(yaml.safe_dump({"goblins": gw_goblins, "orb_keys": orb, "admin_token_sha256": af.read_text().strip()}))
     (ROOT / "gateway.yaml").chmod(0o600)
-    services["gateway"] = {"build": ".", "environment": {"ROLE": "gateway", "GATEWAY_CONFIG": "/config/gateway.yaml", "UI_DIR": "/app/ui"},
-                           "volumes": ["./gateway.yaml:/config/gateway.yaml:ro"], "networks": ["edge"],
+    services["gateway"] = {"build": ".", "environment": {"ROLE": "gateway", "GATEWAY_CONFIG": "/config/gateway.yaml", "UI_DIR": "/app/ui", "GATEWAY_STATE": "/state/people.json"}, "user": "10001",
+                           "volumes": ["./gateway.yaml:/config/gateway.yaml:ro", "./gateway-state:/state"], "networks": ["edge"],
                            "ports": ["127.0.0.1:8080:8000"], "restart": "unless-stopped"}
     (ROOT / "docker-compose.generated.yml").write_text(yaml.safe_dump({"services": services, "networks": networks}, sort_keys=False))
     print(f"wrote gateway.yaml and docker-compose.generated.yml for {len(names)} goblin(s)")
