@@ -110,6 +110,9 @@ Without webhooks the app has to ask each bank on a schedule. With them, Plaid ca
 5. If a bank's login breaks (Plaid says so by webhook), the app raises an alert to relink it; the other banks keep updating.
 The gateway remembers which bank belongs to which goblin in memory only, so each goblin re-announces its banks every few minutes and after any restart.
 
+### Plaid free-plan link limit
+Plaid's free Trial plan limits how many real (Production) banks you can ever link, and per [Plaid's billing docs](https://plaid.com/docs/account/billing/) **removing one does not give the slot back**: every Production Item ever created counts. The docs say 10 for the Trial plan; check what your dashboard shows for your own account. So: use **Relink** (not Unlink then Link) when a bank's login needs repairing, because Relink reuses the same connection; practise in the Sandbox, which has no such limit; and link a bank once you are sure you want it.
+
 ### Keeping the Plaid bill small
 Plaid bills per linked bank login per month, not per call: about $0.45 each at list price (Transactions $0.30 + Recurring $0.15), plus $0.18 if it has an investment account. The calls themselves are free, but the app still keeps them low:
 * **Every bank has its own schedule** (Settings, Connect & import, under each linked bank): every 15 minutes, 3 hours, daily, weekly, every 2 weeks, monthly, or only when you press Sync. **Automatic** picks by what the bank holds: daily for a checking account or card, weekly for a savings-only bank, monthly for an investment-only one. Pressing **Sync now**, a Plaid webhook and a first link always pull straight away. A Plaid webhook (see "Plaid webhooks" above) tells the app the moment new data exists, so it never has to poll.
