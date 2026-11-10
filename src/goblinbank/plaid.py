@@ -74,7 +74,7 @@ class Plaid:
             body["access_token"] = update_item_token
         else:
             body["products"] = ["transactions"]
-            body["optional_products"] = ["investments", "liabilities"]
+            body["optional_products"] = ["investments"]          # holdings for brokerage/IRA accounts; liabilities is never used, so it is not asked for (less for a bank to approve or re-check)
         if self.webhook_url:
             body["webhook"] = self.webhook_url
         if self.redirect_uri:
