@@ -12,6 +12,9 @@ CREATE TABLE IF NOT EXISTS accounts(
 CREATE TABLE IF NOT EXISTS transactions(
   id TEXT PRIMARY KEY, account_id TEXT, date TEXT, name TEXT, amount REAL, currency TEXT DEFAULT 'USD',
   category TEXT, pending INTEGER DEFAULT 0, source TEXT);
+CREATE TABLE IF NOT EXISTS shares(account_id TEXT PRIMARY KEY, peer TEXT NOT NULL);                    -- a joint account: whom it is also sent to
+CREATE TABLE IF NOT EXISTS share_sent(account_id TEXT NOT NULL, peer TEXT NOT NULL, tx_id TEXT NOT NULL, sig TEXT, PRIMARY KEY(account_id, peer, tx_id));
+CREATE TABLE IF NOT EXISTS share_revoke(account_id TEXT NOT NULL, peer TEXT NOT NULL, PRIMARY KEY(account_id, peer));
 CREATE INDEX IF NOT EXISTS tx_date ON transactions(date DESC);
 CREATE TABLE IF NOT EXISTS subscriptions(
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, amount REAL NOT NULL, currency TEXT DEFAULT 'USD',

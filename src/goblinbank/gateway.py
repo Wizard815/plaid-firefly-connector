@@ -259,6 +259,24 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         items[item_id] = g["name"]
         return {"ok": True}
 
+    @app.post("/internal/share/send")
+    async def share_send(request: Request):
+        """Relay one joint-account message from one person's container to another's. The gateway keeps nothing: it checks who is sending, stamps the sender's name on it
+        and passes it on. The admin decides who may share with whom by setting the share on the account; the receiver still needs admin approval before Firefly III gets anything."""
+        g = goblins.get(request.headers.get("x-goblin", ""))
+        if not g:
+            raise HTTPException(401, "unauthorized")
+        require_internal(request, g["internal_secret"])
+        body = await request.json()
+        to = goblins.get(body.get("to", ""))
+        if not to or to["name"] == g["name"] or not isinstance(body.get("payload", {}), dict) or body.get("type") not in ("share-data", "share-revoke"):
+            return {"delivered": False}
+        try:
+            r = await run_in_threadpool(client.post, f"{to['url']}/internal/share/inbox", json={"type": body["type"], "payload": body["payload"], "sender": g["name"]}, headers=goblin_headers(to), timeout=60)
+        except httpx.HTTPError:
+            return {"delivered": False}
+        return {"delivered": r.status_code == 200}
+
     POLICY_KEYS = {"plaid_budget_month": float, "plaid_daily_cap": int, "plaid_min_minutes": int, "plaid_use_recurring": str, "public_url": str, "plaid_client_id": str, "plaid_secret": str, "plaid_env": str, "plaid_redirect_url": str, "firefly_url": str, "firefly_token": str, "firefly_apply_rules": str, "firefly_send_categories": str, "firefly_include_pending": str}
 
     def effective_policy(name: str) -> dict:
@@ -494,7 +512,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     # is scrubbed: bank and account labels and counts, never a balance or a transaction.
     ADMIN_CALLS = [("GET", r"api/status"), ("GET", r"api/plaid/usage"), ("POST", r"plaid/link-token"), ("POST", r"plaid/exchange"), ("PUT", r"api/plaid/items/[^/]+"), ("DELETE", r"api/plaid/items/[^/]+"),
                    ("POST", r"plaid/test"), ("POST", r"plaid/test-webhook"), ("POST", r"sync"), ("GET", r"api/firefly/status"), ("POST", r"api/firefly/(test|sync|retry)"), ("GET", r"api/firefly/accounts"),
-                   ("PUT", r"api/firefly/accounts/[^/]+"), ("POST", r"api/firefly/accounts/[^/]+/rebalance")]
+                   ("PUT", r"api/firefly/accounts/[^/]+"), ("PUT", r"api/shares/[^/]+"), ("POST", r"api/firefly/accounts/[^/]+/rebalance")]
 
     def scrub(path: str, data):
         if path == "api/status" and isinstance(data, dict):

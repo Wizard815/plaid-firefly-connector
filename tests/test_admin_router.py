@@ -150,3 +150,62 @@ def test_each_persons_firefly_address_and_token_are_attached_from_their_own_pane
     assert gw.put("/admin/people/alice/firefly", headers=A, json={"url": "https://ff2.example.com", "token": ""}).json()["token_set"] is True   # blank token keeps the saved one
     assert gw.put("/admin/people/alice/firefly", headers=A, json={"url": "", "token": ""}).json() == {"ok": True, "url": "", "token_set": False}   # no address: disconnected
     assert "alice" not in gw.get("/admin/policy", headers=A).json()["firefly_token_set"]
+
+
+def test_a_joint_account_is_shared_with_a_second_person_who_must_approve_it_for_their_own_firefly(tmp_path, monkeypatch):
+    monkeypatch.setenv("GATEWAY_URL", "http://gateway")
+    monkeypatch.setenv("GATEWAY_STATE", str(tmp_path / "s.json"))
+    holder = {}
+
+    def to_gateway(req: httpx.Request):
+        r = holder["gw"].request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
+        return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
+
+    def person(name):
+        monkeypatch.setenv("GOBLIN_NAME", name)
+        ff, db = FakeFirefly(), DB(":memory:")
+        g = TestClient(goblin.create_app(db=db, firefly_transport=ff.transport(), transport=httpx.MockTransport(to_gateway)))
+        g.put("/api/settings", headers={"X-Internal-Secret": "isec"}, json={"firefly_url": f"https://{name}.example.com", "firefly_token": "good-token"})
+        return g, db, ff
+    (ga, dba, ffa), (gb, dbb, ffb) = person("alice"), person("bob")
+    bank(dba)
+    apps = {"alice": ga, "bob": gb}
+
+    def to_goblin(req: httpx.Request):
+        r = apps[req.url.host].request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
+        return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
+    cfg = {"goblins": [{"name": n, "url": f"http://{n}", "internal_secret": "isec", "user_token_sha256": sha256("t" + n)} for n in apps], "orb_keys": [], "admin_token_sha256": sha256("adm")}
+    gw = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_goblin)))
+    holder["gw"] = gw
+    approve(ga)
+    assert gw.put("/admin/p/alice/api/shares/plaid-chk", json={"peer": "bob"}).status_code == 401
+    assert gw.put("/admin/p/alice/api/shares/plaid-chk", headers=A, json={"peer": "bob"}).status_code == 200
+    import time as _t
+    for _ in range(50):                                                   # the share goes out in the background
+        if dbb.one("SELECT COUNT(*) n FROM transactions")["n"]:
+            break
+        _t.sleep(0.1)
+    # bob has the account and its two transactions, labelled as shared, and NOTHING has gone to bob's Firefly III yet
+    acc = dbb.one("SELECT * FROM accounts")
+    assert acc["id"] == "shared:alice:plaid-chk" and acc["source"] == "shared" and acc["institution"].startswith("Shared by alice")
+    assert {r["id"] for r in dbb.all("SELECT id FROM transactions")} == {"shared:alice:t1", "shared:alice:t2", "shared:alice:t3"}
+    assert gb.post("/api/firefly/sync", headers=GH).json()["created"] == 0 and ffb.accounts == {}
+    lst = gw.get("/admin/p/bob/api/firefly/accounts", headers=A).json()["accounts"]
+    assert [a["mode"] for a in lst] == ["pending"] and "balance" not in lst[0]
+    assert {a["id"]: a["shared_with"] for a in gw.get("/admin/p/alice/api/firefly/accounts", headers=A).json()["accounts"]}["plaid-chk"] == "bob"
+    # bob's admin approves it for bob's Firefly III: it arrives there once
+    assert gb.put("/api/firefly/accounts/shared:alice:plaid-chk", headers=GH, json={"mode": "create"}).status_code == 200
+    r = gb.post("/api/firefly/sync", headers=GH).json()
+    assert r["accounts_created"] == 1 and r["created"] == 2 and len(ffb.accounts) == 1
+    # a later change at the bank reaches bob: a new transaction and a removed one
+    dba.conn.execute("INSERT INTO transactions(id,account_id,date,name,amount,category,pending,source) VALUES('t9','plaid-chk',?,'NEW SHOP',-9.0,'Shopping',0,'plaid')", (d(1),))
+    dba.conn.execute("DELETE FROM transactions WHERE id='t2'"); dba.conn.commit()
+    assert ga.post("/sync", headers=GH).status_code == 200
+    assert {r["id"] for r in dbb.all("SELECT id FROM transactions")} == {"shared:alice:t1", "shared:alice:t3", "shared:alice:t9"}
+    # alice's own Firefly is untouched by any of this, and stopping the share tells bob's side to stop
+    assert gw.put("/admin/p/alice/api/shares/plaid-chk", headers=A, json={"peer": ""}).status_code == 200
+    for _ in range(50):
+        if dbb.one("SELECT mode FROM ff_accounts WHERE account_id='shared:alice:plaid-chk'")["mode"] == "skip":
+            break
+        _t.sleep(0.1)
+    assert dbb.one("SELECT mode FROM ff_accounts WHERE account_id='shared:alice:plaid-chk'")["mode"] == "skip"

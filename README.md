@@ -17,6 +17,31 @@ per-person app lives on the `full-ui` branch.
 4. plaid-firefly-connector pushes transactions to Firefly III after each sync, safely
    repeatable (no duplicates, edits and deletions follow the bank).
 
+## Joint accounts
+
+A bank account two people share is linked once, by one of them. In Admin, Manage
+that person, and in the account table set **Joint with** to the other person. The
+other person gets the account and its transactions as "Shared by <name>". It is
+**not** sent to their Firefly III until the admin approves it for them (create,
+link or skip), the same as any account. Stopping the share tells their side to
+stop sending. Do not share into two people who use the *same* Firefly III: it
+would show the account twice. Just link it once there.
+
+Goals and subscriptions are not part of this app any more (they live on the
+`full-ui` branch). Use Firefly III's own piggy banks and bills.
+
+## Firefly III on Unraid
+
+In the Unraid template (`fireflyiii/core:latest`): `APP_KEY` is any 32
+characters (make one with `head /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 32`);
+`DB_CONNECTION` is `mysql` or `pgsql` and needs a MariaDB or PostgreSQL container
+you install first (create an empty database and a user for it); `DB_HOST` is that
+container's address, `DB_PORT` 3306 (MariaDB) or 5432 (PostgreSQL), plus the
+database name, user and password; `TRUSTED_PROXIES` stays `**`; set a host port
+for the WebUI. Open `http://<unraid address>:<port>`, register the first user,
+create a Personal Access Token, and enter `http://<unraid address>:<port>` and
+the token in Admin for that person.
+
 ## Quick how-to
 
 - **New person:** Admin, *Add person*. Press *Manage*.

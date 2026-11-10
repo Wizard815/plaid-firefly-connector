@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from goblinbank.oplog import log
-from goblinbank import firefly, plaidcost, plaidplan, api_money, external, notify, crypto, feed, importers, ledger, settings as cfg, sync
+from goblinbank import firefly, share as jointshare, plaidcost, plaidplan, api_money, external, notify, crypto, feed, importers, ledger, settings as cfg, sync
 from goblinbank.connectors.base import now_iso
 from goblinbank.connectors.rh_csv import CsvConnector
 from goblinbank.db import DB
@@ -322,6 +322,34 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         with sync_lock:
             return firefly.run(store, firefly_transport)
 
+    class ShareIn(BaseModel):
+        peer: str = ""
+
+    class ShareInbox(BaseModel):
+        type: str = ""
+        payload: dict = {}
+        sender: str = ""
+
+    @app.put("/api/shares/{account_id}")
+    def share_set(request: Request, account_id: str, b: ShareIn):
+        """Share one of this person's bank accounts with one other person (a joint account), or stop with an empty name. Set by the admin."""
+        auth(request)
+        try:
+            jointshare.set_share(store, account_id, b.peer.strip().lower() or None)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        threading.Thread(target=lambda: jointshare.run(store, share_send), daemon=True).start()
+        return {"ok": True}
+
+    @app.post("/internal/share/inbox")
+    def share_inbox(request: Request, m: ShareInbox):
+        """From the gateway only: it stamps `sender` after checking who really sent it."""
+        auth(request)
+        r = jointshare.receive(store, m.sender, m.type, m.payload)
+        if r.get("ok") and firefly.conf(store)["enabled"]:
+            threading.Thread(target=lambda: firefly.run(store, firefly_transport), daemon=True).start()
+        return r
+
     @app.get("/api/firefly/accounts")
     def ff_accounts(request: Request):
         """Each bank account and what happens to it in Firefly III, plus the asset accounts already there to link to."""
@@ -337,7 +365,8 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             except firefly.FireflyError as e:
                 error = str(e)
         by = {x["id"]: x for x in theirs}
-        return {"accounts": [{**a, "label": firefly.account_label(a), "ff_name": (by.get(a["ff_id"]) or {}).get("name"), "ff_balance": (by.get(a["ff_id"]) or {}).get("balance")} for a in mine], "firefly_accounts": theirs, "error": error}
+        sh = jointshare.shared_with(store)
+        return {"accounts": [{**a, "shared_with": sh.get(a["id"]), "label": firefly.account_label(a), "ff_name": (by.get(a["ff_id"]) or {}).get("name"), "ff_balance": (by.get(a["ff_id"]) or {}).get("balance")} for a in mine], "firefly_accounts": theirs, "error": error}
 
     @app.post("/api/firefly/accounts/{account_id}/rebalance")
     def ff_rebalance(request: Request, account_id: str):
@@ -463,6 +492,13 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             except Exception:
                 pass                                          # the weekly safety-net pull covers anything missed
 
+    def share_send(peer: str, kind: str, payload: dict) -> bool:
+        """Hand one message for another person's container to the gateway, which relays it and keeps nothing."""
+        if not gateway_url:
+            return False
+        r = client.post(f"{gateway_url}/internal/share/send", json={"to": peer, "type": kind, "payload": payload}, headers={"X-Goblin": name, "X-Internal-Secret": secret}, timeout=30)
+        return r.status_code == 200 and bool(r.json().get("delivered"))
+
     def do_sync(force: bool = False) -> dict:
         """One pull of everything: Plaid, Robinhood snapshots, drop-folder CSVs. One at a time, whoever asks."""
         apply_policy()
@@ -474,6 +510,10 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                 except PlaidError as e:
                     out["plaid_error"] = str(e)
             sync_state["last"], sync_state["at"] = time.time(), sync.now()
+        try:
+            out["share"] = jointshare.run(store, share_send)                         # joint accounts: what changed goes to the other person
+        except Exception:
+            out["share"] = {"error": True}
         out["firefly"] = firefly.run(store, firefly_transport)                 # also picks up CSV imports; with nothing new it makes no calls to Firefly III
         out["notify"] = notify.run(store, (today or date.today)(), name, notify_transport)
         banks = out["plaid"]

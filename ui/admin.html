@@ -52,6 +52,7 @@ const composeFor = (n, secret) => `services:
 `;
 const res = el("div");                                    // kept across refreshes so a just-issued login token is not wiped
 function renderPeople(rows) {
+  everyone = rows.map((g) => g.name);
   const box = $("#people"), note = el("p", { class: "small muted" });
   const add = el("form", { class: "row" }, el("input", { id: "pn", placeholder: "new person's name, e.g. bob", pattern: "[a-z][a-z0-9\\-]{0,30}", required: "", style: "flex:1;min-width:200px" }), el("input", { id: "pp", type: "password", placeholder: "their password (12+ characters; empty = a random token)", autocomplete: "new-password", minlength: "12", style: "flex:1;min-width:240px" }), el("button", { class: "primary", type: "submit" }, "Add person"));
   add.addEventListener("submit", async (e) => {
@@ -134,7 +135,7 @@ async function renderOrb() {
 }
 
 /* ---------- one person: their bank links and their Firefly III connection, run from here ---------- */
-let who = null;
+let who = null, everyone = [];
 const P = (path, method = "GET", body) => call(`/admin/p/${encodeURIComponent(who)}/${path}`, method, body);
 const loadPlaid = () => new Promise((ok, no) => { if (window.Plaid) return ok(); const sc = document.createElement("script"); sc.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js"; sc.onload = ok; sc.onerror = no; document.head.append(sc); });
 async function openLink(itemId, resume) {
@@ -171,12 +172,13 @@ async function renderPerson() {
         el("div", { class: "small muted" }, (it.accounts || []).map((a) => `${a.nickname || a.name}${a.mask ? " ••" + a.mask : ""}`).join(", "))),
       el("td", {}, sel(SCH, it.schedule || "auto", (v) => upd({ schedule: v }))), el("td", {}, sel([["auto", "Recurring: automatic"], ["on", "Recurring: on"], ["off", "Recurring: off"]], it.recurring || "auto", (v) => upd({ recurring: v }))), el("td", { class: "n", style: "white-space:nowrap" }, rel, " ", un)); })))
     : el("p", { class: "small muted" }, plaid.configured ? "No bank linked yet. Press Link a bank and sign in to the bank in the window that opens." : "Enter the Plaid keys below first.");
-  const fmap = (fa.accounts || []).length ? el("table", {}, el("thead", {}, el("tr", {}, ["Bank account", "In Firefly III", ""].map((h) => el("th", {}, h)))), el("tbody", {}, fa.accounts.map((a) => {
+  const fmap = (fa.accounts || []).length ? el("table", {}, el("thead", {}, el("tr", {}, ["Bank account", "In Firefly III", "Joint with", ""].map((h) => el("th", {}, h)))), el("tbody", {}, fa.accounts.map((a) => {
     const set = (mode, id) => run(() => P("api/firefly/accounts/" + encodeURIComponent(a.id), "PUT", { mode, ff_id: id }), "Saved.");
     const opts = [...(a.mode === "pending" ? [["pending", "Needs approval: nothing sent yet"]] : []), ["create", a.created ? "Created by Plaid Firefly Connector" : "Create in Firefly III"], ["skip", "Do not send"], ...(fa.firefly_accounts || []).map((f) => ["link:" + f.id, "Link to: " + f.name])];
     const s = sel(opts, a.mode === "link" ? "link:" + a.ff_id : a.mode, (v) => (v === "create" || v === "skip" || v === "pending") ? set(v) : set("link", parseInt(v.slice(5))));
     const fix = el("button", { type: "button", title: "Move the opening balance in Firefly III so it matches the bank. No transaction is invented." }, "Match balance"); fix.addEventListener("click", () => run(() => P(`api/firefly/accounts/${encodeURIComponent(a.id)}/rebalance`, "POST", {}), (r) => r.changed ? "Balances now match." : "Already matching."));
-    return el("tr", {}, el("td", {}, a.label, el("div", { class: "small muted" }, a.kind)), el("td", {}, s), el("td", { class: "n" }, a.drift ? [el("span", { class: "pill down" }, "balance differs"), " ", fix] : "")); }))) : el("p", { class: "small muted" }, "Link a bank first. Its accounts show up here.");
+    const jt = a.id.startsWith("shared:") ? el("span", { class: "small muted" }, "shared with this person") : sel([["", "Only " + who], ...everyone.filter((n) => n !== who).map((n) => [n, "Also send to " + n])], a.shared_with || "", (v) => run(() => P("api/shares/" + encodeURIComponent(a.id), "PUT", { peer: v }), v ? "Shared. " + v + " must approve it for their own Firefly III." : "Not shared any more."));
+    return el("tr", {}, el("td", {}, a.label, el("div", { class: "small muted" }, a.kind)), el("td", {}, s), el("td", {}, jt), el("td", { class: "n" }, a.drift ? [el("span", { class: "pill down" }, "balance differs"), " ", fix] : "")); }))) : el("p", { class: "small muted" }, "Link a bank first. Its accounts show up here.");
   const inv = el("div", { class: "small" }), mins = sel([["30", "30 minutes"], ["60", "1 hour"], ["1440", "1 day"], ["10080", "7 days"]], "60", () => {});
   const mk = el("button", { type: "button" }, "Make a temporary link code");
   mk.addEventListener("click", () => run(async () => { const r = await call(`/admin/people/${encodeURIComponent(who)}/invite`, "POST", { minutes: parseInt(mins.value) }); inv.replaceChildren(el("b", {}, `Code for ${who} (shown once): ${r.code}`), el("div", {}, `They open ${location.origin}/link and enter it. It lets them link their own banks and nothing else.`)); }, "Code made. Copy it now."));
