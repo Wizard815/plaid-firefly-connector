@@ -39,7 +39,7 @@ One image, many roles (`ROLE=`), so the repo stays small.
 * **Projected spending**: Overview shows spending so far, a month-end projection built from your history (per category, with lumpy payments like rent handled separately) and both against your average monthly income. Shareable with the Orb as `spending`; the itemised `bill_list` and `alert_list` are separate opt-ins.
 * **Models**: pick the server type from a list, press Refresh to list its models, no naming needed.
 * **Drop folder**: CSVs in `data/<name>/imports/` (Cash App, PayPal, Venmo) are imported on sync.
-* **UI** (`ui/index.html`, served by the gateway at `/`): sign in with goblin name + login token.
+* **UI** (`ui/index.html`, served by the gateway at `/`): sign in with your name and password (see the install guide).
 
 Does the agent need embeddings? No. Your data is structured (amounts, dates, accounts), so exact queries through tools are more accurate than similarity search. Embeddings only help with free text; add them later for notes if you want.
 
@@ -59,12 +59,18 @@ cd Goblin-Bank
 ./scripts/install.sh
 docker compose -f docker-compose.generated.yml up -d --build
 ```
-**There are no files to edit.** The script builds the image, makes a separate encryption key and secrets for each person, and prints each login token and the admin token **once**: copy them somewhere safe now, only their hashes are stored. It starts with one person called `me` (run `NAME=alice ./scripts/install.sh` for a different name). Check with `docker compose -f docker-compose.generated.yml ps`: everything should say "healthy".
+**There are no files to edit.** The script asks for your name and a **password you choose** (12 or more characters; a short phrase of a few words works well), builds the image, makes a separate encryption key and secrets for each person, creates the Docker network it needs (`goblin-bank`, or set `NETWORK=`), and prints the **admin password**. Check with `docker compose -f docker-compose.generated.yml ps`: everything should say "healthy".
+
+How sign-in works:
+* **People choose their own password.** It is kept only as a salted scrypt hash (never as plain text, and the script never writes it to a file). Press Enter at the prompt instead and a random login token is generated and printed **once**; that token is the password then. Change a password later under Settings, General, or `./scripts/install.sh --set-password NAME`. You can also put `password:` on a person in `goblins.yaml` (12+ characters, validated), see `goblins.example.yaml`; the plaintext stays only in that file.
+* **The admin password is random hex**, saved in `.secrets/admin.password` (owner-only) and printed every time you run `./scripts/install.sh`; the gateway only keeps its hash. Lose it? `cat .secrets/admin.password`.
+* **Guessing is slowed down**: after 5 wrong tries for a name (or for the admin) further tries are refused for a while, doubling up to 15 minutes. A weak password is still weak, so make it long.
+* Unattended installs: `NONINTERACTIVE=1 NAME=alice GOBLIN_PASSWORD_ALICE='a long phrase here' ./scripts/install.sh`.
 
 ### 3. Set everything up in the app
-1. **Admin page** at `http://127.0.0.1:6767/admin` (the admin token): add the other people, enter your **Plaid keys** once for everyone (Client ID and secret from dashboard.plaid.com, Developers, Keys, and Sandbox or Production), set the **public address** for webhooks, and set the budget and limits. Each person's login token and the one command to start their container are shown there.
+1. **Admin page** at `http://127.0.0.1:6767/admin` (the admin password): add the other people, enter your **Plaid keys** once for everyone (Client ID and secret from dashboard.plaid.com, Developers, Keys, and Sandbox or Production), set the **public address** for webhooks, and set the budget and limits. Give each new person a password (or let it make a random token, shown once) and the one command to start their container is shown there.
    Or skip the admin page: each person can enter their own keys under Settings, Connect & import, **Plaid keys** (stored encrypted in their own container).
-2. Open `http://127.0.0.1:6767`, sign in with your name and token, and in Settings, Connect & import, press **Test the keys**, then **Link an account**.
+2. Open `http://127.0.0.1:6767`, sign in with your name and password, and in Settings, Connect & import, press **Test the keys**, then **Link an account**.
 3. The Pondering Orb key, CalDAV, Robinhood, models and notifications are all set up in the app too (admin page for the Orb key, Settings for the rest). `.secrets/plaid.env` and `.secrets/<name>.integrations.env` still work if you prefer files, but nothing needs them.
 
 ### Connecting your real bank
@@ -81,6 +87,12 @@ Nothing about this changed with the new setup: the key, the endpoint and the sha
 
 ### Calendar (CalDAV)
 Settings, **Calendar**: enter your CalDAV calendar address, user and password (stored encrypted in that person's container; `.secrets/<name>.integrations.env` is only an optional fallback) and press **Test connection**. Then, on the Subscriptions tab, **Push to CalDAV now** puts every bill into the calendar and **Download .ics** gives the same bills for any calendar app. Reading calendar events as money amounts is not built yet.
+
+### One address for everyone
+There is **one gateway and one address** (`http://127.0.0.1:6767`, or your Tailscale / domain address). Everybody uses that same address, and so does the admin:
+* `/` is the sign-in page. Each person types their own name and password; the gateway then sends everything they do only to their own goblin container (`/g/<name>/...` behind the scenes). Alice and Bob never get different ports or links, and they never reach each other's containers.
+* `/admin` on the same address is the admin page, with its own password (the random hex one in `.secrets/admin.password`).
+* The goblin containers have no ports open to you at all. Only the gateway is published (port 6767, this machine only); the goblins sit behind it on the Docker network and trust only the gateway's secret.
 
 ### Which Plaid site is which
 * **dashboard.plaid.com** is the developer dashboard: your Client ID, secrets, allowed redirect URIs, API version and usage. This is what Goblin Bank is set up with.
@@ -113,11 +125,11 @@ The gateway listens only on `127.0.0.1:6767` on purpose (change it with `port:` 
 * **Tailscale (simplest, recommended):** install it on the server and your devices, then `tailscale serve --bg 6767` gives you an `https://your-machine.your-tailnet.ts.net` address that only your devices can open.
 * **Your own domain with automatic HTTPS:** edit `examples/Caddyfile` (your domain), point the domain at the server, open ports 80 and 443, then
   `docker compose -f docker-compose.generated.yml -f examples/docker-compose.caddy.yml up -d`.
-* **Cloudflare Tunnel** also works. Whatever you use, it must be HTTPS: your login token travels with every request.
+* **Cloudflare Tunnel** also works. Whatever you use, it must be HTTPS: your password travels at sign-in and a session token with every request.
 Never expose port 6767 to the internet as plain HTTP.
 
 ### 5. Add people, link them, share
-* **Add a person:** open `/admin` (use the admin token), type a name under People, press Add. It prints their login token once and the small compose file for their container, plus the one command to start it (a web page cannot start Docker). Their encryption key is made in your browser, so the gateway never sees it.
+* **Add a person:** open `/admin` (use the admin password), type a name and, if you like, a password for them under People, press Add. Without a password it prints a random login token once. It also shows the small compose file for their container, plus the one command to start it (a web page cannot start Docker). Their encryption key is made in your browser, so the gateway never sees it.
 * **Link two people:** each signs in, Settings, **Family links**, picks the other person from the list and asks. The other person gets a pop-up they must answer. A link only sets up the connection; each person then ticks exactly what the other can see (a savings account's balance, a goal), and can take it back any time.
 * **Plaid webhooks (optional):** set the Public address on the admin page (see "Webhooks" above). Without it, banks are still pulled on their schedules.
 
@@ -133,15 +145,16 @@ docker compose -f docker-compose.generated.yml down        # stop (data stays in
 | Path | What | Back up? |
 | --- | --- | --- |
 | `goblins.yaml` | who is on this server | yes |
-| `.secrets/` | encryption keys, secrets, Plaid keys | **yes, private** |
+| `.secrets/` | encryption keys, secrets, the admin password (`admin.password`), password hashes | **yes, private** |
 | `data/<name>/db/` | one person's database | yes |
 | `data/<name>/imports/` | drop CSVs here (Cash App, PayPal, Venmo) | optional |
 | `gateway.yaml`, `gateway-state/` | the gateway's list of people (hashes only) | yes |
 
 ### 8. Troubleshooting
+* **No accounts after linking Plaid?** Run `./scripts/doctor.sh`. It checks, without printing any secret, that the Client ID and the secret are both set, which environment (Sandbox or Production) the app is using, whether Plaid accepts the keys, and which banks are linked, and it reminds you of the usual causes (linking in my.plaid.com instead of in the app, production not approved yet).
 * `docker compose ... ps` shows a service restarting: `docker compose -f docker-compose.generated.yml logs <service>`.
 * **Gateway "Permission denied: /config/gateway.yaml"** or "cannot write state": the containers run as user 10001. `sudo chown 10001:10001 gateway.yaml && sudo chown -R 10001:10001 gateway-state data`.
-* **Lost a login token:** `./scripts/install.sh --reset-token bob` prints a new one (nothing else changes), then `docker compose -f docker-compose.generated.yml restart gateway`.
+* **Forgot a password:** `./scripts/install.sh --set-password bob` asks for a new one (nothing else changes); `./scripts/install.sh --reset-token bob` instead makes a new random token. Then `docker compose -f docker-compose.generated.yml restart gateway`.
 * **"Plaid is not configured":** enter the keys in Settings, Connect & import, Plaid keys (or on the admin page), then press Test the keys.
 * **Phone cannot reach it:** see step 4; the gateway is not on the open network by default.
 

@@ -46,7 +46,9 @@ def test_only_the_admin_token_opens_the_admin_view():
     g, gw = rig()
     api_tok = g.post("/api/tokens", headers=H, json={"name": "ha", "scopes": ["summary"]}).json()["token"]
     for hdr in ({}, {"Authorization": "Bearer nope"}, {"Authorization": "Bearer alice-login"}, {"Authorization": "Bearer orbkey"}, {"Authorization": "Bearer " + api_tok}):
-        assert gw.get("/admin/status", headers=hdr).status_code == 401 and gw.post("/admin/reset", headers=hdr).status_code == 401, hdr
+        gw.app.state  # noqa: B018
+        g2, gw2 = rig()                                                      # a fresh gateway each time: repeated wrong guesses are throttled (tested separately)
+        assert gw2.get("/admin/status", headers=hdr).status_code == 401 and gw2.post("/admin/reset", headers=hdr).status_code == 401, hdr
     assert gw.get("/admin/status", headers=ADMIN).status_code == 200
     # the admin token opens nothing else
     assert gw.get("/g/alice/api/overview", headers=ADMIN).status_code == 401 and gw.get("/api/v1/summary", headers=ADMIN).status_code == 401

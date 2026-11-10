@@ -15,7 +15,7 @@ input,button{font:inherit;color:inherit;background:var(--bg);border:1px solid va
 <main>
   <h1>Goblin Bank admin</h1>
   <p class="muted small">General health and call counts, only when you ask. Nothing here shows what anyone asked for or any of their data, and the gateway keeps no log of requests: no addresses, search terms, tokens or bodies.</p>
-  <form class="panel row" id="login"><input id="tok" type="password" placeholder="Admin token" autocomplete="current-password" required style="flex:1;min-width:200px"><button class="primary" type="submit">Check now</button><button type="button" id="reset">Clear counts</button><span id="msg" class="small muted"></span></form>
+  <form class="panel row" id="login"><input id="tok" type="password" placeholder="Admin password" autocomplete="current-password" required style="flex:1;min-width:200px"><button class="primary" type="submit">Check now</button><button type="button" id="reset">Clear counts</button><span id="msg" class="small muted"></span></form>
   <div class="panel" id="out" hidden></div>
   <div class="panel" id="people" hidden></div>
   <div class="panel" id="plaid" hidden></div>
@@ -27,7 +27,8 @@ const el = (t, a = {}, ...k) => { const e = document.createElement(t); for (cons
 const get = (o, k, f) => (o && o[k] ? o[k][f] : 0);
 async function call(path, method = "GET", body) {
   const r = await fetch(path, { method, headers: { Authorization: "Bearer " + $("#tok").value.trim(), ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
-  if (r.status === 401) throw new Error("That is not the admin token.");
+  if (r.status === 401) throw new Error("That is not the admin password.");
+  if (r.status === 429) throw new Error((await r.json().catch(() => ({}))).detail || "Too many wrong attempts; wait a little.");
   if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(typeof j.detail === "string" ? j.detail : "The gateway answered " + r.status); }
   return r.json();
 }
@@ -51,17 +52,17 @@ const composeFor = (n, secret) => `services:
 const res = el("div");                                    // kept across refreshes so a just-issued login token is not wiped
 function renderPeople(rows) {
   const box = $("#people"), note = el("p", { class: "small muted" });
-  const add = el("form", { class: "row" }, el("input", { id: "pn", placeholder: "new person's name, e.g. bob", pattern: "[a-z][a-z0-9\\-]{0,30}", required: "", style: "flex:1;min-width:200px" }), el("button", { class: "primary", type: "submit" }, "Add person"));
+  const add = el("form", { class: "row" }, el("input", { id: "pn", placeholder: "new person's name, e.g. bob", pattern: "[a-z][a-z0-9\\-]{0,30}", required: "", style: "flex:1;min-width:200px" }), el("input", { id: "pp", type: "password", placeholder: "their password (12+ characters; empty = a random token)", autocomplete: "new-password", minlength: "12", style: "flex:1;min-width:240px" }), el("button", { class: "primary", type: "submit" }, "Add person"));
   add.addEventListener("submit", async (e) => {
     e.preventDefault();
     try {
-      const r = await call("/admin/people", "POST", { name: $("#pn").value.trim() });
+      const r = await call("/admin/people", "POST", { name: $("#pn").value.trim(), password: $("#pp").value });
       const file = composeFor(r.name, r.internal_secret);
-      res.replaceChildren(el("p", {}, el("b", {}, r.name + " is registered.")), el("p", { class: "small" }, "Give them this login token. It is shown once and is not stored: "), el("pre", { style: "white-space:pre-wrap;word-break:break-all;margin:0" }, r.login_token),
+      res.replaceChildren(el("p", {}, el("b", {}, r.name + " is registered.")), r.password_set ? el("p", { class: "small" }, "They sign in with the password you just set (only a salted hash of it is kept). They can change it under Settings, General.") : [el("p", { class: "small" }, "Give them this login token. It is shown once and is not stored: "), el("pre", { style: "white-space:pre-wrap;word-break:break-all;margin:0" }, r.login_token)],
         el("p", { class: "small" }, "Their own container still has to be started once (this page cannot start Docker). Save this as docker-compose." + r.name + ".yml next to your other compose file:"), el("pre", { style: "overflow:auto;background:var(--bg);padding:10px;border-radius:8px;font-size:.8rem" }, file),
         el("p", { class: "small" }, "Then run:"), el("pre", { style: "overflow:auto;background:var(--bg);padding:10px;border-radius:8px;font-size:.8rem" }, `mkdir -p data/${r.name}/db && sudo chown -R 10001:10001 data/${r.name}\ndocker compose -f docker-compose.generated.yml -f docker-compose.${r.name}.yml up -d --build`),
         el("p", { class: "small muted" }, "The encryption key in that file was made in your browser, so the gateway never sees it. Back the file up: losing it means re-linking their banks. Once the container is up they sign in at the normal address with their name and token."));
-      $("#pn").value = ""; show();
+      $("#pn").value = ""; $("#pp").value = ""; show();
     } catch (err) { note.textContent = err.message; note.className = "small err"; }
   });
   box.replaceChildren(el("h2", { style: "margin:0 0 6px;font-size:1.1rem" }, "People"), el("p", { class: "small muted" }, "Everyone on this gateway. A person you add here can link with the others from their own Family links tab."),

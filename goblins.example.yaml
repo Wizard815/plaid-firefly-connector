@@ -2,6 +2,13 @@
 # You can also add people later from the gateway's /admin page; this file is just the starting set.
 goblins:
   - name: alice            # lowercase letters, digits and hyphens. This is what the person signs in with.
+    # password: "a few words make a good password"
+                           # OPTIONAL. The person's own password, 12 or more characters (generation fails with a clear error if it is shorter).
+                           # Only a salted scrypt hash is stored; this plaintext is never copied into any generated file, but it does sit here
+                           # in goblins.yaml (which is git-ignored), so delete the line after the first run, or leave it out and use the install
+                           # prompt / `./scripts/install.sh --set-password alice` instead (those never write it to a file).
+                           # A password you can remember is much weaker than a random token, so make it long. Wrong guesses are slowed down per name.
+                           # Leave it out and a random high-entropy login token is generated and printed once instead.
     share: []              # what the Pondering Orb may see. Leave empty to share nothing. Options:
                            #   net_worth, subscriptions, bills, bill_list, alerts, alert_list, savings, goals, spending,
                            #   robinhood_main, robinhood_agent   (people can also change this later in Settings, Sharing)

@@ -840,6 +840,14 @@ async function tabGeneral(root, rerender) {
       h("div", { class: "chips", role: "group", "aria-label": "Colour mode" }, [["system", "Match my device"], ["light", "Light"], ["dark", "Dark"]].map(([m, t]) => h("button", { class: "chip" + (m === mode ? " on" : ""), "aria-pressed": m === mode, onclick: () => setMode(m) }, t))),
       h("h3", { style: "margin-top:16px;font-size:.95rem" }, "Accent colour"),
       h("div", { class: "swatches", role: "group", "aria-label": "Accent colour" }, Object.entries(PALETTES).map(([k, v]) => h("button", { class: "swatch", title: v[0], "aria-label": v[0], "aria-pressed": k === pal, style: `background:${v[1]}`, onclick: () => { store.set("gb_palette", k); applyPrefs(); rerender(); } })))),
+    S.demo ? null : h("div", { class: "panel" }, h("h3", {}, "Password"),
+      h("p", { class: "muted small" }, "Change the password you sign in with (12 or more characters; a short phrase of a few words works well). Only a salted hash of it is kept."),
+      h("form", { class: "row", onsubmit: async (e) => { e.preventDefault(); if (val("pw-new") !== val("pw-new2")) return toast("The new passwords do not match");
+        try { const r = await fetch("/account/password", { method: "POST", headers: JSONH, body: JSON.stringify({ name: S.name, current: val("pw-cur"), new: val("pw-new") }) }); const j = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : "Could not change it");
+          S.token = j.token; sessionStorage.setItem("gb_tok", S.token); toast("Password changed"); rerender(); } catch (err) { fail(err); } } },
+        field("pw-cur", "Current password", "", { type: "password", autocomplete: "current-password", required: true }), field("pw-new", "New password", "", { type: "password", autocomplete: "new-password", required: true, minlength: "12" }), field("pw-new2", "New password again", "", { type: "password", autocomplete: "new-password", required: true, minlength: "12" }),
+        h("button", { class: "btn primary", type: "submit" }, "Change password"))),
     h("div", { class: "panel" }, h("h3", {}, "Layout"),
       h("p", { class: "muted small" }, "Move panels around on every tab, and hide the ones you never look at. The order is remembered per tab in this browser."),
       h("label", { class: "check" }, h("input", { type: "checkbox", checked: S.arrange, onchange: (e) => { S.arrange = e.target.checked; } }), "Arrange mode (turn it on, then go to any tab)"),
@@ -1021,9 +1029,15 @@ async function render() {
   checkRequests();
 }
 function login() {
-  $("#app").replaceChildren(h("form", { class: "panel login", onsubmit: async (e) => { e.preventDefault(); S.name = $("#ln").value.trim().toLowerCase(); S.token = $("#lt").value.trim();
-    try { await api("/api/overview"); S.authed = true; sessionStorage.setItem("gb_name", S.name); sessionStorage.setItem("gb_tok", S.token); render(); } catch (err) { toast("Sign-in failed"); } } },
-    h("h2", {}, "Goblin Bank"), h("label", {}, "Goblin", h("input", { id: "ln", autocomplete: "username", required: true })), h("label", {}, "Login token", h("input", { id: "lt", type: "password", autocomplete: "current-password", required: true })), h("button", { class: "btn primary", type: "submit" }, "Open my vault")));
+  $("#app").replaceChildren(h("form", { class: "panel login", onsubmit: async (e) => { e.preventDefault(); const name = $("#ln").value.trim().toLowerCase(), pw = $("#lt").value;
+    try {
+      const r = await fetch("/login", { method: "POST", headers: JSONH, body: JSON.stringify({ name, password: pw }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(r.status === 429 ? (j.detail || "Too many attempts, wait a little") : "Wrong name or password");
+      S.name = name; S.token = j.token;                                      // a session token: the password itself is never kept or sent again
+      await api("/api/overview"); S.authed = true; sessionStorage.setItem("gb_name", S.name); sessionStorage.setItem("gb_tok", S.token); render();
+    } catch (err) { toast(err.message || "Sign-in failed"); } } },
+    h("h2", {}, "Goblin Bank"), h("label", {}, "Name", h("input", { id: "ln", autocomplete: "username", required: true })), h("label", {}, "Password", h("input", { id: "lt", type: "password", autocomplete: "current-password", required: true })), h("button", { class: "btn primary", type: "submit" }, "Open my vault")));
 }
 (async function boot() {
   const want = location.hash.slice(1); if (TABS.some((t) => t[0] === want)) S.tab = want;

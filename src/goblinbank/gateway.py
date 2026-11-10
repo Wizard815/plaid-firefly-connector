@@ -17,7 +17,7 @@ import yaml
 from fastapi.concurrency import run_in_threadpool
 from fastapi import FastAPI, HTTPException, Request, Response
 
-from goblinbank.security import bearer, check_token, require_internal, sha256
+from goblinbank.security import Throttle, bearer, check_password_strength, check_token, hash_password, require_internal, sha256, verify_password
 
 
 def load_config(path: str) -> dict:
@@ -54,12 +54,16 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     goblins = {g["name"]: g for g in cfg.get("goblins", [])}
     orb_keys = list(cfg.get("orb_keys", []))                    # from gateway.yaml; keys made on the admin page are added to this same list (they are remembered in the state file)
     orb_added: list[dict] = []
+    creds: dict[str, str] = {}                                  # passwords people set or changed in the app (scrypt hashes); they take over from gateway.yaml
+    sessions: dict[str, tuple[str, float]] = {}                 # session token -> (name, expiry); memory only, so a restart signs everyone out
+    throttle = Throttle()
     state_path = Path(os.environ.get("GATEWAY_STATE", cfg.get("state_file", "")) or "")
     policy: dict = {"default": {}, "people": {}}               # Plaid limits set on the admin page; goblins fetch theirs and obey (budget, daily call cap, how often to ask Plaid)
     added: dict[str, dict] = {}                               # people added from the admin page (name, address, secrets' hash): the same facts gateway.yaml holds
     if str(state_path) not in ("", "."):
         try:
             saved = json.loads(state_path.read_text())
+            creds.update(saved.get("creds") or {})
             for k in saved.get("orb", []):
                 orb_added.append(k)
                 orb_keys.append({"sha256": k["sha256"], "scopes": ["summary:read"]})
@@ -75,7 +79,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             raise HTTPException(409, "this gateway has no writable state folder; add people with goblins.yaml instead")
         state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"people": list(added.values()), "policy": policy, "orb": orb_added}))
+        tmp.write_text(json.dumps({"people": list(added.values()), "policy": policy, "orb": orb_added, "creds": creds}))
         tmp.chmod(0o600)
         tmp.replace(state_path)
     items: dict[str, str] = {}
@@ -104,12 +108,87 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     def goblin_headers(g):
         return {"X-Internal-Secret": g["internal_secret"]}
 
+    for n_, h_ in creds.items():                                # a password changed in the app wins over the file
+        if n_ in goblins:
+            goblins[n_]["user_password_scrypt"] = h_
+            goblins[n_].pop("user_token_sha256", None)
+    SESSION_SECONDS = 24 * 3600
+    dummy = {}
+
+    def password_matches(g: dict | None, presented: str) -> bool:
+        """Slow scrypt for a chosen password; fast sha256 for a random token. An unknown name costs the same time as a known one."""
+        if g and g.get("user_password_scrypt"):
+            return verify_password(presented, g["user_password_scrypt"])
+        if g:
+            return check_token(presented, g.get("user_token_sha256", ""))
+        dummy.setdefault("h", hash_password("not a real account"))
+        verify_password(presented, dummy["h"])
+        return False
+
+    def new_session(name: str) -> str:
+        now = time.time()
+        for t in [t for t, (_, exp) in sessions.items() if exp < now]:
+            del sessions[t]
+        token = "sess_" + secrets.token_urlsafe(32)
+        sessions[token] = (name, now + SESSION_SECONDS)
+        return token
+
     def user_goblin(request: Request, name: str) -> dict:
+        throttle.check("u:" + name)
+        g, tok = goblins.get(name), bearer(request)
+        sess = sessions.get(tok or "")
+        # Same error for unknown goblin and wrong credential: no name enumeration.
+        if g and tok and ((sess and sess[0] == name and sess[1] > time.time()) or (not g.get("user_password_scrypt") and check_token(tok, g.get("user_token_sha256", "")))):
+            return g
+        throttle.fail("u:" + name)
+        raise HTTPException(401, "unauthorized")
+
+    @app.post("/login")
+    async def login(request: Request):
+        """Name + password in, a session token out (use it as the bearer token). Wrong attempts are slowed down per name."""
+        body = await request.json()
+        name, pw = str(body.get("name", "")).strip().lower(), str(body.get("password", ""))
+        throttle.check("u:" + name)
         g = goblins.get(name)
-        # Same error for unknown goblin and wrong token: no name enumeration.
-        if not g or not check_token(bearer(request), g["user_token_sha256"]):
-            raise HTTPException(401, "unauthorized")
-        return g
+        if not await run_in_threadpool(password_matches, g, pw):
+            throttle.fail("u:" + name)
+            raise HTTPException(401, "wrong name or password")
+        throttle.ok("u:" + name)
+        return {"token": new_session(name)}
+
+    @app.post("/account/password")
+    async def change_password(request: Request):
+        """Change your own password (the current one is required). Stored as a scrypt hash in the gateway's state folder."""
+        body = await request.json()
+        name, cur, new = str(body.get("name", "")).strip().lower(), str(body.get("current", "")), str(body.get("new", ""))
+        throttle.check("u:" + name)
+        g = goblins.get(name)
+        if not await run_in_threadpool(password_matches, g, cur):
+            throttle.fail("u:" + name)
+            raise HTTPException(401, "the current password is wrong")
+        try:
+            check_password_strength(new, name)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        h = await run_in_threadpool(hash_password, new)
+        old = (creds.get(name), g.get("user_password_scrypt"), g.get("user_token_sha256"))
+        creds[name] = g["user_password_scrypt"] = h
+        g.pop("user_token_sha256", None)
+        try:
+            save_state()
+        except HTTPException:
+            if old[0] is None:
+                creds.pop(name, None)
+            else:
+                creds[name] = old[0]
+            g["user_password_scrypt"] = old[1]
+            if old[2]:
+                g["user_token_sha256"] = old[2]
+            raise
+        for t in [t for t, (n, _) in sessions.items() if n == name]:
+            del sessions[t]
+        throttle.ok("u:" + name)
+        return {"token": new_session(name)}
 
     @app.get("/health")
     def health():
@@ -230,8 +309,11 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
 
     # ---- admin: general health and counts, on demand. No route here reaches a goblin's data; the only call into a goblin is its /health.
     def admin(request: Request):
+        throttle.check("admin")
         if not check_token(bearer(request), cfg.get("admin_token_sha256", "")):
+            throttle.fail("admin")
             raise HTTPException(401, "unauthorized")
+        throttle.ok("admin")
 
     @app.get("/admin/status")
     def admin_status(request: Request):
@@ -377,20 +459,31 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     async def admin_add_person(request: Request):
         """Register a new person without touching any yaml. Returns their login token and internal secret once; only the token's hash is kept."""
         admin(request)
-        name = str((await request.json()).get("name", "")).strip().lower()
+        body = await request.json()
+        name = str(body.get("name", "")).strip().lower()
         if not re.fullmatch(r"[a-z][a-z0-9-]{0,30}", name):
             raise HTTPException(422, "a name is lowercase letters, digits and hyphens, starting with a letter")
         if name in goblins:
             raise HTTPException(409, "that name is taken")
+        password = str(body.get("password", "") or "")
         token, internal = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-        entry = {"name": name, "url": f"http://goblin-{name}:8000", "internal_secret": internal, "user_token_sha256": sha256(token)}
+        entry = {"name": name, "url": f"http://goblin-{name}:8000", "internal_secret": internal}
+        if password:                                             # the person's own password: only its scrypt hash is kept
+            try:
+                check_password_strength(password, name)
+            except ValueError as e:
+                raise HTTPException(422, str(e))
+            entry["user_password_scrypt"] = await run_in_threadpool(hash_password, password)
+            token = ""
+        else:
+            entry["user_token_sha256"] = sha256(token)
         goblins[name] = added[name] = entry
         try:
             save_state()
         except HTTPException:
             del goblins[name], added[name]
             raise
-        return {"name": name, "login_token": token, "internal_secret": internal, "service": f"goblin-{name}"}
+        return {"name": name, "login_token": token, "password_set": bool(password), "internal_secret": internal, "service": f"goblin-{name}"}
 
     @app.delete("/admin/people/{name}")
     def admin_remove_person(request: Request, name: str):

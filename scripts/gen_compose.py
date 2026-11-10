@@ -9,7 +9,13 @@ goblins.yaml:
       rh_live: false               # run the unofficial live connector (off by default)
   orb_key: true                    # create a read-only key for Pondering Orb
 
-User tokens / orb key are printed ONCE; only their sha256 is stored.
+Logins: a goblin entry may carry `password: <12+ characters>`; only a salted scrypt hash of it is stored. Without one, a random login token is made, printed ONCE,
+and only its sha256 is stored. The admin password is a random hex string saved in .secrets/admin.password and printed every time this runs; the gateway keeps
+only its hash. The orb key is printed once.
+
+    python3 scripts/gen_compose.py                          # (re)generate everything
+    python3 scripts/gen_compose.py --reset-token NAME       # a new random login token for NAME
+    GOBLIN_NEW_PASSWORD=... python3 scripts/gen_compose.py --set-password NAME     # set or change NAME's password (never read from a file)
 """
 import os
 import secrets
@@ -20,7 +26,7 @@ import yaml
 from cryptography.fernet import Fernet
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from goblinbank.security import sha256  # noqa: E402
+from goblinbank.security import check_password_strength, hash_password, sha256, verify_password  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SEC = ROOT / ".secrets"
@@ -33,10 +39,24 @@ def _stub(path, text):
         print(f"created {path.name} (optional: everything in it can be entered in the app instead)")
 
 
+def _password_for(g, n, setpw):
+    """The password a person chose, from the install prompt / --set-password (environment) or the optional `password:` in goblins.yaml. Checked for length here."""
+    pw = os.environ.get("GOBLIN_NEW_PASSWORD") if setpw == n else os.environ.get("GOBLIN_PASSWORD_" + n.upper().replace("-", "_")) or g.get("password")
+    if pw is None or pw == "":
+        return None
+    try:
+        check_password_strength(str(pw), n)
+    except ValueError as e:
+        sys.exit(f"bad password for {n!r}: {e}")
+    return str(pw)
+
+
 def main(src="goblins.yaml", *flags):
-    reset = None
+    reset = setpw = None
     if src == "--reset-token":                      # python scripts/gen_compose.py --reset-token bob : new login token, nothing else changes
         reset, src = flags[0] if flags else sys.exit("usage: --reset-token <name>"), "goblins.yaml"
+    elif src == "--set-password":                   # GOBLIN_NEW_PASSWORD=... python scripts/gen_compose.py --set-password bob
+        setpw, src = flags[0] if flags else sys.exit("usage: --set-password <name>"), "goblins.yaml"
     spec = yaml.safe_load((ROOT / src).read_text())
     SEC.mkdir(exist_ok=True, mode=0o700)
     network = spec.get("network")
@@ -54,16 +74,26 @@ def main(src="goblins.yaml", *flags):
         f = SEC / f"{n}.env"
         kv = dict(l.split("=", 1) for l in f.read_text().splitlines() if "=" in l) if f.exists() else {}
         changed = False
+        pw = _password_for(g, n, setpw)
+        if setpw == n and not pw:
+            sys.exit("set GOBLIN_NEW_PASSWORD to the new password (it is never read from a file)")
         if reset == n and kv:
             token = secrets.token_urlsafe(32)
             kv["USER_TOKEN_SHA256"] = sha256(token)
+            kv.pop("USER_PASSWORD_SCRYPT", None)
             print(f"[{n}] NEW login token (shown once): {token}")
             changed = True
         if "INTERNAL_SECRET" not in kv:
             kv["INTERNAL_SECRET"], kv["CONNECTOR_SECRET"] = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-            token = secrets.token_urlsafe(32)
-            kv["USER_TOKEN_SHA256"] = sha256(token)
-            print(f"[{n}] login token (shown once): {token}")
+            if not pw:
+                token = secrets.token_urlsafe(32)
+                kv["USER_TOKEN_SHA256"] = sha256(token)
+                print(f"[{n}] login token (shown once): {token}")
+            changed = True
+        if pw and not verify_password(pw, kv.get("USER_PASSWORD_SCRYPT")):      # a chosen password: salted scrypt, never plain sha256, and the plaintext is not written anywhere
+            kv["USER_PASSWORD_SCRYPT"] = hash_password(pw)
+            kv.pop("USER_TOKEN_SHA256", None)
+            print(f"[{n}] password set (only a salted scrypt hash of it is stored)")
             changed = True
         if "FIELD_KEY" not in kv:          # encrypts Plaid tokens at rest; LOSE THIS AND LINKS MUST BE REDONE
             kv["FIELD_KEY"] = Fernet.generate_key().decode()
@@ -71,10 +101,11 @@ def main(src="goblins.yaml", *flags):
         if changed:
             f.write_text("".join(f"{k}={v}\n" for k, v in kv.items()))
             f.chmod(0o600)
-        internal, connector, tok_hash = kv["INTERNAL_SECRET"], kv["CONNECTOR_SECRET"], kv["USER_TOKEN_SHA256"]
+        internal, connector = kv["INTERNAL_SECRET"], kv["CONNECTOR_SECRET"]
         _stub(SEC / f"{n}.integrations.env", "CALDAV_URL=\nCALDAV_USER=\nCALDAV_PASSWORD=\n")
         _stub(SEC / "plaid.env", "PLAID_CLIENT_ID=\nPLAID_SECRET=\nPLAID_ENV=sandbox\nPLAID_WEBHOOK_URL=\n")
-        gw_goblins.append({"name": n, "url": f"http://goblin-{n}:8000", "internal_secret": internal, "user_token_sha256": tok_hash})
+        gw_goblins.append({"name": n, "url": f"http://goblin-{n}:8000", "internal_secret": internal,
+                           **({"user_password_scrypt": kv["USER_PASSWORD_SCRYPT"]} if kv.get("USER_PASSWORD_SCRYPT") else {"user_token_sha256": kv["USER_TOKEN_SHA256"]})})
         for sub in ("db", "robinhood-csv", "rh-live-session", "imports"):
             d = ROOT / "data" / n / sub
             d.mkdir(parents=True, exist_ok=True)
@@ -115,10 +146,17 @@ def main(src="goblins.yaml", *flags):
             of.write_text(sha256(k))
         orb = [{"sha256": of.read_text().strip(), "scopes": ["summary:read"]}]
     af = SEC / "admin.key.sha256"          # for the /admin page: general health and counts only
-    if not af.exists():
-        ak = secrets.token_urlsafe(32)
-        print(f"[admin] admin token for /admin (shown once): {ak}")
-        af.write_text(sha256(ak))
+    pf = SEC / "admin.password"            # the admin password: random hex, kept here and shown on every run (the gateway only ever gets its hash)
+    if not pf.exists() and not af.exists():
+        pf.write_text(secrets.token_hex(16) + "\n")
+        pf.chmod(0o600)
+    if pf.exists():
+        ap = pf.read_text().strip()
+        if not af.exists() or af.read_text().strip() != sha256(ap):
+            af.write_text(sha256(ap))
+        print(f"[admin] admin password: {ap}   (saved in .secrets/admin.password)")
+    else:
+        print("[admin] an admin token from an earlier install is in use (only its hash is stored). Delete .secrets/admin.key.sha256 and run this again to get an admin password.")
     st = ROOT / "gateway-state"                                         # people added from the admin page live here
     st.mkdir(exist_ok=True)
     try:
