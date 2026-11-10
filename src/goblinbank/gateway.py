@@ -17,6 +17,7 @@ import yaml
 from fastapi.concurrency import run_in_threadpool
 from fastapi import FastAPI, HTTPException, Request, Response
 
+from goblinbank.oplog import log
 from goblinbank.security import Throttle, bearer, check_password_strength, check_token, hash_password, require_internal, sha256, verify_password
 
 
@@ -46,7 +47,7 @@ class Metrics:
 KINDS = ("app", "api_token", "webhook", "orb")
 
 
-def create_app(config: dict | None = None, transport: httpx.BaseTransport | None = None) -> FastAPI:
+def create_app(config: dict | None = None, transport: httpx.BaseTransport | None = None, monitor: bool = False) -> FastAPI:
     for noisy in ("httpx", "httpcore", "uvicorn.access"):          # these log full URLs, query strings included; keep them quiet whatever the log level
         logging.getLogger(noisy).setLevel(logging.WARNING)
     cfg = config or load_config(os.environ.get("GATEWAY_CONFIG", "/config/gateway.yaml"))
@@ -57,6 +58,14 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     creds: dict[str, str] = {}                                  # passwords people set or changed in the app (scrypt hashes); they take over from gateway.yaml
     sessions: dict[str, tuple[str, float]] = {}                 # session token -> (name, expiry); memory only, so a restart signs everyone out
     throttle = Throttle()
+    failed = {"sign_in": 0, "locked": 0}                       # counts only, for the heartbeat line
+
+    def note_failure(key: str) -> None:
+        throttle.fail(key)
+        failed["sign_in"] += 1
+        if throttle.wait_for(key) > 0:
+            failed["locked"] += 1
+            log.warning("%s sign-in is locked for %d seconds after repeated wrong attempts", "the admin" if key == "admin" else "a", int(throttle.wait_for(key)) + 1)
     state_path = Path(os.environ.get("GATEWAY_STATE", cfg.get("state_file", "")) or "")
     policy: dict = {"default": {}, "people": {}}               # Plaid limits set on the admin page; goblins fetch theirs and obey (budget, daily call cap, how often to ask Plaid)
     added: dict[str, dict] = {}                               # people added from the admin page (name, address, secrets' hash): the same facts gateway.yaml holds
@@ -140,7 +149,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         # Same error for unknown goblin and wrong credential: no name enumeration.
         if g and tok and ((sess and sess[0] == name and sess[1] > time.time()) or (not g.get("user_password_scrypt") and check_token(tok, g.get("user_token_sha256", "")))):
             return g
-        throttle.fail("u:" + name)
+        note_failure("u:" + name)
         raise HTTPException(401, "unauthorized")
 
     @app.post("/login")
@@ -151,7 +160,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         throttle.check("u:" + name)
         g = goblins.get(name)
         if not await run_in_threadpool(password_matches, g, pw):
-            throttle.fail("u:" + name)
+            note_failure("u:" + name)
             raise HTTPException(401, "wrong name or password")
         throttle.ok("u:" + name)
         return {"token": new_session(name)}
@@ -164,7 +173,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         throttle.check("u:" + name)
         g = goblins.get(name)
         if not await run_in_threadpool(password_matches, g, cur):
-            throttle.fail("u:" + name)
+            note_failure("u:" + name)
             raise HTTPException(401, "the current password is wrong")
         try:
             check_password_strength(new, name)
@@ -311,7 +320,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     def admin(request: Request):
         throttle.check("admin")
         if not check_token(bearer(request), cfg.get("admin_token_sha256", "")):
-            throttle.fail("admin")
+            note_failure("admin")
             raise HTTPException(401, "unauthorized")
         throttle.ok("admin")
 
@@ -516,4 +525,50 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             raise HTTPException(404, "ui not installed")
         return Response(f.read_text(), media_type="text/html")
 
+
+    up_state: dict[str, bool] = {}
+
+    def check_goblins() -> list[str]:
+        """Ask every goblin if it is alive and log only a change (down, or back up). Returns the lines logged, for tests."""
+        lines = []
+        for n, g in list(goblins.items()):
+            try:
+                up = client.get(f"{g['url']}/health", timeout=3).status_code == 200
+            except httpx.HTTPError:
+                up = False
+            before = up_state.get(n)
+            up_state[n] = up
+            if before is None and not up:                           # first look, and it is down
+                lines.append(f"goblin {n} is not answering")
+            elif before is not None and before != up:                # a change
+                lines.append(f"goblin {n} is {'back up' if up else 'not answering'}")
+            else:
+                continue
+            (log.info if up else log.warning)(lines[-1])
+        return lines
+
+    def heartbeat(prev: dict) -> dict:
+        """One line of counts since the last one: requests, errors, failed sign-ins, goblins up."""
+        tot = {k: sum(v[k] for v in metrics.n.values()) for k in ("calls", "ok", "client_errors", "server_errors")}
+        d = {k: tot[k] - prev.get(k, 0) for k in tot}
+        d_f = {k: failed[k] - prev.get("f_" + k, 0) for k in failed}
+        log.info("gateway running: %d requests in the last period (%d ok, %d refused or invalid, %d server errors), %d failed sign-ins (%d locked), goblins up %d of %d",
+                 d["calls"], d["ok"], d["client_errors"], d["server_errors"], d_f["sign_in"], d_f["locked"], sum(1 for v in up_state.values() if v), len(goblins))
+        return {**tot, **{"f_" + k: v for k, v in failed.items()}}
+
+    if monitor:
+        import threading
+
+        def loop():
+            log.info("gateway started: %d people configured, state folder %s", len(goblins), "writable" if str(state_path) not in ("", ".") else "not set (people and limits added in the app will not be remembered)")
+            check_goblins()
+            prev, tick = {}, 0
+            while True:
+                time.sleep(60)
+                check_goblins()
+                tick += 1
+                if tick % 10 == 0:                                   # a heartbeat every 10 minutes
+                    prev = heartbeat(prev)
+        threading.Thread(target=loop, daemon=True, name="gateway-monitor").start()
+    app.state.check_goblins, app.state.heartbeat = check_goblins, heartbeat
     return app

@@ -3,14 +3,16 @@ import os
 
 
 def build():
+    from goblinbank import oplog
+    oplog.setup()
     role = os.environ.get("ROLE", "goblin")
     secret = os.environ.get("INTERNAL_SECRET", "")
     if role == "gateway":
         from goblinbank.gateway import create_app
-        return create_app()
+        return create_app(monitor=True)
     if role == "goblin":
         from goblinbank.goblin import create_app
-        return create_app(autosync=os.environ.get("GOBLIN_AUTOSYNC", "1") != "0")
+        return create_app(autosync=os.environ.get("GOBLIN_AUTOSYNC", "1") != "0", ops_log=True)
     from goblinbank.connectors.base import make_connector_app
     if role == "rh-agent":
         from goblinbank.connectors.rh_agent import AgentConnector

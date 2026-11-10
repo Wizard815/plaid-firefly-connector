@@ -121,7 +121,7 @@ Plaid bills per linked bank login per month, not per call: about $0.45 each at l
 * Banks generally do not email scheduled CSV reports: Huntington, Discover, Capital One and Axos offer manual downloads (CSV or QFX) and PDF statements, plus balance and transaction alerts. There is no setting that mails a recurring CSV that I could confirm, so a monthly manual download for the quiet accounts is the realistic no-Plaid route.
 
 ### 4. Reach it from your phone and other devices
-The gateway listens only on `127.0.0.1:6421` on purpose (change it with `port:` in `goblins.yaml`). Pick one:
+The gateway listens only on `127.0.0.1:6421` on purpose, so from another device `http://<server-ip>:6421` is refused until you allow it. Change the port with `port:` and who can connect with `listen:` in `goblins.yaml` (`listen: 0.0.0.0`, or your LAN address, opens it to your home network over plain http; fine on a trusted network, since your password then crosses it unencrypted). After a change, run `./scripts/install.sh` and `docker compose -f docker-compose.generated.yml up -d`. Pick one:
 * **Tailscale (simplest, recommended):** install it on the server and your devices, then `tailscale serve --bg 6421` gives you an `https://your-machine.your-tailnet.ts.net` address that only your devices can open.
 * **Your own domain with automatic HTTPS:** edit `examples/Caddyfile` (your domain), point the domain at the server, open ports 80 and 443, then
   `docker compose -f docker-compose.generated.yml -f examples/docker-compose.caddy.yml up -d`.
@@ -156,7 +156,7 @@ docker compose -f docker-compose.generated.yml down        # stop (data stays in
 * **Gateway "Permission denied: /config/gateway.yaml"** or "cannot write state": the containers run as user 10001. `sudo chown 10001:10001 gateway.yaml && sudo chown -R 10001:10001 gateway-state data`.
 * **Forgot a password:** `./scripts/install.sh --set-password bob` asks for a new one (nothing else changes); `./scripts/install.sh --reset-token bob` instead makes a new random token. Then `docker compose -f docker-compose.generated.yml restart gateway`.
 * **"Plaid is not configured":** enter the keys in Settings, Connect & import, Plaid keys (or on the admin page), then press Test the keys.
-* **Phone cannot reach it:** see step 4; the gateway is not on the open network by default.
+* **"Can't establish a connection" from another device:** by default the app only listens on the server itself. Add `listen: 0.0.0.0` (or the server's LAN address) to `goblins.yaml`, run `./scripts/install.sh`, then `docker compose -f docker-compose.generated.yml up -d`. Also check the server's firewall allows the port. **Logs:** `docker compose -f docker-compose.generated.yml logs -f gateway goblin-<name>`. They say whether things are running and connected, never anything personal: started (and whether Plaid is configured), a goblin going down or coming back, a heartbeat every 10 minutes with counts (requests, errors, failed sign-ins, goblins up), sync rounds as counts with Plaid error codes, webhooks received or refused, a sign-in lockout. Requests, names of banks, amounts, tokens, passwords, search terms and addresses are never logged. `docker compose ... ps` shows each container as "healthy" when its health check passes.
 
 ### 9. Safety checklist before real bank data
 * HTTPS in front of it, or Tailscale only (step 4).

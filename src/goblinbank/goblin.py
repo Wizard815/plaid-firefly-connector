@@ -15,6 +15,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
+from goblinbank.oplog import log
 from goblinbank import plaidcost, plaidplan, agent, api_links, api_money, api_plan, links, external, notify, plan, crypto, feed, importers, ledger, settings as cfg, sync
 from goblinbank.connectors.base import now_iso
 from goblinbank.connectors.rh_csv import CsvConnector
@@ -36,7 +37,7 @@ def _equity(bal) -> float | None:
     return None
 
 
-def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: DB | None = None, today=None, llm_transport=None, autosync: bool = False, inline_webhooks: bool = False, autosync_tick: float | None = None, notify_transport=None) -> FastAPI:
+def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: DB | None = None, today=None, llm_transport=None, autosync: bool = False, inline_webhooks: bool = False, ops_log: bool = False, autosync_tick: float | None = None, notify_transport=None) -> FastAPI:
     name = os.environ.get("GOBLIN_NAME", "goblin")
     secret = os.environ.get("INTERNAL_SECRET", "")
     connector_secret = os.environ.get("CONNECTOR_SECRET", secret)
@@ -63,11 +64,16 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         if not gateway_url or (not force and time.time() - policy_state.get("reg", 0) < 600):
             return
         policy_state["reg"] = time.time()
+        reached = True
         for r in store.all("SELECT item_id FROM plaid_items"):
             try:
                 client.post(f"{gateway_url}/internal/items", json={"item_id": r["item_id"]}, headers={"X-Internal-Secret": secret, "X-Goblin": name})
             except httpx.HTTPError:
+                reached = False
                 break
+        if policy_state.get("gw_ok", True) != reached:
+            policy_state["gw_ok"] = reached
+            (log.info if reached else log.warning)("the gateway is %s", "reachable again" if reached else "not reachable from here")
 
     def apply_policy(force: bool = False):
         """Fetch the limits the gateway admin set for this goblin and keep them in settings, where everything else already reads them.
@@ -329,9 +335,11 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         auth(request)
         raw = await request.body()
         if not plaid.verify_webhook(raw, request.headers.get("plaid-verification")):
+            log.warning("plaid webhook refused: signature did not verify")
             raise HTTPException(401, "webhook signature invalid")
         import json
         body = json.loads(raw)
+        log.info("plaid webhook accepted: %s %s", str(body.get("webhook_type"))[:30], str(body.get("webhook_code"))[:40])
         if inline_webhooks:                                   # tests: do the work before answering
             def now_():
                 with sync_lock:
@@ -369,6 +377,11 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                     out["plaid_error"] = str(e)
             sync_state["last"], sync_state["at"] = time.time(), sync.now()
         out["notify"] = notify.run(store, (today or date.today)(), name, notify_transport)
+        banks = out["plaid"]
+        pulled, skipped = sum(1 for b in banks if "skipped" not in b and "error" not in b), sum(1 for b in banks if "skipped" in b)
+        errors = [str(b["error"]).split(":")[0] for b in banks if b.get("error")] + ([str(out["plaid_error"]).split(":")[0][:40]] if out.get("plaid_error") else [])
+        if pulled or errors or force:                                  # quiet rounds where nothing was due are not worth a line
+            (log.warning if errors else log.info)("sync finished: %d banks pulled, %d not due%s", pulled, skipped, (", problems: " + ", ".join(sorted(set(errors)))) if errors else "")
         return out
 
     @app.post("/sync")
@@ -798,4 +811,11 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             out["robinhood_agent"] = a and {"as_of": a.get("as_of"), "balances": a.get("balances")}
         return out
 
+    if ops_log:
+        try:
+            n_items = store.one("SELECT COUNT(*) n FROM plaid_items")["n"]
+        except Exception:
+            n_items = 0
+        log.info("goblin started: database ok, Plaid %s (%s), %d banks linked, background sync %s, gateway %s",
+                 "configured" if plaid.configured else "NOT configured", "production" if "production" in plaid.base else "sandbox", n_items, "on" if autosync else "off", "set" if gateway_url else "not set")
     return app

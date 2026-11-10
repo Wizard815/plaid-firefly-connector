@@ -16,6 +16,8 @@ goblins:
     rh_live: false         # true = also run the UNofficial robin_stocks connector (against Robinhood's terms; off by default)
   - name: bob
     share: []
+# listen: 127.0.0.1       # who can open the app: 127.0.0.1 = only this machine (the safe default). Use your server's LAN address, or 0.0.0.0, to open it from other devices
+                          # on your network (plain http: fine at home, but use Tailscale or HTTPS for anything beyond that).
 # port: 6421              # the port the app listens on (this machine only); 6421 is the default
 network: ai_net          # existing external Docker network for goblin <-> connector traffic (must already exist: docker network create ai_net)
 # orb_key: true            # uncomment to create a read-only key for Pondering Orb (printed once)

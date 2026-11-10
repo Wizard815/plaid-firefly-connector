@@ -17,6 +17,7 @@ only its hash. The orb key is printed once.
     python3 scripts/gen_compose.py --reset-token NAME       # a new random login token for NAME
     GOBLIN_NEW_PASSWORD=... python3 scripts/gen_compose.py --set-password NAME     # set or change NAME's password (never read from a file)
 """
+import ipaddress
 import os
 import secrets
 import sys
@@ -59,6 +60,11 @@ def main(src="goblins.yaml", *flags):
         setpw, src = flags[0] if flags else sys.exit("usage: --set-password <name>"), "goblins.yaml"
     spec = yaml.safe_load((ROOT / src).read_text())
     SEC.mkdir(exist_ok=True, mode=0o700)
+    listen = str(spec.get("listen", "127.0.0.1"))                  # who can reach the app: 127.0.0.1 = this machine only; a LAN address or 0.0.0.0 = other devices too
+    try:
+        ipaddress.ip_address(listen)
+    except ValueError:
+        sys.exit(f"bad `listen:` {listen!r}: use an IP address such as 127.0.0.1, 192.168.1.5 or 0.0.0.0")
     network = spec.get("network")
     if not network:
         sys.exit("set `network: <docker network name>` in goblins.yaml — an existing external network "
@@ -171,7 +177,7 @@ def main(src="goblins.yaml", *flags):
         print("hint: sudo chown 10001:10001 gateway.yaml   (the gateway container cannot read it otherwise)")
     services["gateway"] = {"build": ".", "environment": {"ROLE": "gateway", "GATEWAY_CONFIG": "/config/gateway.yaml", "UI_DIR": "/app/ui", "GATEWAY_STATE": "/state/people.json"}, "user": "10001",
                            "volumes": ["./gateway.yaml:/config/gateway.yaml:ro", "./gateway-state:/state"], "networks": ["edge"],
-                           "ports": [f"127.0.0.1:{int(spec.get('port', 6421))}:8000"], "restart": "unless-stopped"}
+                           "ports": [f"{listen}:{int(spec.get('port', 6421))}:8000"], "restart": "unless-stopped"}
     (ROOT / "docker-compose.generated.yml").write_text(yaml.safe_dump({"services": services, "networks": networks}, sort_keys=False))
     print(f"wrote gateway.yaml and docker-compose.generated.yml for {len(names)} goblin(s)")
 

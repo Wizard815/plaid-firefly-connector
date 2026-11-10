@@ -53,6 +53,8 @@ docker run --rm -u 0 -v "$PWD":/work -w /work -e HOST_UID="$(id -u)" -e HOST_GID
   chmod 600 .secrets/*' sh ${ARGS[@]+"${ARGS[@]}"}
 
 PORT=$(sed -n 's/^port: *\([0-9]*\).*/\1/p' goblins.yaml | head -1); PORT=${PORT:-6421}
+LISTEN=$(sed -n 's/^listen: *\([0-9.:a-fA-F]*\).*/\1/p' goblins.yaml | head -1); LISTEN=${LISTEN:-127.0.0.1}
+[ "$LISTEN" = 127.0.0.1 ] && WHERE="on this machine only (to open it from other devices on your network, add 'listen: 0.0.0.0' to goblins.yaml and run this script again)" || WHERE="on $LISTEN"
 cat <<MSG
 
 Done. Any random login token printed above is shown ONCE, so save it now. People who chose a password sign in with it (only a salted hash is stored).
@@ -61,7 +63,7 @@ The admin password is a random hex string saved in .secrets/admin.password and s
 Start everything:
   docker compose -f docker-compose.generated.yml up -d
 
-Then open http://127.0.0.1:$PORT and sign in with your name and password.
+Then open http://127.0.0.1:$PORT and sign in with your name and password. The app is reachable $WHERE.
 The admin page is at http://127.0.0.1:$PORT/admin (use the admin password). Everything else is set up in the app, no files to edit:
   - admin page: add people, enter the Plaid keys for everyone, set the public address for webhooks, set the budget
   - or, signed in as a person: Settings, Connect & import, Plaid keys
