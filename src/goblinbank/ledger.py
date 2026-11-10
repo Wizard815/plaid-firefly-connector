@@ -378,31 +378,6 @@ def _alerts(db, today: date) -> list[dict]:
         out.append({"kind": "missed_payment", "severity": "critical" if m["misses"] >= 2 else "warning", "sub_id": m["sub_id"],
                     "title": f"{m['name']} not seen in {m['account']}" + (f" ({m['misses']} times in a row)" if m["misses"] > 1 else ""),
                     "detail": "Expected " + ", ".join(m["missed_dates"])})
-    from goblinbank import plan                       # imported here: plan builds on this module
-    gv = plan.goals_view(db, today)
-    if gv["overallocated"]:
-        out.append({"kind": "overallocated", "severity": "warning", "title": "You have earmarked more than you have saved",
-                    "detail": f"Saved {gv['total']:,.2f}, earmarked {gv['allocated']:,.2f}. Release some or wait for the balance to recover."})
-    elif gv["free"] >= 50 and any(g["status"] == "active" and g.get("shared_state") != "offered" and g["shortfall"] > 0 for g in gv["items"]):
-        top = next(g for g in gv["items"] if g["status"] == "active" and g.get("shared_state") != "offered" and g["shortfall"] > 0)
-        out.append({"kind": "free_savings", "severity": "info", "title": f"${gv['free']:,.2f} of your savings is free",
-                    "detail": f"{top['name']} still needs ${top['shortfall']:,.2f}"})
-    try:
-        warn_days = int(float(cfg.get(db, "alert_maturity_days") or 30))   # how early to warn; 0 turns it off
-    except ValueError:
-        warn_days = 30
-    if warn_days > 0:
-        for m in plan.maturity_outlook(db, today, warn_days):
-            where = (" → " + ", then ".join(f"{x['goal']} {x['amount']:,.2f}" for x in m["suggestions"])) if m["suggestions"] else ""
-            out.append({"kind": "maturing", "severity": "warning" if m["days"] <= 7 else "info", "date": m["maturity"],
-                        "title": f"{m['name']} matures " + ("today" if m["days"] == 0 else f"in {m['days']} day{'s' if m['days'] != 1 else ''} ({m['maturity']})"),
-                        "detail": f"Worth about {m['value_at_maturity']:,.2f}; {m['free_at_maturity']:,.2f} free{where}. {m['advice']}"})
-    for m in plan.matured_idle(db, today):
-        where = (" Free money would go → " + ", then ".join(f"{x['goal']} {x['amount']:,.2f}" for x in m["suggestions"]) + ".") if m["suggestions"] else ""
-        pinned = (" Already pinned: " + ", ".join(f"{x['goal']} {x['amount']:,.2f}" for x in m["pinned"]) + ".") if m["pinned"] else ""
-        out.append({"kind": "matured_idle", "severity": "warning", "date": m["maturity"], "key": f"matured_idle:{m['key']}:{m['maturity']}",
-                    "title": f"{m['name']} matured {m['days_ago']} day{'s' if m['days_ago'] != 1 else ''} ago and is still sitting there",
-                    "detail": f"{m['balance']:,.2f} on it, {m['free']:,.2f} free.{pinned}{where} Roll it over, move it, or mark it handled."})
     for s in db.all("SELECT * FROM subscriptions WHERE active=1 AND coalesce(payer,'me')='me'"):
         nd = sub_view(s, today)["next_due"]
         if nd and 0 <= (d(nd) - today).days <= (s["notify_days"] if s["notify_days"] is not None else 3):
@@ -429,8 +404,6 @@ def overview(db, days: int, today: date) -> dict:
     for a in accts:
         by_kind[a["kind"]] = round(by_kind.get(a["kind"], 0) + mine(a), 2)
     sav = savings_summary(db, today)
-    from goblinbank import plan
-    gv = plan.goals_view(db, today)
     unlinked = sum(i["balance"] for i in sav["items"] if not i["linked"])
     if unlinked:
         by_kind["savings (manual)"] = round(unlinked, 2)
@@ -438,7 +411,7 @@ def overview(db, days: int, today: date) -> dict:
     subs = db.all("SELECT * FROM subscriptions WHERE active=1")
     monthly = sum(sub_view(s, today)["monthly"] for s in subs)
     return {"net_worth": net_worth(db), "by_kind": by_kind, "accounts": accts, "subscriptions_monthly": round(monthly, 2), "upcoming": up,
-            "events": db.all("SELECT * FROM events ORDER BY ts DESC LIMIT 10"), "alerts": alerts(db, today), "savings_total": gv["total"], "savings_free": gv["free"], "goals_needed": gv["needed"]}
+            "events": db.all("SELECT * FROM events ORDER BY ts DESC LIMIT 10"), "alerts": alerts(db, today), "savings_total": sav["total"]}
 
 
 # ------------------------------------------------------------------ spending forecast from history
@@ -462,7 +435,6 @@ def spending_forecast(db, today: date, months: int = 6) -> dict:
     expect the usual amount. A forecast never falls below what is already spent plus bills still due this month.
     Compared against your average monthly income (from history, else the income you entered)."""
     import statistics
-    from goblinbank import plan                                     # imported here: plan builds on this module
     months = max(1, min(int(months), 24))
     hist = _months_back(today, months)
     this = today.strftime("%Y-%m")
@@ -504,7 +476,7 @@ def spending_forecast(db, today: date, months: int = 6) -> dict:
         total_forecast += fc
         total_typical += typical or 0.0
     inc_hist = [income_by_month[m] for m in with_data if income_by_month.get(m, 0) > 0]
-    entered = plan.monthly_plan(db, this, today)["income_month"]
+    entered = None
     if inc_hist:
         income_avg, source = round(statistics.fmean(inc_hist), 2), "history"
     elif entered:

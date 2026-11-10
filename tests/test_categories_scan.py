@@ -101,11 +101,8 @@ def test_a_bank_gets_a_category_and_each_of_its_accounts_can_have_its_own():
 def test_what_you_called_an_account_decides_whether_it_counts_as_savings_and_how_often_its_bank_is_asked():
     c, db = app()
     huntington(c, db)
-    names = lambda: {p["name"] for p in c.get("/api/goals", headers=H).json()["places"]}
-    assert names() == {"Savings 1"}                                                                # the bank's own label, to start with
     c.put("/api/accounts/h2", headers=H, json={"category": "Emergency fund"})                      # a "checking" you keep as a cushion
     c.put("/api/accounts/h3", headers=H, json={"category": "Spending"})                            # a "savings" you really spend from
-    assert names() == {"Checking 3"}
     row = db.one("SELECT * FROM plaid_items WHERE item_id='i1'")
     assert plaidplan.schedule_of(db, row) == "daily"                                                # it still holds spending accounts
     for aid in ("h0", "h1", "h3"):

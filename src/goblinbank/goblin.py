@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from goblinbank.oplog import log
-from goblinbank import firefly, plaidcost, plaidplan, agent, api_links, api_money, api_plan, links, external, notify, plan, crypto, feed, importers, ledger, settings as cfg, sync
+from goblinbank import firefly, plaidcost, plaidplan, api_money, external, notify, crypto, feed, importers, ledger, settings as cfg, sync
 from goblinbank.connectors.base import now_iso
 from goblinbank.connectors.rh_csv import CsvConnector
 from goblinbank.db import DB
@@ -283,7 +283,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         except PlaidError as e:
             raise HTTPException(502, str(e))
 
-    # ---------------- Firefly III: Goblin Bank pushes your bank data there ----------------
+    # ---------------- Firefly III: Plaid Firefly Connector pushes your bank data there ----------------
     @app.get("/api/firefly/status")
     def ff_status(request: Request):
         auth(request)
@@ -486,6 +486,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     @app.post("/sync")
     def sync_now(request: Request):
         auth(request)
+        register_items()                       # the gateway forgets which bank is whose when it restarts; say it again
         return do_sync(force=True)             # you asked: pull now (the daily cap and the budget still apply)
 
     def autosync_loop():
@@ -497,7 +498,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                 mins = 15.0
             time.sleep(autosync_tick if autosync_tick is not None else max(60.0, mins * 60))        # autosync_tick: tests only
             try:
-                shared_changed()                                  # also retries anything that could not be delivered earlier
+                register_items()                                  # tells the gateway which banks are ours again after it restarts
             except Exception:
                 pass
             try:
@@ -566,41 +567,8 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         threading.Thread(target=lambda: firefly.run(store, firefly_transport), daemon=True).start() if added and firefly.conf(store)["enabled"] else None
         return {"rows": len(rows), "added": added, "balance": bal}
 
-    def link_send(peer: str, kind: str, payload: dict) -> bool:
-        """Hand a message for another goblin to the gateway, which relays it and keeps nothing."""
-        if not gateway_url:
-            return False
-        r = client.post(f"{gateway_url}/internal/link/send", json={"to": peer, "type": kind, "payload": payload}, headers={"X-Goblin": name, "X-Internal-Secret": secret})
-        return r.status_code == 200 and bool(r.json().get("delivered"))
-
-    def link_people() -> list[str]:
-        if not gateway_url:
-            return []
-        try:
-            r = client.get(f"{gateway_url}/internal/link/people", headers={"X-Goblin": name, "X-Internal-Secret": secret})
-            return r.json().get("people", []) if r.status_code == 200 else []
-        except Exception:
-            return []
-
-    def link_flush() -> int:
-        return links.flush(store, link_send)
-
-    def shared_changed(gid: int | None = None, edited: bool = False) -> None:
-        """A goal I share changed (or my set-aside amount did): tell the others. Never lets a link problem break the edit."""
-        try:
-            register_items()
-            links.bump(store, name, gid) if edited and gid else links.push(store, name)
-            links.push_accounts(store)
-            link_flush()
-        except Exception:
-            pass
-
-    ctx = api_money.make_ctx(store, auth, today or date.today, name=name, plaid=plaid, client=client, caldav_transport=caldav_transport, shared_changed=shared_changed, link_flush=link_flush, link_people=link_people)
-    ctx.llm_transport = llm_transport
+    ctx = api_money.make_ctx(store, auth, today or date.today, name=name, plaid=plaid, client=client, caldav_transport=caldav_transport)
     api_money.register(app, ctx)
-    api_plan.register(app, ctx)
-    api_links.register(app, ctx)
-    agent.register(app, ctx)
 
     @app.post("/api/subscriptions/export/caldav")
     def subs_caldav(request: Request):
@@ -634,7 +602,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         if not url:
             raise HTTPException(503, "Add your Mattermost webhook address first")
         try:
-            notify.post(url, {"text": f":coin: **Goblin Bank ({name})**: notifications are working" + (" for CDs and bonds." if route == "cds" else "."), "username": f"Goblin Bank ({name})", "icon_emoji": ":coin:"}, notify_transport)
+            notify.post(url, {"text": f":coin: **Plaid Firefly Connector ({name})**: notifications are working" + (" for CDs and bonds." if route == "cds" else "."), "username": f"Plaid Firefly Connector ({name})", "icon_emoji": ":coin:"}, notify_transport)
         except httpx.HTTPStatusError as e:
             return {"ok": False, "detail": f"the webhook answered {e.response.status_code}" + (" (is the address right?)" if e.response.status_code in (400, 404) else "")}
         except httpx.HTTPError as e:
@@ -896,7 +864,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         if "robinhood_main" in share() or every:
             m = main_portfolio()
             out["robinhood_main"] = m and {"as_of": m.get("as_of"), "source": m.get("source"), "balances": m.get("balances")}
-        ext = external.summary(store, (today or date.today)()) if share() & {"bills", "alerts", "savings", "goals"} or every else {}
+        ext = external.summary(store, (today or date.today)()) if share() & {"bills", "alerts", "savings"} or every else {}
         if "bills" in share() or every:
             out["bills"] = {"next_7d": ext["bills_7d"], "next_30d": ext["bills_30d"], "next": ext["next_bill"]}
         if "alerts" in share() or every:
@@ -910,10 +878,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             out["alert_list"] = [{"severity": a["severity"], "kind": a["kind"], "title": a["title"], "detail": a.get("detail", ""), **({"date": a["date"]} if a.get("date") else {})}
                                  for a in ledger.alerts(store, (today or date.today)())][:30]
         if "savings" in share() or every:
-            out["savings"] = {"total": ext["savings_total"], "free": ext["savings_free"], "earmarked": ext["savings_earmarked"]}
-        if "goals" in share() or every:
-            gv = plan.goals_view(store, (today or date.today)())
-            out["goals"] = [{"name": g["name"], "target": g["target"], "allocated": g["allocated"], "pct": g["pct"]} for g in gv["items"] if g["status"] == "active" and g.get("shared_state") != "offered"]
+            out["savings"] = {"total": ext["savings_total"]}
         if "spending" in share() or every:
             fc = ledger.spending_forecast(store, (today or date.today)())
             out["spending"] = {"so_far": fc["spent_so_far"], "projected": fc["projected"], "income_avg": fc["income_avg"], "pct_projected": fc["pct_projected"], "left_after": fc["left_after_projected"], "confidence": fc["confidence"]}

@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Goblin Bank admin</title>
+<title>Plaid Firefly Connector admin</title>
 <style>
 :root{--bg:#edf1f2;--panel:#f8fafa;--line:#d5dde0;--fg:#14232b;--muted:#5a6b73;--teal:#17766b;--teal-soft:#d6ece8;--red:#b3372f;--red-soft:#f5dcd9;--brass:#a8741a}
 @media (prefers-color-scheme:dark){:root{--bg:#0d1a1f;--panel:#13242b;--line:#24383f;--fg:#e4eeef;--muted:#8ea4ab;--teal:#4cc2b0;--teal-soft:#16393a;--red:#f07f73;--red-soft:#40201e;--brass:#e0b052;color-scheme:dark}}
@@ -13,7 +13,7 @@ input,button{font:inherit;color:inherit;background:var(--bg);border:1px solid va
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.err{color:var(--red)}
 </style>
 <main>
-  <h1>Goblin Bank admin</h1>
+  <h1>Plaid Firefly Connector admin</h1>
   <p class="muted small">General health and call counts, only when you ask. Nothing here shows what anyone asked for or any of their data, and the gateway keeps no log of requests: no addresses, search terms, tokens or bodies.</p>
   <form class="panel row" id="login"><input id="tok" type="password" placeholder="Admin password" autocomplete="current-password" required style="flex:1;min-width:200px"><button class="primary" type="submit">Check now</button><button type="button" id="reset">Clear counts</button><span id="msg" class="small muted"></span></form>
   <div class="panel" id="out" hidden></div>
@@ -123,7 +123,7 @@ async function renderOrb() {
   go.addEventListener("click", async () => {
     try { const r = await call("/admin/orb/key", "POST", { name: name.value.trim() });
       orbRes.replaceChildren(el("p", { class: "small" }, "Copy this key now. It is shown once and only its hash is kept:"), el("pre", { style: "white-space:pre-wrap;word-break:break-all;margin:0" }, r.key),
-        el("p", { class: "small muted" }, "In Pondering Orb set GOBLIN_ORB_KEY to this key and point its Goblin-Bank widget at this gateway's address (inside Docker: http://gateway:8000, from another machine: this server's address). The Orb calls GET /api/v1/summary."));
+        el("p", { class: "small muted" }, "In Pondering Orb set GOBLIN_ORB_KEY to this key and point its plaid-firefly-connector widget at this gateway's address (inside Docker: http://gateway:8000, from another machine: this server's address). The Orb calls GET /api/v1/summary."));
       renderOrb(); } catch (e) { note.textContent = e.message; note.className = "small err"; } });
   box.replaceChildren(el("h2", { style: "margin:0 0 6px;font-size:1.1rem" }, "Pondering Orb"),
     el("p", { class: "small muted" }, "A read-only key lets the Pondering Orb read the summary each person has chosen to share (Settings, Sharing). It can never see transactions or change anything. Revoke it here any time."),
@@ -173,7 +173,7 @@ async function renderPerson() {
     : el("p", { class: "small muted" }, plaid.configured ? "No bank linked yet. Press Link a bank and sign in to the bank in the window that opens." : "Enter the Plaid keys below first.");
   const fmap = (fa.accounts || []).length ? el("table", {}, el("thead", {}, el("tr", {}, ["Bank account", "In Firefly III", ""].map((h) => el("th", {}, h)))), el("tbody", {}, fa.accounts.map((a) => {
     const set = (mode, id) => run(() => P("api/firefly/accounts/" + encodeURIComponent(a.id), "PUT", { mode, ff_id: id }), "Saved.");
-    const opts = [...(a.mode === "pending" ? [["pending", "Needs approval: nothing sent yet"]] : []), ["create", a.created ? "Created by Goblin Bank" : "Create in Firefly III"], ["skip", "Do not send"], ...(fa.firefly_accounts || []).map((f) => ["link:" + f.id, "Link to: " + f.name])];
+    const opts = [...(a.mode === "pending" ? [["pending", "Needs approval: nothing sent yet"]] : []), ["create", a.created ? "Created by Plaid Firefly Connector" : "Create in Firefly III"], ["skip", "Do not send"], ...(fa.firefly_accounts || []).map((f) => ["link:" + f.id, "Link to: " + f.name])];
     const s = sel(opts, a.mode === "link" ? "link:" + a.ff_id : a.mode, (v) => (v === "create" || v === "skip" || v === "pending") ? set(v) : set("link", parseInt(v.slice(5))));
     const fix = el("button", { type: "button", title: "Move the opening balance in Firefly III so it matches the bank. No transaction is invented." }, "Match balance"); fix.addEventListener("click", () => run(() => P(`api/firefly/accounts/${encodeURIComponent(a.id)}/rebalance`, "POST", {}), (r) => r.changed ? "Balances now match." : "Already matching."));
     return el("tr", {}, el("td", {}, a.label, el("div", { class: "small muted" }, a.kind)), el("td", {}, s), el("td", { class: "n" }, a.drift ? [el("span", { class: "pill down" }, "balance differs"), " ", fix] : "")); }))) : el("p", { class: "small muted" }, "Link a bank first. Its accounts show up here.");
@@ -185,7 +185,7 @@ async function renderPerson() {
   const ffbtn = (label, path, ok, primary) => { const b = el("button", primary ? { class: "primary", type: "button" } : { type: "button" }, label); b.addEventListener("click", () => run(() => P(path, "POST", {}), ok)); return b; };
   box.replaceChildren(el("div", { class: "row", style: "justify-content:space-between" }, el("h2", { style: "margin:0;font-size:1.1rem" }, "Managing " + who), (() => { const x = el("button", { type: "button" }, "Close"); x.addEventListener("click", () => { who = null; renderPerson(); }); return x; })()),
     el("h3", { style: "margin:12px 0 4px;font-size:1rem" }, "Bank links (Plaid)"),
-    el("p", { class: "small muted" }, `Plaid ${plaid.configured ? "is set up (" + plaid.env + ")" : "is NOT set up: enter the keys below"}. Linking opens Plaid's window; the bank login goes straight to Plaid and Goblin Bank never sees it. Each linked bank's accounts are sent into ${who}'s Firefly III automatically.`),
+    el("p", { class: "small muted" }, `Plaid ${plaid.configured ? "is set up (" + plaid.env + ")" : "is NOT set up: enter the keys below"}. Linking opens Plaid's window; the bank login goes straight to Plaid and Plaid Firefly Connector never sees it. Each linked bank's accounts are sent into ${who}'s Firefly III automatically.`),
     el("div", { class: "row" }, link, pull), banks,
     el("div", { class: "row" }, mins, mk), inv, lst,
     el("h3", { style: "margin:14px 0 4px;font-size:1rem" }, "Firefly III"),

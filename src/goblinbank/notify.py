@@ -55,13 +55,13 @@ def due(db, alerts: list[dict], now: datetime) -> dict:
 def payload(alerts: list[dict], who: str, grp: str = "other") -> dict:
     n = len(alerts)
     head = "CDs and bonds" if grp == "cds" else f"{n} thing{'s' if n != 1 else ''} need{'s' if n == 1 else ''} a look"
-    lines = [f"#### Goblin Bank: {head}"]
+    lines = [f"#### Plaid Firefly Connector: {head}"]
     for a in alerts[:MAX_PER_MESSAGE]:
         detail = (a.get("detail") or "").replace("\n", " ")[:300]
         lines.append(f"{ICON[a['severity']]} **{a['title']}**" + (f"\n{detail}" if detail else ""))
     if n > MAX_PER_MESSAGE:
         lines.append(f"…and {n - MAX_PER_MESSAGE} more in the app.")
-    return {"text": "\n\n".join(lines), "username": f"Goblin Bank ({who})", "icon_emoji": ":coin:"}
+    return {"text": "\n\n".join(lines), "username": f"Plaid Firefly Connector ({who})", "icon_emoji": ":coin:"}
 
 
 def post(url: str, body: dict, transport=None) -> None:

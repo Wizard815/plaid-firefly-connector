@@ -9,7 +9,7 @@ ok() { printf '  [ok]  %s\n' "$*"; }; bad() { printf '  [!!]  %s\n' "$*"; PROBLE
 PROBLEMS=0
 
 echo "1. The deployment"
-[ -f "$COMPOSE" ] && ok "compose file: $COMPOSE" || bad "no $COMPOSE here. Run this from the Goblin-Bank folder, after ./scripts/install.sh"
+[ -f "$COMPOSE" ] && ok "compose file: $COMPOSE" || bad "no $COMPOSE here. Run this from the plaid-firefly-connector folder, after ./scripts/install.sh"
 [ -d .secrets ] && ok ".secrets/ folder found" || bad "no .secrets/ folder (install.sh creates it)"
 if command -v docker >/dev/null && [ -f "$COMPOSE" ]; then
   docker compose -f "$COMPOSE" ps --format '  {{.Service}}: {{.Status}}' 2>/dev/null | sed 's/^/        /' || true
@@ -69,7 +69,7 @@ if [ "$CONF" = "True" ]; then
 fi
 
 echo; echo "5. Things this script cannot see"
-note "- Linking happens ONLY inside Goblin-Bank (Settings, Connect & import, Link an account). my.plaid.com is Plaid's consumer portal: banks linked or shown there are not visible to this app."
+note "- Linking happens ONLY inside plaid-firefly-connector (Settings, Connect & import, Link an account). my.plaid.com is Plaid's consumer portal: banks linked or shown there are not visible to this app."
 note "- Production needs Plaid to have approved your account for production access (dashboard.plaid.com, Developers). Until then only Sandbox works, with Plaid's test login user_good / pass_good, not real bank credentials."
 note "- Banks that sign you in on their own site (OAuth, e.g. Capital One) need a public HTTPS address set on the admin page and added under Allowed redirect URIs in the Plaid dashboard."
 echo; [ "$PROBLEMS" -eq 0 ] && echo "No configuration problems found." || echo "$PROBLEMS problem(s) found. Fix them, restart with: docker compose -f $COMPOSE up -d"

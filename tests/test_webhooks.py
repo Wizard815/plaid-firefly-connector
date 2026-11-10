@@ -198,7 +198,7 @@ def test_the_gateway_admin_public_address_sets_the_webhook_and_banks_learn_it(tm
     gw2 = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_goblin)))
     holder["gw"] = gw2
     assert gw2.post("/webhooks/plaid", json={"item_id": "item-1"}).json() == {"ignored": True}
-    tc.post("/api/links/flush", headers=H)                                                               # any tick of the goblin's background round re-registers its banks
+    tc.post("/sync", headers=H)                                                               # any tick of the goblin's background round re-registers its banks
     assert gw2.post("/webhooks/plaid", json={"item_id": "item-1", "webhook_type": "TRANSACTIONS"}).json() != {"ignored": True}     # now it finds its way home (and is refused there: no signature)
 
 

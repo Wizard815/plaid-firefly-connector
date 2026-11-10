@@ -1,6 +1,6 @@
-"""Goblin Bank as a Plaid router for Firefly III: bank accounts and transactions that Plaid delivers are pushed into your Firefly III through its API.
+"""Plaid Firefly Connector as a Plaid router for Firefly III: bank accounts and transactions that Plaid delivers are pushed into your Firefly III through its API.
 
-One way only (Plaid -> Goblin Bank -> Firefly III), so Firefly III's own data is never read back except to find an account or a duplicate, and nothing in a Firefly
+One way only (Plaid -> Plaid Firefly Connector -> Firefly III), so Firefly III's own data is never read back except to find an account or a duplicate, and nothing in a Firefly
 III installation needs changing. What it needs: your Firefly III address and a Personal Access Token (Firefly III: Options, Profile, OAuth, Personal Access Tokens).
 Idempotent: every Plaid transaction id is remembered together with the Firefly III transaction it became, so running it twice never duplicates anything.
 """
@@ -121,7 +121,7 @@ DEFAULT_MODE = "pending"
 
 
 def ensure_mappings(db) -> None:
-    """Every account Goblin Bank knows gets a row saying what to do with it. New ones wait for approval: nothing is sent until the admin chooses create, link or skip."""
+    """Every account Plaid Firefly Connector knows gets a row saying what to do with it. New ones wait for approval: nothing is sent until the admin chooses create, link or skip."""
     for a in db.all("SELECT id FROM accounts"):
         if not db.one("SELECT 1 FROM ff_accounts WHERE account_id=?", (a["id"],)):
             with db.tx() as c:
@@ -191,7 +191,7 @@ def ensure_account(db, ff: Firefly, a: dict, m: dict, c: dict) -> int:
     name = account_label(a)
     opening, odate = opening_for(db, a, c["include_pending"])
     payload = {"name": name, "type": "asset", "currency_code": a.get("currency") or "USD", "opening_balance": f"{opening:.2f}", "opening_balance_date": odate,
-               "notes": f"Created by Goblin Bank from a linked bank account ({a['institution']}).", "include_net_worth": True, **_role(a)}
+               "notes": f"Created by Plaid Firefly Connector from a linked bank account ({a['institution']}).", "include_net_worth": True, **_role(a)}
     try:
         ff_id = ff.create_account(payload)
     except FireflyError as e:
@@ -206,7 +206,7 @@ def ensure_account(db, ff: Firefly, a: dict, m: dict, c: dict) -> int:
 
 
 def adopt_existing(db, ff: Firefly, account_id: str, ff_id: int) -> int:
-    """An account that already holds transactions in Firefly III (linked to an existing one, or restored from a backup): find the ones that came from Goblin Bank by their
+    """An account that already holds transactions in Firefly III (linked to an existing one, or restored from a backup): find the ones that came from Plaid Firefly Connector by their
     Plaid id and take them over, so nothing is sent twice. Done once per account."""
     send_cat = conf(db)["send_categories"]
     mine = {r["id"]: r for r in db.all("SELECT * FROM transactions WHERE account_id=?", (account_id,))}

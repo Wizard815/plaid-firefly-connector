@@ -282,7 +282,6 @@ def test_savings_math_and_net_worth_no_double_count():
     assert sv["total"] == 15000.0 and sv["weighted_apy"] == pytest.approx((5000 * 4.5 + 10000 * 5.0) / 15000, abs=0.001)
     assert ledger.net_worth(db) == 5000 - 300 + 10000                      # linked savings counted once
     db.conn.execute("UPDATE savings SET maturity=? WHERE kind='cd'", ((TODAY + timedelta(days=20)).isoformat(),)); db.conn.commit()
-    assert any(a["kind"] == "maturing" for a in ledger.alerts(db, TODAY))
 
 
 def test_budget_status_matches_spending(world):

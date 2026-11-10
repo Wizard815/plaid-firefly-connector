@@ -69,7 +69,7 @@ class Plaid:
         return r.json()
 
     def link_token(self, user_id: str, update_item_token: str | None = None) -> str:
-        body = {"user": {"client_user_id": user_id}, "client_name": "Goblin-Bank", "country_codes": ["US"], "language": "en"}
+        body = {"user": {"client_user_id": user_id}, "client_name": "plaid-firefly-connector", "country_codes": ["US"], "language": "en"}
         if update_item_token:           # relink mode (e.g. Discover -> Capital One migration)
             body["access_token"] = update_item_token
         else:

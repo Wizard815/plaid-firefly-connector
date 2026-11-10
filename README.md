@@ -1,8 +1,8 @@
-# Goblin-Bank: a Plaid router for Firefly III
+# plaid-firefly-connector
 
-Goblin-Bank holds your Plaid bank connections and forwards the accounts and
+plaid-firefly-connector holds your Plaid bank connections and forwards the accounts and
 transactions you approve into Firefly III. Firefly III is where you look at
-your money; Goblin-Bank only has an **admin page** (`/admin`). The old
+your money; plaid-firefly-connector only has an **admin page** (`/admin`). The old
 per-person app lives on the `full-ui` branch.
 
 ## How it works
@@ -14,14 +14,14 @@ per-person app lives on the `full-ui` branch.
    In Admin, per account, pick **Create in Firefly III**, **Link to** an
    existing Firefly account, or **Do not send**. One Firefly account can
    receive only one bank account.
-4. Goblin-Bank pushes transactions to Firefly III after each sync, safely
+4. plaid-firefly-connector pushes transactions to Firefly III after each sync, safely
    repeatable (no duplicates, edits and deletions follow the bank).
 
 ## Quick how-to
 
 - **New person:** Admin, *Add person*. Press *Manage*.
 - **Link Huntington or another bank:** Manage, *Link a bank*, search the bank
-  in Plaid's window and sign in there. Goblin-Bank never sees the login. Which
+  in Plaid's window and sign in there. plaid-firefly-connector never sees the login. Which
   banks Plaid supports (PayPal included) depends on your Plaid plan; check in
   the Link window.
 - **Let the person link their own:** Manage, choose a time, *Make a temporary
@@ -33,7 +33,7 @@ per-person app lives on the `full-ui` branch.
   connection*, approve accounts, *Send now*.
 
 The rest of this file is the original install guide (some sections talk about
-the per-person app, which is now on the `full-ui` branch).
+the per-person app, which is now on the `full-ui` branch, along with goals, sharing between people and the AI chat; those are not in `main`).
 
 
 Self-hosted family finance. **One gateway, one private container per person.**
@@ -47,7 +47,7 @@ Pondering Orb ──(read-only key)──► CoinGateway ──► goblin-alice 
   and `/api/v1/summary` for Pondering Orb. Stores no tokens, balances or transactions.
 * **Goblin** (`ROLE=goblin`): one person's data. Shares with the gateway/Orb only what that person ticks under Settings, Sharing (or `share:` in `goblins.yaml` as a starting value).
   Shareable: `net_worth`, `subscriptions`, `bills` (totals), `bill_list` (each bill for the next 30 days), `alerts` (counts),
-  `alert_list` (each alert), `savings`, `goals`, `robinhood_main`, `robinhood_agent`. The lists are separate opt-ins from the totals.
+  `alert_list` (each alert), `savings`, `robinhood_main`, `robinhood_agent`. The lists are separate opt-ins from the totals.
   Parses Robinhood activity CSVs dropped in `data/<name>/robinhood-csv/` itself, in-process (no account access, deduped) — not a separate container, since there's no credential to isolate.
 * **Connectors** (one container each, read-only, GET-only, secret-protected):
   * `rh-agent` – official Robinhood MCP (agent account). Fails closed: only tools in `RH_MCP_READ_TOOLS` are callable.
@@ -66,13 +66,11 @@ One image, many roles (`ROLE=`), so the repo stays small.
 * **Phone notifications**: paste Mattermost incoming-webhook URLs (Settings, Alerts): a separate channel and severity for CDs and bonds (default: everything; empty means they use the main one), and a main channel for everything else (default: warnings and critical). Each new alert at or above your chosen severity is sent once, criticals repeat after 24 hours while still active, an alert that clears and returns is announced again, and a failed send is retried. Test button and "check now" included. Slack-style webhooks work too.
 * **Alerts** (switchable in Settings; a CD or bond that matured and is still sitting there gets its own warning until you mark it handled): repeating payments not yet in Subscriptions, overdrawn / below-minimum accounts, accounts projected to run short, missed payments, CDs maturing, bills due soon.
 * **Overview**: net worth, adjustable "bills in the next N days" window (1 day to 10 years, repeats expanded), spending by category, alerts.
-* **Savings**: where the money sits (bank savings/CD accounts appear by themselves, plus anything you add by hand) and what it is for. Goals earmark part of the savings, so *free* money = saved minus earmarked. Free money is shared by every goal until you assign it. A new goal starts unfunded (tick "use free savings" to take what is free) and shows how long saving would take. "When your CDs mature" shows what each CD will be worth, what is pinned to goals, and where the free money would go, by priority. Move earmarks between goals, auto-fill by priority, mark bought.
-* **Budgets & notes**: a monthly plan (expected income - bills - budgets - goal contributions = left to assign; a budget covers its category's bills, never double counted), income sources (steady deposits are detected; the plan follows the real paydays, so a three-paycheck month shows three), your notes, goals, and an agent that drafts notes from your real data. Link a goal or note to an agent chat.
 * **Agent**: saved multi-chat (rename, delete, context meter, automatic + manual compaction, per-chat tools switch and model switch), over your data with tools (accounts, transactions, bills, recurring detection, savings, projections, budgets, calendar, notes, exact calculator). Any OpenAI-compatible endpoint (Ollama, LM Studio, llama.cpp, OpenRouter...) or Anthropic; add as many as you like. Cloud models are blocked until you allow each one. It can write notes and add a subscription when you ask in chat (with Undo); it cannot move money. Models without tool calling get a data snapshot instead.
 * **Settings** (tabs): General (light/dark, accent colour, arrange mode), Alerts, Family links, Sharing with the Orb, Models, Categories, Calendar (CalDAV), Robinhood, Connect & import.
 * **Your layout**: every tab has "Arrange panels": drag panels anywhere on a 12-column grid, resize them, hide the ones you do not use.
 * **Family links**: link two goblins through the gateway (it only relays, stores nothing). Linking shares nothing by itself; each person then grants specific items (an account balance, a goal with a combined total and shared notes), revocable any time. Joint accounts count only your share. Plaid usage + cost guard: call counts, a monthly estimate at Plaid's pay-as-you-go list prices (Transactions $0.30, Recurring $0.15, Investments Holdings $0.18, per linked item per month), a budget warning, a daily call cap, and a switch to skip Plaid's paid recurring detection (the app finds repeating payments itself).
-* **Sharing**: the Pondering Orb sees only the totals you tick (never transactions). API tokens (named, scoped, revocable, rate limited, read-only) let Home Assistant or scripts read `GET /api/v1/me/{summary|ha|bills|alerts|savings|goals|budgets|transactions}`; the UI generates the Home Assistant YAML.
+* **Sharing**: the Pondering Orb sees only the totals you tick (never transactions). API tokens (named, scoped, revocable, rate limited, read-only) let Home Assistant or scripts read `GET /api/v1/me/{summary|ha|bills|alerts|savings|transactions}`; the UI generates the Home Assistant YAML.
 * **Fresh data**: automatic sync every 15 minutes (Settings, Connect & import; 0 turns it off). A token with the `refresh` scope can add `?refresh=1` to ask for a fresh sync on demand (at most once per 5 minutes); Home Assistant polls every 15 minutes and can call a `rest_command` for an immediate refresh.
 * **Projected spending**: Overview shows spending so far, a month-end projection built from your history (per category, with lumpy payments like rent handled separately) and both against your average monthly income. Shareable with the Orb as `spending`; the itemised `bill_list` and `alert_list` are separate opt-ins.
 * **Models**: pick the server type from a list, press Refresh to list its models, no naming needed.
@@ -92,8 +90,8 @@ Everything runs in Docker. You do not need Python or anything else on the machin
 
 ### 2. Install
 ```bash
-git clone https://github.com/Wizard815/Goblin-Bank.git
-cd Goblin-Bank
+git clone https://github.com/Wizard815/plaid-firefly-connector.git
+cd plaid-firefly-connector
 ./scripts/install.sh
 docker compose -f docker-compose.generated.yml up -d --build
 ```
@@ -119,8 +117,8 @@ How sign-in works:
 
 ### Pondering Orb
 1. On the gateway's admin page, under **Pondering Orb**, press **Make a key**. It is shown once; only its hash is kept. (`orb_key: true` in `goblins.yaml` still works if you prefer a file.)
-2. Each person chooses what the Orb may see under Settings, **Sharing** (totals like net worth, bills, goals, savings; the itemised lists are separate opt-ins; never transactions).
-3. In Pondering Orb, set `GOBLIN_ORB_KEY` to that key and point its Goblin-Bank widget at the gateway: `http://gateway:8000` if the Orb runs in the same Docker network, otherwise this server's address (the one from step 4 below, or `http://<server>:6421` on your network). The Orb calls `GET /api/v1/summary` with `Authorization: Bearer <key>`. Revoke the key on the admin page any time.
+2. Each person chooses what the Orb may see under Settings, **Sharing** (totals like net worth, bills, savings; the itemised lists are separate opt-ins; never transactions).
+3. In Pondering Orb, set `GOBLIN_ORB_KEY` to that key and point its plaid-firefly-connector widget at the gateway: `http://gateway:8000` if the Orb runs in the same Docker network, otherwise this server's address (the one from step 4 below, or `http://<server>:6421` on your network). The Orb calls `GET /api/v1/summary` with `Authorization: Bearer <key>`. Revoke the key on the admin page any time.
 Nothing about this changed with the new setup: the key, the endpoint and the shape of the summary are the same.
 
 ### Calendar (CalDAV)
@@ -133,8 +131,8 @@ There is **one gateway and one address** (`http://127.0.0.1:6421`, or your Tails
 * The goblin containers have no ports open to you at all. Only the gateway is published (port 6421, this machine only); the goblins sit behind it on the Docker network and trust only the gateway's secret.
 
 ### Which Plaid site is which
-* **dashboard.plaid.com** is the developer dashboard: your Client ID, secrets, allowed redirect URIs, API version and usage. This is what Goblin Bank is set up with.
-* **my.plaid.com** is the consumer Plaid Portal, where a person sees and revokes the connections they made to apps through Plaid. It is not a connection point for developers: banks shown there belong to other apps' connections, and Goblin Bank cannot read them. To bring a bank into Goblin Bank, link it in Goblin Bank (Settings, Connect & import, Link an account), which creates a connection under your own Client ID.
+* **dashboard.plaid.com** is the developer dashboard: your Client ID, secrets, allowed redirect URIs, API version and usage. This is what Plaid Firefly Connector is set up with.
+* **my.plaid.com** is the consumer Plaid Portal, where a person sees and revokes the connections they made to apps through Plaid. It is not a connection point for developers: banks shown there belong to other apps' connections, and Plaid Firefly Connector cannot read them. To bring a bank into Plaid Firefly Connector, link it in Plaid Firefly Connector (Settings, Connect & import, Link an account), which creates a connection under your own Client ID.
 * **API version:** every request pins `Plaid-Version: 2020-09-14` (override with `PLAID_VERSION`), so a change of the default version in the dashboard cannot change what the app receives.
 
 ### Webhooks (Plaid tells the app when there is news)

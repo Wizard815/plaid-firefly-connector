@@ -26,7 +26,6 @@ def rig():
     seed(db, 3, TODAY)
     db.conn.execute("INSERT INTO savings(name,kind,balance,apy) VALUES('HYSA','savings',4000,4)"); db.conn.commit()
     g = TestClient(goblin.create_app(db=db, today=lambda: TODAY))
-    g.post("/api/goals", headers=H, json={"name": "House", "target": 3000, "auto_allocate": True})
 
     def to_goblin(req: httpx.Request):
         r = g.request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
@@ -57,17 +56,17 @@ def test_token_lifecycle_and_storage():
 
 def test_gateway_routes_a_token_to_its_goblin_and_enforces_scopes():
     g, gw, _ = rig()
-    t = mint(g, ["summary", "goals"])
+    t = mint(g, ["summary", "savings"])
     A = {"Authorization": "Bearer " + t["token"]}
     s = gw.get("/api/v1/me/summary", headers=A).json()
-    assert s["savings_total"] == 4000 and s["savings_free"] == 1000 and s["goals_active"] == 1 and s["net_worth"] > 0 and "bills_30d" in s and "alerts_total" in s
+    assert s["savings_total"] == 4000 and s["net_worth"] > 0 and "bills_30d" in s and "alerts_total" in s
     ha = gw.get("/api/v1/me/ha", headers=A).json()
-    assert all(not isinstance(v, (dict, list)) for v in ha.values()) and "next_bill_name" in ha and ha["savings_free"] == 1000          # flat values only: sensor-friendly
-    assert gw.get("/api/v1/me/goals", headers=A).json()["goals"][0]["name"] == "House"
+    assert all(not isinstance(v, (dict, list)) for v in ha.values()) and "next_bill_name" in ha          # flat values only: sensor-friendly
+    assert gw.get("/api/v1/me/savings", headers=A).json()["total"] == 4000
     assert gw.get("/api/v1/me/transactions", headers=A).status_code == 403 and "transactions" in gw.get("/api/v1/me/transactions", headers=A).json()["detail"]      # not granted
     assert gw.get("/api/v1/me/bills", headers=A).status_code == 403
     assert gw.get("/api/v1/me/nonsense", headers=A).status_code == 404
-    assert set(gw.get("/api/v1/me", headers=A).json()["resources"]) == {"ha", "goals", "summary"}
+    assert set(gw.get("/api/v1/me", headers=A).json()["resources"]) == {"ha", "savings", "summary"}
     # a token never works as a login, and a login never works as a token
     assert gw.get("/g/alice/api/overview", headers=A).status_code == 401
     assert gw.get("/api/v1/me/summary", headers={"Authorization": "Bearer login"}).status_code == 401
@@ -87,18 +86,16 @@ def test_bad_tokens_all_look_the_same():
 def test_each_scope_returns_only_its_data_and_transactions_stay_private_by_default(monkeypatch):
     monkeypatch.setenv("API_RATE_PER_MIN", "50")
     g, gw, db = rig()
-    t = mint(g, ["bills", "alerts", "savings", "budgets", "transactions"])
+    t = mint(g, ["bills", "alerts", "savings", "transactions"])
     A = {"Authorization": "Bearer " + t["token"]}
     assert gw.get("/api/v1/me/bills?days=14", headers=A).json()["days"] == 14
     assert "alerts" in gw.get("/api/v1/me/alerts", headers=A).json()
     sv = gw.get("/api/v1/me/savings", headers=A).json()
-    assert (sv["total"], sv["earmarked"], sv["free"]) == (4000, 3000, 1000) and "account_id" not in sv["places"][0]
-    assert "income_month" in gw.get("/api/v1/me/budgets?month=2026-10", headers=A).json()
+    assert sv["total"] == 4000 and "account_id" not in sv["places"][0]
     tx = gw.get("/api/v1/me/transactions?limit=5&direction=out", headers=A).json()
     assert len(tx["items"]) == 5 and set(tx["items"][0]) == {"date", "name", "amount", "category", "account_name"} and tx["items"][0]["amount"] < 0
     assert len(gw.get("/api/v1/me/transactions?limit=100000", headers=A).json()["items"]) <= 100
     assert gw.get("/api/v1/me/summary", headers=A).status_code == 403
-    assert gw.get("/api/v1/me/budgets?month=oops", headers=A).status_code == 422                       # bad input is a clean 422, not a crash
 
 
 def test_rate_limit_and_last_used():
@@ -123,9 +120,9 @@ def test_orb_summary_shows_only_what_was_shared():
     orb = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_goblin)))
     O = {"Authorization": "Bearer orb"}
     assert orb.get("/api/v1/summary", headers=O).json()["goblins"]["alice"] == {"goblin": "alice"}                     # nothing shared yet
-    g.put("/api/settings", headers=H, json={"share": ["net_worth", "bills", "alerts", "savings", "goals"]})
+    g.put("/api/settings", headers=H, json={"share": ["net_worth", "bills", "alerts", "savings"]})
     a = orb.get("/api/v1/summary", headers=O).json()["goblins"]["alice"]
-    assert set(a) == {"goblin", "net_worth", "bills", "alerts", "savings", "goals"} and a["savings"]["free"] == 1000 and a["goals"][0]["name"] == "House"
+    assert set(a) == {"goblin", "net_worth", "bills", "alerts", "savings"} and a["savings"]["total"] == 4000
     assert "transactions" not in str(a)
     assert g.put("/api/settings", headers=H, json={"share": ["transactions"]}).status_code == 422                          # the Orb can never be given raw transactions
 

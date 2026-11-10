@@ -33,7 +33,7 @@ def sub(**kw):
 def test_every_route_needs_the_internal_secret(api):
     c, _ = api
     for path in ["/api/overview", "/api/accounts", "/api/transactions", "/api/subscriptions", "/api/savings", "/api/notes", "/api/budgets", "/api/categories",
-                 "/api/alerts", "/api/upcoming", "/api/suggestions", "/api/projection", "/api/spending", "/api/agent/providers"]:
+                 "/api/alerts", "/api/upcoming", "/api/suggestions", "/api/projection", "/api/spending"]:
         assert c.get(path).status_code == 401, path
 
 

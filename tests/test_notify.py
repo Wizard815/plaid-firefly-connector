@@ -45,46 +45,13 @@ HOOK = "https://mm.example/hooks/abc123"
 
 
 # ---------------------------------------------------------------- matured but idle
-def test_matured_idle_alert_says_where_the_money_could_go():
+def test_handled_alerts_stay_quiet():
     c, db, _ = rig()
-    cd = add_cd(db, maturity="2026-10-20")                                              # matured 18 days ago
-    car = c.post("/api/goals", headers=H, json={"name": "Car", "target": 3000, "priority": 1}).json()
-    house = c.post("/api/goals", headers=H, json={"name": "House", "target": 9000, "priority": 2}).json()
-    c.post(f"/api/goals/{house['id']}/allocate", headers=H, json={"place": f"s:{cd}", "amount": 7000})
-    a = next(x for x in c.get("/api/alerts", headers=H).json() if x["kind"] == "matured_idle")
-    assert a["severity"] == "warning" and a["date"] == "2026-10-20" and "matured 18 days ago and is still sitting there" in a["title"]
-    assert "Already pinned: House 7,000.00" in a["detail"] and "Car 3,000.00" in a["detail"] and "mark it handled" in a["detail"]
-    assert a["key"] == f"matured_idle:s:{cd}:2026-10-20"
-
-
-def test_matured_idle_window_and_edge_cases():
-    c, db, _ = rig()
-    kinds = lambda: [x["kind"] for x in c.get("/api/alerts", headers=H).json()]
-    add_cd(db, "future", maturity="2026-12-01"); assert "matured_idle" not in kinds()                         # not matured yet
-    add_cd(db, "today", maturity="2026-11-07"); assert kinds().count("matured_idle") == 1                      # matures today counts as matured
-    add_cd(db, "ancient", maturity="2026-08-01"); assert kinds().count("matured_idle") == 1                    # 98 days ago: long past, stop nagging
-    add_cd(db, "empty", balance=0, maturity="2026-10-25"); assert kinds().count("matured_idle") == 1           # nothing left on it
-    db.conn.execute("UPDATE savings SET active=0 WHERE name='today'"); db.conn.commit()
-    assert "matured_idle" not in kinds()                                                                       # removed from the list = handled
-
-
-def test_handled_alerts_stay_quiet_but_a_new_situation_is_new():
-    c, db, _ = rig()
-    cd = add_cd(db, maturity="2026-10-20")
-    a = next(x for x in c.get("/api/alerts", headers=H).json() if x["kind"] == "matured_idle")
+    overdrawn(db)
+    a = next(x for x in c.get("/api/alerts", headers=H).json() if x["kind"] == "negative_balance")
     assert c.post("/api/alerts/dismiss", headers=H, json={"key": a["key"]}).status_code == 200
-    assert "matured_idle" not in [x["kind"] for x in c.get("/api/alerts", headers=H).json()]
+    assert "negative_balance" not in [x["kind"] for x in c.get("/api/alerts", headers=H).json()]
     assert c.post("/api/alerts/dismiss", headers=H, json={"key": "nope"}).status_code == 404
-    db.conn.execute("UPDATE savings SET maturity='2026-11-01' WHERE id=?", (cd,)); db.conn.commit()           # rolled over into a new term that has also ended
-    assert "matured_idle" in [x["kind"] for x in c.get("/api/alerts", headers=H).json()]                      # different maturity date, different key
-
-
-def test_idle_maturity_reaches_the_orb_with_its_date():
-    c, db, _ = rig()
-    add_cd(db, maturity="2026-10-20")
-    c.put("/api/settings", headers=H, json={"share": ["alert_list"]})
-    m = next(a for a in c.get("/summary", headers=H).json()["alert_list"] if a["kind"] == "matured_idle")
-    assert m["date"] == "2026-10-20" and m["severity"] == "warning" and set(m) == {"severity", "kind", "title", "detail", "date"}
 
 
 # ---------------------------------------------------------------- notifications
@@ -105,7 +72,7 @@ def test_new_alerts_are_sent_once_in_mattermost_format():
     r = c.post("/api/notify/run", headers=H).json()
     assert r["sent"] == 1 and r["titles"] == ["Checking 1 is overdrawn"] and len(sent) == 1 and sent[0]["url"] == HOOK
     b = sent[0]["body"]
-    assert b["username"] == "Goblin Bank (alice)" and b["icon_emoji"] == ":coin:" and ":rotating_light: **Checking 1 is overdrawn**" in b["text"] and "Balance -20.00" in b["text"]
+    assert b["username"] == "Plaid Firefly Connector (alice)" and b["icon_emoji"] == ":coin:" and ":rotating_light: **Checking 1 is overdrawn**" in b["text"] and "Balance -20.00" in b["text"]
     assert c.post("/api/notify/run", headers=H).json()["sent"] == 0 and len(sent) == 1                       # the same alert is not repeated
     overdrawn(db, 2, -5); overdrawn(db, 3, -9)
     r = c.post("/api/notify/run", headers=H).json()
@@ -166,8 +133,8 @@ def test_test_button_and_dismissed_alerts_are_not_sent():
     c.put("/api/settings", headers=H, json={"notify_url": HOOK})
     assert c.post("/api/notify/test", headers=H).json() == {"ok": True} and "notifications are working" in sent[0]["body"]["text"]
     assert db.one("SELECT COUNT(*) n FROM notified")["n"] == 0                                                   # a test message does not use up a real alert
-    cd = add_cd(db, maturity="2026-10-20")
-    key = next(a["key"] for a in c.get("/api/alerts", headers=H).json() if a["kind"] == "matured_idle")
+    overdrawn(db)
+    key = next(a["key"] for a in c.get("/api/alerts", headers=H).json() if a["kind"] == "negative_balance")
     c.post("/api/alerts/dismiss", headers=H, json={"key": key})
     n = len(sent)
     assert c.post("/api/notify/run", headers=H).json()["sent"] == 0 and len(sent) == n                           # handled means silent
@@ -213,69 +180,6 @@ def rig2(fail=()):
         return httpx.Response(500 if str(req.url) in fail else 200)
     db = DB(":memory:")
     return TestClient(goblin.create_app(db=db, today=lambda: TODAY, notify_transport=httpx.MockTransport(h))), db, sent
-
-
-def test_cd_alerts_go_to_their_own_channel_with_their_own_floor():
-    c, db, sent = rig2()
-    c.put("/api/settings", headers=H, json={"notify_url": HOOK, "notify_url_cds": HOOK2})
-    add_cd(db, "Ally CD", maturity="2026-11-20")                                                  # matures in 13 days: an info-level alert
-    add_cd(db, "Old CD", maturity="2026-10-20")                                                   # matured and idle: a warning
-    overdrawn(db)                                                                                 # critical, not about a CD
-    r = c.post("/api/notify/run", headers=H).json()
-    assert r["sent"] == 3 and r["by_route"] == {"cds": 2, "other": 1}
-    to = {u: b["text"] for u, b in sent}
-    assert "CDs and bonds" in to[HOOK2] and "Ally CD matures in 13 days" in to[HOOK2] and "Old CD matured 18 days ago" in to[HOOK2] and "overdrawn" not in to[HOOK2]
-    assert "overdrawn" in to[HOOK] and "CD" not in to[HOOK] and "Ally" not in to[HOOK]
-    assert c.post("/api/notify/run", headers=H).json()["sent"] == 0 and len(sent) == 2             # nothing repeats on either route
-
-
-def test_floors_are_separate_per_route():
-    c, db, sent = rig2()
-    c.put("/api/settings", headers=H, json={"notify_url": HOOK, "notify_url_cds": HOOK2, "notify_min_severity": "critical", "notify_min_severity_cds": "warning"})
-    add_cd(db, "Ally CD", maturity="2026-11-20")                                                  # info: below the CD floor now
-    db.conn.execute("INSERT INTO accounts(id,source,name,kind,balance,min_balance) VALUES('low','manual','Low','cash',80,200)"); db.conn.commit()    # a warning: below the main floor
-    assert c.post("/api/notify/run", headers=H).json()["sent"] == 0 and sent == []
-    add_cd(db, "Old CD", maturity="2026-10-20")
-    r = c.post("/api/notify/run", headers=H).json()
-    assert r["by_route"] == {"cds": 1} and sent[0][0] == HOOK2 and "Old CD" in sent[0][1]["text"]
-    c.put("/api/settings", headers=H, json={"notify_min_severity": "warning"})
-    assert c.post("/api/notify/run", headers=H).json()["titles"] == ["Low is below your minimum"]
-    assert c.put("/api/settings", headers=H, json={"notify_min_severity_cds": "shout"}).status_code == 422
-    assert c.get("/api/settings", headers=H).json()["notify_min_severity_cds"] == "warning"
-
-
-def test_without_a_cd_channel_cd_alerts_follow_the_main_route_and_its_floor():
-    c, db, sent = rig2()
-    c.put("/api/settings", headers=H, json={"notify_url": HOOK, "notify_min_severity": "warning"})
-    add_cd(db, "Ally CD", maturity="2026-11-20")                                                  # info
-    assert c.post("/api/notify/run", headers=H).json()["sent"] == 0                               # the main floor applies, so an info-level CD alert stays in the app
-    add_cd(db, "Old CD", maturity="2026-10-20")
-    r = c.post("/api/notify/run", headers=H).json()
-    assert r["by_route"] == {"cds": 1} and sent[0][0] == HOOK and "Old CD matured" in sent[0][1]["text"]      # warning-level CD alert uses the only webhook
-    st = c.get("/api/notify/status", headers=H).json()
-    assert st["main"] and not st["cds"] and st["configured"]
-
-
-def test_only_a_cd_channel_set_means_other_alerts_have_nowhere_to_go():
-    c, db, sent = rig2()
-    c.put("/api/settings", headers=H, json={"notify_url_cds": HOOK2})
-    overdrawn(db); add_cd(db, "Old CD", maturity="2026-10-20")
-    r = c.post("/api/notify/run", headers=H).json()
-    assert r["by_route"] == {"cds": 1} and [u for u, _ in sent] == [HOOK2]
-    assert db.one("SELECT COUNT(*) n FROM notified WHERE key LIKE 'negative_balance%'")["n"] == 0    # not marked as told: it will go out as soon as a main address exists
-    c.put("/api/settings", headers=H, json={"notify_url": HOOK})
-    assert c.post("/api/notify/run", headers=H).json()["titles"] == ["Checking 1 is overdrawn"]
-
-
-def test_one_route_failing_does_not_block_the_other():
-    c, db, sent = rig2(fail=(HOOK2,))
-    c.put("/api/settings", headers=H, json={"notify_url": HOOK, "notify_url_cds": HOOK2})
-    overdrawn(db); add_cd(db, "Old CD", maturity="2026-10-20")
-    r = c.post("/api/notify/run", headers=H).json()
-    assert r["by_route"] == {"other": 1} and "cds: the webhook answered 500" in r["error"]
-    assert db.one("SELECT COUNT(*) n FROM notified WHERE key LIKE 'matured_idle%'")["n"] == 0 and db.one("SELECT COUNT(*) n FROM notified WHERE key LIKE 'negative%'")["n"] == 1
-    good, db2, sent2 = rig2()
-    assert notify.run(db, TODAY, "alice", httpx.MockTransport(lambda req: httpx.Response(200)))["by_route"] == {"cds": 1}      # the CD alert is retried and delivered
 
 
 def test_test_buttons_per_route_and_secret_storage():

@@ -7,21 +7,19 @@ import time
 from collections import defaultdict, deque
 from datetime import timedelta
 
-from goblinbank import ledger, plan
+from goblinbank import ledger
 from goblinbank.security import sha256
 
 SCOPES = {
     "summary": "Totals: net worth, bills due, savings, alert counts (and the flat sensor values for Home Assistant)",
     "bills": "The list of upcoming bills with dates and amounts",
     "alerts": "Active alerts and flags",
-    "savings": "Savings accounts, free vs earmarked money",
-    "goals": "Savings goals and their progress",
-    "budgets": "The monthly plan: income, bills, budgets, goal contributions",
+    "savings": "Savings accounts and their total",
     "transactions": "Individual transactions (sensitive: every purchase)",
     "refresh": "May add ?refresh=1 to ask for a fresh bank sync first (at most once every 5 minutes)",
 }
 REFRESH_MIN_SECONDS = 300
-RESOURCES = {"summary": "summary", "ha": "summary", "bills": "bills", "alerts": "alerts", "savings": "savings", "goals": "goals", "budgets": "budgets", "transactions": "transactions"}
+RESOURCES = {"summary": "summary", "ha": "summary", "bills": "bills", "alerts": "alerts", "savings": "savings", "transactions": "transactions"}
 
 
 def new_token(goblin: str) -> str:
@@ -71,13 +69,8 @@ def data(db, resource: str, today, params: dict) -> dict:
     if resource == "alerts":
         return {"alerts": ledger.alerts(db, today)}
     if resource == "savings":
-        gv = plan.goals_view(db, today)
-        return {"total": gv["total"], "earmarked": gv["allocated"], "free": gv["free"], "places": [{k: p[k] for k in ("name", "institution", "kind", "balance", "apy", "maturity", "earmarked", "free")} for p in gv["places"]]}
-    if resource == "goals":
-        gv = plan.goals_view(db, today)
-        return {"free_savings": gv["free"], "still_needed": gv["needed"], "goals": [{k: g.get(k) for k in ("id", "name", "target", "allocated", "shortfall", "pct", "deadline", "monthly_needed", "ready_date", "status")} for g in gv["items"]]}
-    if resource == "budgets":
-        return plan.monthly_plan(db, params.get("month") or today.strftime("%Y-%m"), today)
+        sv = ledger.savings_summary(db, today)
+        return {"total": sv["total"], "places": [{k: p.get(k) for k in ("name", "institution", "kind", "balance", "apy", "maturity")} for p in sv["items"]]}
     if resource == "transactions":
         r = ledger.query_transactions(db, limit=min(int(params.get("limit", 50)), 100), start=params.get("start"), end=params.get("end"), direction=params.get("direction"), category=params.get("category"))
         r["items"] = [{k: t[k] for k in ("date", "name", "amount", "category", "account_name")} for t in r["items"]]
@@ -86,7 +79,6 @@ def data(db, resource: str, today, params: dict) -> dict:
 
 
 def summary(db, today) -> dict:
-    gv = plan.goals_view(db, today)
     nxt = ledger.upcoming(db, 60, today)
     mine = [i for i in nxt["items"] if i["payer"] == "me"]
     al = ledger.alerts(db, today)
@@ -95,7 +87,7 @@ def summary(db, today) -> dict:
     return {"as_of": today.isoformat(), "net_worth": ledger.net_worth(db), "subscriptions_monthly": round(sum(s["monthly"] for s in subs), 2),
             "bills_7d": ledger.upcoming(db, 7, today)["total"], "bills_30d": ledger.upcoming(db, 30, today)["total"],
             "next_bill": ({"name": mine[0]["name"], "date": mine[0]["date"], "amount": mine[0]["amount"]} if mine else None),
-            "savings_total": gv["total"], "savings_free": gv["free"], "savings_earmarked": gv["allocated"], "goals_active": sum(1 for g in gv["items"] if g["status"] == "active"), "goals_needed": gv["needed"],
+            "savings_total": ledger.savings_summary(db, today)["total"],
             "spend_month_so_far": fc["spent_so_far"], "spend_month_projected": fc["projected"], "income_avg_month": fc["income_avg"], "alerts_total": len(al), "alerts_critical": sum(1 for a in al if a["severity"] == "critical"), "alerts_warning": sum(1 for a in al if a["severity"] == "warning")}
 
 

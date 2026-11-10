@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Run Goblin-Bank's Plaid code against the REAL Plaid Sandbox (fake banks, fake money, free).
+"""Run plaid-firefly-connector's Plaid code against the REAL Plaid Sandbox (fake banks, fake money, free).
 
     PLAID_CLIENT_ID=... PLAID_SECRET=... python3 scripts/plaid_sandbox_check.py
 
 If a proxy injects the secret as a header, run with PLAID_AUTH=header PLAID_SECRET=proxy-injected instead.
-It creates a sandbox item (Plaid's test bank, no Link UI needed), links it through Goblin-Bank's own API, syncs, and checks that
+It creates a sandbox item (Plaid's test bank, no Link UI needed), links it through plaid-firefly-connector's own API, syncs, and checks that
 what comes back matches what the code assumes: shapes, signs, categories, recurring bills, relink, unlink. Nothing real is touched."""
 import os
 import sys
@@ -79,7 +79,6 @@ def main():
     check("accounts came back with names, kinds and numeric balances", accts and all(a["name"] and a["kind"] in ("cash", "credit", "investment", "loan") and isinstance(a["balance"], (int, float)) for a in accts), str(accts[:2]))
     info(f"{len(accts)} accounts: " + ", ".join(f"{a['name']} [{a['kind']}/{a.get('subtype')}] {a['balance']}" for a in accts))
     check("account subtypes recorded (used to find savings accounts)", all(a.get("subtype") for a in accts if a["source"] == "plaid"), str([a.get("subtype") for a in accts]))
-    check("a savings account is recognised as savings", any(p["origin"] == "account" for p in get("/api/goals").json()["places"]) or "savings" not in {(a.get("subtype") or "") for a in accts})
 
     # --- transactions
     tx = get("/api/transactions?limit=500").json()
@@ -110,7 +109,7 @@ def main():
     info(f"{len(sug)} more repeating payments found by our own detector: " + ", ".join(f"{s['name']} {s['amount']} {s['label']}" for s in sug[:6]))
 
     # --- everything built on that data renders without errors
-    for path in ["/api/overview", "/api/alerts", "/api/forecast", "/api/plan", "/api/goals", "/api/upcoming?days=60", "/api/spending", "/api/history", "/api/status", "/api/maturities", "/summary?scope=all", "/api/plaid/usage"]:
+    for path in ["/api/overview", "/api/alerts", "/api/forecast", "/api/upcoming?days=60", "/api/spending", "/api/history", "/api/status", "/summary?scope=all", "/api/plaid/usage"]:
         r = get(path)
         check(f"GET {path} works on real data", r.status_code == 200, f"{r.status_code} {r.text[:150]}")
     ov = get("/api/overview").json()

@@ -259,25 +259,6 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         items[item_id] = g["name"]
         return {"ok": True}
 
-    @app.post("/internal/link/send")
-    async def link_send(request: Request):
-        """Relay one message from a goblin to another goblin it wants to link with. The gateway keeps nothing: it checks who is sending, stamps the
-        sender's name on it (so nobody can pose as someone else) and passes it on. Whether the two are actually linked is the receiving goblin's call."""
-        g = goblins.get(request.headers.get("x-goblin", ""))
-        if not g:
-            raise HTTPException(401, "unauthorized")
-        require_internal(request, g["internal_secret"])
-        body = await request.json()
-        to = goblins.get(body.get("to", ""))
-        if not to or to["name"] == g["name"] or not isinstance(body.get("payload", {}), dict):
-            return {"delivered": False}
-        try:
-            r = await run_in_threadpool(client.post, f"{to['url']}/internal/link/inbox", json={"type": str(body.get("type", ""))[:20], "payload": body.get("payload", {}), "sender": g["name"]},
-                                        headers=goblin_headers(to))
-        except httpx.HTTPError:
-            return {"delivered": False}
-        return {"delivered": r.status_code == 200}
-
     POLICY_KEYS = {"plaid_budget_month": float, "plaid_daily_cap": int, "plaid_min_minutes": int, "plaid_use_recurring": str, "public_url": str, "plaid_client_id": str, "plaid_secret": str, "plaid_env": str, "plaid_redirect_url": str, "firefly_url": str, "firefly_token": str, "firefly_apply_rules": str, "firefly_send_categories": str, "firefly_include_pending": str}
 
     def effective_policy(name: str) -> dict:
@@ -291,15 +272,6 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             raise HTTPException(401, "unauthorized")
         require_internal(request, g["internal_secret"])
         return effective_policy(g["name"])
-
-    @app.get("/internal/link/people")
-    def link_people(request: Request):
-        """Names of the other goblins, for the 'link with…' picker. Names only."""
-        g = goblins.get(request.headers.get("x-goblin", ""))
-        if not g:
-            raise HTTPException(401, "unauthorized")
-        require_internal(request, g["internal_secret"])
-        return {"people": sorted(n for n in goblins if n != g["name"])}
 
     @app.post("/webhooks/plaid")
     async def plaid_webhook(request: Request):

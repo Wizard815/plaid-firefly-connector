@@ -30,7 +30,7 @@ def vevent(s: dict) -> tuple[str, str]:
 
 def ics(subs: list[dict]) -> str:
     body = "\r\n".join(vevent(s)[1] for s in subs if s.get("active", 1))
-    return "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Goblin-Bank//Subscriptions//EN\r\nX-WR-CALNAME:Goblin Bank Subscriptions\r\n" + body + "\r\nEND:VCALENDAR\r\n"
+    return "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//plaid-firefly-connector//Subscriptions//EN\r\nX-WR-CALNAME:Plaid Firefly Connector Subscriptions\r\n" + body + "\r\nEND:VCALENDAR\r\n"
 
 
 def push_caldav(subs: list[dict], url: str, user: str, password: str, transport: httpx.BaseTransport | None = None) -> dict:
@@ -41,7 +41,7 @@ def push_caldav(subs: list[dict], url: str, user: str, password: str, transport:
             if not s.get("active", 1):
                 continue
             uid, ev = vevent(s)
-            body = f"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Goblin-Bank//EN\r\n{ev}\r\nEND:VCALENDAR\r\n"
+            body = f"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//plaid-firefly-connector//EN\r\n{ev}\r\nEND:VCALENDAR\r\n"
             r = c.put(f"{url.rstrip('/')}/{uid}.ics", content=body.encode(), headers={"Content-Type": "text/calendar; charset=utf-8"})
             (ok := ok + 1) if r.status_code in (200, 201, 204) else failed.append({"id": s["id"], "status": r.status_code})
     return {"pushed": ok, "failed": failed}

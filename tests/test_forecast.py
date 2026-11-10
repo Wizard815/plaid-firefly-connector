@@ -103,11 +103,6 @@ def test_income_comparison_uses_history_then_entered_income():
     assert f["spent_so_far"] == 0 and f["projected"] == pytest.approx(300 * 0.5 * 0.5 + 1200, abs=0.01)         # nothing spent on food by mid-month: pace ratio floors at 0.5; plus the usual rent
     assert f["pct_projected"] == pytest.approx(f["projected"] / 4000, abs=0.001) and f["left_after_projected"] == pytest.approx(4000 - f["projected"], abs=0.01)
     assert len(f["history"]) == 6 and f["history"][0]["income"] == 4000 and f["history"][0]["spent"] == 1500
-    # no history at all: fall back to the income you entered, and say the estimate is weak
-    e = DB(":memory:")
-    e.conn.execute("INSERT INTO incomes(name,amount,every,unit,next_date) VALUES('Pay',3000,1,'month','2026-11-20')"); e.conn.commit()
-    g = ledger.spending_forecast(e, date(2026, 11, 15))
-    assert g["income_avg"] == 3000 and g["income_source"] == "entered" and g["confidence"] == "low" and g["projected"] == 0 and g["typical_month"] is None
     assert ledger.spending_forecast(DB(":memory:"), date(2026, 11, 15))["income_avg"] is None
 
 
@@ -136,7 +131,6 @@ def test_endpoint_agent_tool_and_home_assistant_values():
     from goblinbank import external
     s = external.summary(db, date(2026, 11, 15))
     assert s["spend_month_projected"] == c.get("/api/forecast", headers=H).json()["projected"] and s["income_avg_month"] == 4000 and "spend_month_so_far" in external.flat(s)
-    assert "spending_forecast" in {t["name"] for t in c.get("/api/agent/tools", headers=H).json()}
 
 
 # ---------------------------------------------------------------- random data vs an independent calculation

@@ -98,7 +98,7 @@ def test_health_is_checked_on_demand_and_counts_can_be_cleared():
 def test_admin_page_is_just_a_shell():
     _, gw = rig()
     page = gw.get("/admin")
-    assert page.status_code == 200 and "Goblin Bank admin" in page.text and "keeps no log of requests" in page.text
+    assert page.status_code == 200 and "Plaid Firefly Connector admin" in page.text and "keeps no log of requests" in page.text
     assert "alice" not in page.text and "net_worth" not in page.text                                 # no data in the page itself; it fetches counts with the admin token
 
 
@@ -144,7 +144,6 @@ def test_people_can_be_added_from_the_admin_page_and_survive_a_restart(tmp_path,
     assert r["name"] == "bob" and r["login_token"] and r["internal_secret"] and "sha256" not in str(r)
     # the new person can sign in and sees the others by name, and the gateway kept only the token's hash
     assert gw.get("/g/bob/health", headers={"Authorization": "Bearer " + r["login_token"]}).status_code != 401
-    assert gw.get("/internal/link/people", headers={"X-Goblin": "bob", "X-Internal-Secret": r["internal_secret"]}).json() == {"people": ["alice"]}
     assert r["login_token"] not in state.read_text() and r["login_token"] not in str(gw.get("/admin/status", headers=A).json())
     # a restart (new app, same state file) still knows bob; yaml people cannot be removed from the page, added ones can
     gw2 = TestClient(gateway.create_app(dict(cfg), transport=httpx.MockTransport(lambda r: httpx.Response(200, json={}))))

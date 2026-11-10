@@ -1,4 +1,4 @@
-"""A small in-memory stand-in for the parts of the Firefly III API Goblin Bank uses, following Firefly III's own validation (v1 API)."""
+"""A small in-memory stand-in for the parts of the Firefly III API Plaid Firefly Connector uses, following Firefly III's own validation (v1 API)."""
 import json
 
 import httpx

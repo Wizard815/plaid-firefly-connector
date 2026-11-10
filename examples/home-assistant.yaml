@@ -2,7 +2,7 @@
 # Put the token in HA's secrets.yaml as goblin_token: gb_alice_xxxxxxxx
 sensor:
   - platform: rest
-    name: Goblin Bank
+    name: Plaid Firefly Connector
     resource: https://bank.example.com/api/v1/me/ha
     headers:
       Authorization: !secret goblin_bank_bearer      # "Bearer gb_alice_xxxxxxxx"

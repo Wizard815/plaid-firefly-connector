@@ -1,4 +1,4 @@
-"""Goblin Bank as a Plaid router for Firefly III: accounts and transactions go across once, correctly, and stay in step."""
+"""Plaid Firefly Connector as a Plaid router for Firefly III: accounts and transactions go across once, correctly, and stay in step."""
 from datetime import date, timedelta
 
 import pytest
