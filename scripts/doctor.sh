@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Why are no accounts showing up after linking Plaid? Checks the Plaid setup step by step and tells you what is wrong.
 # Secrets are never printed: a key is shown only as "set" or "not set". Run from the repository folder:  ./scripts/doctor.sh
-# Optional: PORT=6767 (the app's port), COMPOSE=docker-compose.generated.yml
+# Optional: PORT=6868 (the app's port), COMPOSE=docker-compose.generated.yml
 set -uo pipefail
 cd "$(dirname "$0")/.."
-PORT=${PORT:-6767}; COMPOSE=${COMPOSE:-docker-compose.generated.yml}; BASE="http://127.0.0.1:$PORT"
+PORT=${PORT:-6868}; COMPOSE=${COMPOSE:-docker-compose.generated.yml}; BASE="http://127.0.0.1:$PORT"
 ok() { printf '  [ok]  %s\n' "$*"; }; bad() { printf '  [!!]  %s\n' "$*"; PROBLEMS=$((PROBLEMS + 1)); }; note() { printf '        %s\n' "$*"; }
 PROBLEMS=0
 
