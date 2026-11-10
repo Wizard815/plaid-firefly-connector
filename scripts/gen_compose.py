@@ -171,7 +171,7 @@ def main(src="goblins.yaml", *flags):
         print("hint: sudo chown 10001:10001 gateway.yaml   (the gateway container cannot read it otherwise)")
     services["gateway"] = {"build": ".", "environment": {"ROLE": "gateway", "GATEWAY_CONFIG": "/config/gateway.yaml", "UI_DIR": "/app/ui", "GATEWAY_STATE": "/state/people.json"}, "user": "10001",
                            "volumes": ["./gateway.yaml:/config/gateway.yaml:ro", "./gateway-state:/state"], "networks": ["edge"],
-                           "ports": [f"127.0.0.1:{int(spec.get('port', 6767))}:8000"], "restart": "unless-stopped"}
+                           "ports": [f"127.0.0.1:{int(spec.get('port', 6421))}:8000"], "restart": "unless-stopped"}
     (ROOT / "docker-compose.generated.yml").write_text(yaml.safe_dump({"services": services, "networks": networks}, sort_keys=False))
     print(f"wrote gateway.yaml and docker-compose.generated.yml for {len(names)} goblin(s)")
 
