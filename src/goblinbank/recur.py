@@ -101,8 +101,9 @@ CANDIDATES = [(1, "week", 7, 1, 4), (2, "week", 14, 2, 4), (4, "week", 28, 2, 4)
               (3, "month", 91.3, 7, 3), (6, "month", 182.6, 10, 2), (1, "year", 365.25, 14, 2)]
 
 
-def detect(txns: list[dict], today: date) -> list[dict]:
-    """Find payments that repeat on a steady interval for a steady amount. Pure function of the transaction list."""
+def detect(txns: list[dict], today: date, loose: bool = False) -> list[dict]:
+    """Find payments that repeat on a steady interval for a steady amount. Pure function of the transaction list.
+    `loose` is the manual, thorough scan: one fewer repeat is enough and the timing and amount may wander a little more, so it also catches newer or irregular ones (with lower confidence)."""
     groups = defaultdict(list)
     for t in txns:
         key = norm(t["name"])
@@ -120,13 +121,13 @@ def detect(txns: list[dict], today: date) -> list[dict]:
         med = statistics.median(gaps)
         best = min(CANDIDATES, key=lambda c: abs(c[2] - med))
         every, unit, exp, tol, need = best
-        if len(dates) < need or abs(exp - med) > tol * 1.5:
+        if len(dates) < (max(2, need - 1) if loose else need) or abs(exp - med) > tol * (2.2 if loose else 1.5):
             continue
         on_time = sum(1 for g in gaps if abs(g - exp) <= tol) / len(gaps)
         amts = [abs(t["amount"]) for t in ts]
         m = statistics.median(amts)
         stable = sum(1 for a in amts if abs(a - m) <= max(1.0, 0.15 * m)) / len(amts)
-        if on_time < 0.7 or stable < 0.7:
+        if on_time < (0.55 if loose else 0.7) or stable < (0.55 if loose else 0.7):
             continue
         last = dates[-1]
         nxt = next_due(last, every, unit, today) if last >= today else shift(last, every, unit, first_k_on_or_after(last, every, unit, today))

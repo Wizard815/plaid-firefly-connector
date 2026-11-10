@@ -214,6 +214,7 @@ function demoApi(path, opts) {
   const m = opts.method || "GET", [p, q] = path.split("?"), P = new URLSearchParams(q || "");
   if (p.startsWith("/api/chats")) return demoChats(p, m, opts);
   if (p === "/api/agent/models") return Promise.resolve(DEMO.models);
+  if (p === "/api/subscriptions/scan" && m === "POST") return Promise.resolve(DEMO["/scan"]);
   if (p === "/api/agent/model-info") return Promise.resolve({ context_tokens: 32768 });
   if (p === "/api/afford") { const a = +P.get("amount"), g = DEMO["/api/goals"], free = Math.max(0, g.free), short = Math.max(0, a - free); return Promise.resolve({ amount: a, free_savings: free, can_buy_now: short === 0, shortfall: short, months_to_save: short ? Math.ceil(short / 900) : undefined, ready_date: short ? "soon" : undefined }); }
   if (m !== "GET") { if (path.startsWith("/api/agent/chat")) return Promise.resolve(DEMO.chat); throw new Error("Sample preview: changes are not saved"); }
@@ -367,7 +368,7 @@ async function viewAccounts(root, rerender) {
     ...entries.map(([k, list]) => { const inst = list[0].institution; seen[inst] = (seen[inst] || 0) + 1; const dupe = entries.filter(([, l]) => l[0].institution === inst).length > 1;
       return h("div", { class: "panel scroll" }, h("div", { class: "bar" }, h("h3", {}, inst + (dupe ? ` (login ${seen[inst]})` : ""), h("span", { class: "muted small", style: "margin-left:8px;font-family:var(--body);font-weight:400" }, `${list.length} account${list.length === 1 ? "" : "s"}`)), h("span", { class: "num " + (list.reduce((t, a) => t + signed(a), 0) < 0 ? "neg" : "") }, usd(list.reduce((t, a) => t + signed(a), 0)))),
         h("table", { style: "table-layout:fixed" }, h("colgroup", {}, h("col"), h("col", { style: "width:110px" }), h("col", { style: "width:130px" }), h("col", { style: "width:56px" }), h("col", { style: "width:24px" })), h("tbody", {}, list.map((a) => h("tr", { class: "click", tabindex: 0, onclick: () => { S.acct = a.id; rerender(); }, onkeydown: (e) => e.key === "Enter" && (S.acct = a.id, rerender()) },
-          h("td", {}, an(a), a.source === "manual" ? h("span", { class: "pill" }, "manual") : null), h("td", { class: "muted small" }, (KIND[a.kind] || [a.kind])[0]), h("td", { class: "num r " + (a.kind === "credit" || a.kind === "loan" ? "neg" : "") }, usd(a.balance)),
+          h("td", {}, an(a), a.source === "manual" ? h("span", { class: "pill" }, "manual") : null), h("td", { class: "muted small" }, a.category_effective ? h("span", { class: "pill t" }, a.category_effective) : (KIND[a.kind] || [a.kind])[0]), h("td", { class: "num r " + (a.kind === "credit" || a.kind === "loan" ? "neg" : "") }, usd(a.balance)),
           h("td", { class: "r" }, h("button", { class: "btn sm", title: a.pinned ? "Shown on Overview. Click to remove" : "Show this balance on Overview", "aria-pressed": !!a.pinned, onclick: async (e) => { e.stopPropagation(); try { await api("/api/accounts/" + encodeURIComponent(a.id), send("PUT", { pinned: !a.pinned })); rerender(); } catch (err) { fail(err); } } }, a.pinned ? "★" : "☆")), h("td", { class: "r muted" }, "›")))))); }),
     h("div", { class: "panel" }, h("h3", {}, "Add an account by hand"), h("p", { class: "muted small" }, "For cash, a card Plaid cannot reach, or anything you want to track yourself. Bind subscriptions and savings to it like any other account."),
       h("form", { class: "row", onsubmit: async (e) => { e.preventDefault(); try { await api("/api/accounts", send("POST", { name: val("na-name"), institution: val("na-inst") || "Manual", kind: val("na-kind"), balance: num("na-bal") ?? 0, min_balance: num("na-min") })); toast("Added"); rerender(); } catch (err) { fail(err); } } },
@@ -379,7 +380,8 @@ async function accountDetail(root, rerender) {
   try { d = await api("/api/accounts/" + encodeURIComponent(S.acct)); } catch (e) { S.acct = null; return rerender(); }
   const a = d.account, manual = a.source === "manual";
   add(root, 
-    h("div", { class: "bar" }, h("button", { class: "btn sm", onclick: () => { S.acct = null; rerender(); } }, "‹ All accounts"), h("span", { class: "muted small" }, `${a.institution} · ${a.kind}${manual ? " · tracked by hand" : " · linked"}`)),
+    h("div", { class: "bar" }, h("button", { class: "btn sm", onclick: () => { S.acct = null; rerender(); } }, "‹ All accounts"), h("span", { class: "muted small" }, `${a.institution} · ${a.kind}${a.category_effective ? " · " + a.category_effective : ""}${manual ? " · tracked by hand" : " · linked"}`),
+      h("button", { class: "btn sm", title: "Look through this account's transactions for repeating payments", onclick: () => { S.scanAcct = a.id; S.scan = null; S.tab = "subs"; S.acct = null; render(); } }, "Check for subscriptions")),
     d.alerts.length ? h("div", { class: "panel" }, h("div", { class: "alerts" }, d.alerts.map(alertRow))) : null,
     h("div", { class: "grid" }, kpi(an(a), usd(a.balance), a.updated ? "updated " + ago(a.updated) : ""), kpi("In, last 30 days", usd(d.last_30_days.in), "", "pos"), kpi("Out, last 30 days", usd(d.last_30_days.out), `${d.last_30_days.count} transactions`, "neg")),
     h("div", { class: "panel" }, h("h3", {}, "Balance history"), spark(d.history.map((x) => ({ balance: x.balance, date: x.ts })), 560, 110, "balance", "date")),
@@ -401,6 +403,22 @@ async function accountDetail(root, rerender) {
   await txBrowser(root, { account_id: a.id }, [a]);
 }
 
+/* A manual look through the transactions (bank feed and imported CSVs) for repeating payments that are not subscriptions yet. */
+function scanPanel(accts, acctOpts, rerender) {
+  const R = S.scan || null;
+  const run = async () => { try { S.scan = await api("/api/subscriptions/scan", send("POST", { account_id: val("sc-acct") || null, thorough: val("sc-mode") === "thorough", include_dismissed: $("#sc-no").checked })); S.scanAcct = val("sc-acct"); rerender(); } catch (err) { fail(err); } };
+  return h("div", { class: "panel", "data-title": "Find missed subscriptions" }, h("h3", {}, "Look through my transactions for subscriptions"),
+    h("p", { class: "muted small" }, "Checks everything you have, including CSVs you imported, for payments that repeat but are not in your subscriptions yet. Use it after importing a file, after adding an account, or now and then to catch the ones the automatic check has not caught."),
+    h("div", { class: "filters" }, select("sc-acct", "Look in", [["", "All accounts"], ...acctOpts.filter(([k]) => k)], S.scanAcct || ""), select("sc-mode", "How hard to look", [["thorough", "Thorough (finds newer ones, may guess wrong)"], ["normal", "Normal (same as the automatic check)"]], "thorough"),
+      h("label", { class: "check", style: "align-self:end" }, h("input", { type: "checkbox", id: "sc-no" }), "Include ones I said no to"), h("button", { class: "btn primary", style: "align-self:end", onclick: run }, "Scan now")),
+    R ? h("div", { style: "margin-top:12px" }, h("p", { class: "small" }, `Checked ${R.transactions_checked} transactions${R.since ? " since " + R.since : ""}. ${R.found.length ? `Found ${R.found.length} possible new subscription${R.found.length === 1 ? "" : "s"}.` : "Nothing new found."} ${R.already_tracked} already tracked${R.previously_dismissed ? `, ${R.previously_dismissed} you said no to are hidden` : ""}.`),
+      R.found.length ? h("div", { class: "cards" }, R.found.map((s, i) => h("div", { class: "card" },
+        h("div", { class: "bar" }, h("b", {}, s.name), h("span", { class: "num" }, usd(s.amount))),
+        h("div", { class: "muted small" }, `${s.label} · seen ${s.occurrences}× · last ${s.last_date} · ${s.confidence >= 0.6 ? "likely" : "possible"} (${Math.round((s.confidence || 0) * 100)}% sure)${s.dismissed ? " · you said no before" : ""}`),
+        h("div", { class: "filters", style: "margin:8px 0" }, field(`sn-n${i}`, "Name", s.name), select(`sn-a${i}`, "Account", acctOpts, s.account_id ?? "")),
+        h("div", { class: "chips" }, h("button", { class: "btn sm primary", onclick: async () => { try { await api("/api/suggestions/accept", send("POST", { key: s.key, name: val(`sn-n${i}`), account_id: val(`sn-a${i}`) || null })); toast("Added"); S.scan.found.splice(i, 1); rerender(); } catch (err) { fail(err); } } }, "Add as subscription"),
+          h("button", { class: "btn sm", onclick: async () => { try { await api("/api/suggestions/dismiss", send("POST", { key: s.key })); S.scan.found.splice(i, 1); rerender(); } catch (err) { fail(err); } } }, "Not a subscription")))) ) : null) : null);
+}
 /* ================================ SUBSCRIPTIONS ================================ */
 const PRESETS = [["daily", "Every day"], ["weekly", "Every week"], ["biweekly", "Every 2 weeks"], ["fourweekly", "Every 4 weeks"], ["monthly", "Every month"], ["bimonthly", "Every 2 months"], ["quarterly", "Every 3 months"], ["semiannual", "Every 6 months"], ["yearly", "Every year"], ["biennial", "Every 2 years"], ["custom", "Custom…"]];
 async function viewSubs(root, rerender) {
@@ -438,6 +456,7 @@ async function viewSubs(root, rerender) {
         h("div", { class: "filters", style: "margin:8px 0" }, field(`sg-n${i}`, "Name", s.name), select(`sg-a${i}`, "Account", acctOpts, s.account_id ?? "")),
         h("div", { class: "chips" }, h("button", { class: "btn sm primary", onclick: async () => { try { await api("/api/suggestions/accept", send("POST", { key: s.key, name: val(`sg-n${i}`), account_id: val(`sg-a${i}`) || null })); toast("Added"); rerender(); } catch (err) { fail(err); } } }, "Add"),
           h("button", { class: "btn sm", onclick: async () => { await api("/api/suggestions/dismiss", send("POST", { key: s.key })); rerender(); } }, "Not a subscription")))))) : null,
+    scanPanel(accts, acctOpts, rerender),
     h("div", { class: "panel" }, h("h3", {}, e ? "Edit subscription" : "Add a subscription"), form()),
     h("div", { class: "panel scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["Name", "Repeats", "Next", "Paid from", "Amount", "Per month", ""].map((x, i) => h("th", { class: i > 3 ? "r" : "" }, x)))),
       h("tbody", {}, d.items.map((s) => h("tr", { style: s.active ? "" : "opacity:.5" },
@@ -684,7 +703,7 @@ const withSecret = (body, key, id) => { if (val(id)) body[key] = val(id); return
 const secretField = (id, label, isSet) => field(id, label, "", { type: "password", placeholder: isSet ? "saved, leave blank to keep" : "not set", autocomplete: "new-password" });
 
 async function tabConnect(root, rerender) {
-  const [cfg, st, use] = await Promise.all([api("/api/settings"), api("/api/status"), api("/api/plaid/usage")]);
+  const [cfg, st, use, acats] = await Promise.all([api("/api/settings"), api("/api/status"), api("/api/plaid/usage"), api("/api/account-categories").catch(() => [])]);
   const dis = S.demo, stale = (d) => Math.round((Date.now() - new Date(d + "T00:00:00Z")) / 864e5);
   const mgd = new Set(cfg.managed || []), lockK = (k) => mgd.has(k);
   add(root,
@@ -705,6 +724,16 @@ async function tabConnect(root, rerender) {
         return h("div", { class: "card" }, h("div", { class: "bar" }, h("b", {}, it.institution || "Bank"), h("span", { class: "small muted" }, it.status ? h("span", { class: "pill r" }, it.status === "error" ? "sign in again" : it.status === "revoked" ? "disconnected" : "sign-in expiring") : null, it.webhook_live ? h("span", { class: "pill t", title: "Plaid tells the app when there is news" }, "live updates") : null, ` ${it.last_sync ? "last checked " + ago(new Date(it.last_sync * 1000).toISOString()) : "not checked yet"} · about ${it.calls_per_day ?? "?"} calls a day`)),
           h("div", { class: "filters", style: "margin:8px 0" }, select(`sc-${it.item_id}`, "Check this bank", SCH, it.schedule || "auto", { onchange: (e) => upd({ schedule: e.target.value }) }),
             select(`rc-${it.item_id}`, "Plaid recurring detection ($0.15 a month)", [["auto", "Automatic (on for checking and cards)"], ["on", "On"], ["off", "Off"]], it.recurring || "auto", { onchange: (e) => upd({ recurring: e.target.value }) })),
+          h("div", { style: "margin:10px 0" }, h("b", { class: "small" }, "What is this bank for?"),
+            h("div", { class: "url", style: "margin-top:4px" }, h("input", { id: `ic-${it.item_id}`, list: "acct-cats", value: it.category || "", placeholder: "e.g. Checking (the default for its accounts)", "aria-label": "Category for this bank" }),
+              h("button", { class: "btn sm", onclick: () => upd({ category: val(`ic-${it.item_id}`) }) }, "Save"), h("button", { class: "btn sm", title: "Give every account in this bank this category", onclick: () => upd({ category: val(`ic-${it.item_id}`), apply_to_accounts: true }) }, "Apply to all its accounts"))),
+          (it.accounts || []).length ? h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["Account", "Name you use", "Balance", "What it is for"].map((x, i) => h("th", { class: i === 2 ? "r" : "" }, x)))),
+            h("tbody", {}, it.accounts.map((a) => { const upa = async (patch) => { try { await api("/api/accounts/" + encodeURIComponent(a.id), send("PUT", patch)); rerender(); } catch (e) { fail(e); } };
+              return h("tr", {}, h("td", {}, a.name, a.mask ? h("span", { class: "muted small" }, " ••" + a.mask) : null, h("div", { class: "muted small" }, (a.subtype || a.kind))),
+                h("td", {}, h("input", { id: `an-${a.id}`, value: a.nickname || "", placeholder: "nickname", "aria-label": "Nickname", style: "min-width:110px", onchange: () => upa({ nickname: val(`an-${a.id}`) }) })),
+                h("td", { class: "num r" }, usd(a.balance)),
+                h("td", {}, h("input", { id: `ac-${a.id}`, list: "acct-cats", value: a.category || "", placeholder: a.category_effective || "same as the bank", "aria-label": "What this account is for", style: "min-width:130px", onchange: () => upa({ category: val(`ac-${a.id}`) }) }))); })))) : null,
+          h("datalist", { id: "acct-cats" }, acats.map((c) => h("option", { value: c }))),
           h("div", { class: "small muted" }, it.schedule === "auto" || !it.schedule ? `Automatic means ${(SCH.find(([k]) => k === it.schedule_effective) || [0, it.schedule_effective])[1].toLowerCase()} for this bank, from the accounts it holds. ` : "", it.webhook_live ? "Updates arrive by webhook, so this bank is only polled weekly as a safety net. " : "", it.recurring_effective ? "Recurring detection is on for this bank." : "Recurring detection is off for this bank (the app finds repeating payments itself)."),
           h("div", { class: "chips", style: "margin-top:8px" },
             h("button", { class: "btn sm", disabled: dis, onclick: async () => { try { await openLink(it.item_id, rerender); } catch (e) { fail(e); } } }, "Relink"),

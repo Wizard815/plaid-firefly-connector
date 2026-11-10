@@ -290,11 +290,33 @@ def project_balance(db, days: int, today: date, account_ids: list[str] | None = 
             "note": "Estimate: counts only subscriptions you have entered and steady income the detector found. Everyday spending is not included."}
 
 
-def recurring_found(db, today: date) -> list[dict]:
+def recurring_found(db, today: date, account_id: str | None = None, days: int = 800, loose: bool = False) -> list[dict]:
     # Interest accruing on a loan and transfers between your own accounts repeat on a schedule but are not subscriptions or income.
     rows = db.all("SELECT t.id, t.account_id, t.date, t.name, t.amount FROM transactions t LEFT JOIN accounts a ON a.id=t.account_id "
-                  "WHERE t.date >= ? AND coalesce(a.kind,'') != 'loan' AND coalesce(t.category,'') != 'Transfer' ORDER BY t.date", ((today - timedelta(days=800)).isoformat(),))
-    return recur.detect(rows, today)
+                  "WHERE t.date >= ? AND coalesce(a.kind,'') != 'loan' AND coalesce(t.category,'') != 'Transfer'" + (" AND t.account_id=?" if account_id else "") + " ORDER BY t.date",
+                  ((today - timedelta(days=days)).isoformat(),) + ((account_id,) if account_id else ()))
+    return recur.detect(rows, today, loose)
+
+
+def scan_subscriptions(db, today: date, account_id: str | None = None, thorough: bool = True, include_dismissed: bool = False, days: int = 3650) -> dict:
+    """A manual look through the transactions (including CSVs you imported) for repeating payments that are not tracked as subscriptions yet.
+    Unlike the automatic suggestions it can cover one account, all history, ones you said no to, and a more forgiving match."""
+    subs = db.all("SELECT name FROM subscriptions")
+    hidden = {r["match_key"] for r in db.all("SELECT match_key FROM subscriptions WHERE match_key IS NOT NULL")}
+    said_no = {r["key"] for r in db.all("SELECT key FROM dismissed")}
+    n_tx = db.one("SELECT COUNT(*) n, MIN(date) first FROM transactions" + (" WHERE account_id=?" if account_id else ""), (account_id,) if account_id else ())
+    found, tracked, skipped_no = [], 0, 0
+    for r in recurring_found(db, today, account_id, days, loose=thorough):
+        if r["direction"] != "out":
+            continue
+        if r["key"] in hidden or any(recur.same_payee(r["name"], s["name"]) for s in subs):
+            tracked += 1
+            continue
+        if r["key"] in said_no and not include_dismissed:
+            skipped_no += 1
+            continue
+        found.append({**r, "source": "scan", "dismissed": r["key"] in said_no})
+    return {"found": found, "already_tracked": tracked, "previously_dismissed": skipped_no, "transactions_checked": n_tx["n"], "since": n_tx["first"], "thorough": thorough, "account_id": account_id}
 
 
 def suggestions(db, today: date) -> list[dict]:

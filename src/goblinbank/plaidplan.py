@@ -16,20 +16,42 @@ def hook_live(row: dict, now: float) -> bool:
     return bool(row.get("last_hook")) and now - row["last_hook"] < HOOK_LIVE
 
 
+# What an account is FOR, set by you (per account, or once for a whole bank). It decides how it is treated: whether it counts as savings, and how often its bank is asked.
+CATEGORIES = ["Checking", "Bills", "Spending", "Savings", "Emergency fund", "Credit card", "Retirement", "Investment", "Joint", "Business", "Other"]
+SAVINGS_CATS = {"savings", "emergency fund"}
+INVEST_CATS = {"retirement", "investment"}
+
+
+def category_group(cat: str | None) -> str | None:
+    """everyday | savings | investment for a category you chose, None if none was chosen. A name of your own counts as everyday."""
+    if not cat:
+        return None
+    c = cat.strip().lower()
+    return "savings" if c in SAVINGS_CATS else "investment" if c in INVEST_CATS else "everyday"
+
+
 def _accounts(db, item_id: str) -> list[dict]:
-    return db.all("SELECT kind, subtype FROM accounts WHERE item_id=?", (item_id,))
+    return db.all("SELECT a.kind, a.subtype, COALESCE(a.category, i.category) AS cat FROM accounts a LEFT JOIN plaid_items i ON i.item_id=a.item_id WHERE a.item_id=?", (item_id,))
 
 
 def has_everyday(db, item_id: str) -> bool:
-    """A checking account, a card or a loan: where bills and subscriptions live."""
-    return any(a["kind"] in ("credit", "loan") or (a["kind"] == "cash" and (a.get("subtype") or "").lower() not in SAVINGS) for a in _accounts(db, item_id))
+    """A checking account, a card or a loan: where bills and subscriptions live (or an account you called checking, bills, spending...)."""
+    for a in _accounts(db, item_id):
+        g = category_group(a.get("cat"))
+        if g:
+            if g == "everyday":
+                return True
+            continue
+        if a["kind"] in ("credit", "loan") or (a["kind"] == "cash" and (a.get("subtype") or "").lower() not in SAVINGS):
+            return True
+    return False
 
 
 def auto_schedule(db, item_id: str) -> str:
     accts = _accounts(db, item_id)
     if not accts or has_everyday(db, item_id):
         return "daily"
-    return "weekly" if any(a["kind"] == "cash" for a in accts) else "monthly"
+    return "weekly" if any(category_group(a.get("cat")) == "savings" or (not a.get("cat") and a["kind"] == "cash") for a in accts) else "monthly"
 
 
 def schedule_of(db, row: dict) -> str:

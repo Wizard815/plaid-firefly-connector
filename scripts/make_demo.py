@@ -74,6 +74,9 @@ def main(out: str, artifact: bool):
     db.conn.execute("INSERT INTO link_shares(peer,kind,ref) VALUES('bob','account','sav')")
     db.conn.execute("INSERT INTO shared_in VALUES('bob','account','bob-joint','Joint Savings','Axos','cash',4000,?)", (sync.now(),))
     db.conn.commit()
+    for i, back in enumerate((38, 8)):                       # two payments so far: the thorough scan finds it, the automatic check waits for a third
+        db.conn.execute("INSERT INTO transactions(id,account_id,date,name,amount,source,category) VALUES(?,?,?,?,?,?,?)", (f"demo-mk-{i}", "crd", d(-back), "MEAL KIT CO", -49.0, "seed", "Food"))
+    db.conn.commit()
     inc = c.get("/api/incomes", headers=H).json()
     for sg in inc["suggestions"]:
         if "payroll" in sg["name"].lower():
@@ -118,7 +121,9 @@ def main(out: str, artifact: bool):
     for a in rec["/api/accounts"]:
         rec[f"/api/accounts/{a['id']}"] = g(f"/api/accounts/{a['id']}")
     rec["/api/links/people"] = {"people": ["bob", "cara", "dana"]}
-    rec["/api/status"] = {"plaid": {"configured": True, "env": "sandbox", "items": [{"item_id": f"item-{i}", "institution": n, "schedule": "auto", "schedule_effective": se, "recurring": "auto", "recurring_effective": rc, "interval_minutes": im, "last_sync": time.time() - 3600 * lh, "calls_per_day": cpd} for i, (n, se, rc, im, lh, cpd) in enumerate([("Huntington", "daily", True, 1440, 5, 2.1), ("Axos", "weekly", False, 10080, 40, 0.3), ("Capital One", "daily", True, 1440, 5, 2.1)])]},
+    rec["/api/account-categories"] = c.get("/api/account-categories", headers=H).json()
+    rec["/scan"] = c.post("/api/subscriptions/scan", headers=H, json={}).json()
+    rec["/api/status"] = {"plaid": {"configured": True, "env": "sandbox", "items": [{"item_id": f"item-{i}", "institution": n, "schedule": "auto", "schedule_effective": se, "recurring": "auto", "recurring_effective": rc, "interval_minutes": im, "last_sync": time.time() - 3600 * lh, "calls_per_day": cpd, "category": ("Checking" if n == "Huntington" else "Savings" if n == "Axos" else None), "accounts": accs} for i, (n, se, rc, im, lh, cpd, accs) in enumerate([("Huntington", "daily", True, 1440, 5, 2.1, [{"id": "hx1", "name": "Everyday Checking", "mask": "4821", "kind": "cash", "subtype": "checking", "balance": 2145.85, "nickname": "Main", "category": "Checking", "category_effective": "Checking"}, {"id": "hx2", "name": "Checking 2", "mask": "7730", "kind": "cash", "subtype": "checking", "balance": 312.4, "nickname": "", "category": "Bills", "category_effective": "Bills"}, {"id": "hx3", "name": "Checking 3", "mask": "9012", "kind": "cash", "subtype": "checking", "balance": 88.1, "nickname": "", "category": "Spending", "category_effective": "Spending"}, {"id": "hx4", "name": "Money Market Savings", "mask": "5566", "kind": "cash", "subtype": "savings", "balance": 4200.0, "nickname": "Cushion", "category": "Emergency fund", "category_effective": "Emergency fund"}]), ("Axos", "weekly", False, 10080, 40, 0.3, [{"id": "ax1", "name": "High Yield Savings", "mask": "0099", "kind": "cash", "subtype": "savings", "balance": 5374.63, "nickname": "", "category": None, "category_effective": "Savings"}]), ("Capital One", "daily", True, 1440, 5, 2.1, [{"id": "co1", "name": "Quicksilver", "mask": "0182", "kind": "credit", "subtype": "credit card", "balance": 1952.8, "nickname": "", "category": None, "category_effective": "Credit card"}])])]},
                           "robinhood": {"agent": "up", "csv": "up", "live": "not deployed", "csv_files": ["import-2026-11-01.csv"], "agent_configured": True}, "caldav_configured": True,
                           "imports": [{"provider": "cashapp", "transactions": 41, "last_transaction": (TODAY - timedelta(days=38)).isoformat()}, {"provider": "paypal", "transactions": 12, "last_transaction": (TODAY - timedelta(days=6)).isoformat()}]}
     pos = lambda rows, eq, src: {"source": src, "as_of": sync.now(), "balances": {"equity": eq}, "positions": rows}

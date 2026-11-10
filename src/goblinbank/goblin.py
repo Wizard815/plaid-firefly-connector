@@ -119,7 +119,9 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         floor = float(cfg.get(store, "plaid_min_minutes") or 0) * 60
         glob = cfg.get(store, "plaid_use_recurring") != "off"
         iv = plaidplan.interval(store, row, floor)
-        return {"item_id": row["item_id"], "institution": row["institution"], "schedule": row.get("schedule") or "auto", "schedule_effective": plaidplan.schedule_of(store, row),
+        accts = store.all("SELECT id, name, nickname, mask, kind, subtype, balance, category FROM accounts WHERE item_id=? ORDER BY kind, name", (row["item_id"],))
+        return {"item_id": row["item_id"], "institution": row["institution"], "category": row.get("category"), "accounts": [{**a, "category_effective": a["category"] or row.get("category")} for a in accts],
+                "schedule": row.get("schedule") or "auto", "schedule_effective": plaidplan.schedule_of(store, row),
                 "recurring": row.get("recurring") or "auto", "recurring_effective": plaidplan.recurring_on(store, row, glob), "interval_minutes": None if iv is None else round(iv / 60),
                 "last_sync": row.get("last_sync"), "calls_per_day": round(plaidplan.calls_per_day(store, row, floor, glob), 1),
                 "status": row.get("status"), "status_detail": row.get("status_detail"), "webhook_live": plaidplan.hook_live(row, time.time())}
@@ -667,6 +669,8 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     class ItemPatch(BaseModel):
         schedule: str | None = None        # auto, 15m, 3h, daily, weekly, biweekly, monthly, manual
         recurring: str | None = None       # auto, on, off: Plaid's paid recurring-payment detection for this bank
+        category: str | None = None        # what this bank is for; its accounts without a category of their own inherit it ("" clears)
+        apply_to_accounts: bool = False    # also set that category on every account in this bank, replacing any they had
 
     @app.put("/api/plaid/items/{item_id}")
     def plaid_item_update(request: Request, item_id: str, b: ItemPatch):
@@ -684,6 +688,13 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                 c.execute("UPDATE plaid_items SET schedule=? WHERE item_id=?", (b.schedule, item_id))
             if b.recurring is not None:
                 c.execute("UPDATE plaid_items SET recurring=? WHERE item_id=?", (b.recurring, item_id))
+            if b.category is not None:
+                cat = b.category.strip()
+                if len(cat) > 40 or any(ord(ch) < 32 for ch in cat):
+                    raise HTTPException(422, "a category is up to 40 characters")
+                c.execute("UPDATE plaid_items SET category=? WHERE item_id=?", (cat or None, item_id))
+                if b.apply_to_accounts:
+                    c.execute("UPDATE accounts SET category=? WHERE item_id=?", (cat or None, item_id))
         return item_view(store.one("SELECT * FROM plaid_items WHERE item_id=?", (item_id,)))
 
     @app.delete("/api/plaid/items/{item_id}")

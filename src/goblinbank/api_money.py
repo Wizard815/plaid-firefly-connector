@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from fastapi import HTTPException, Request
 from pydantic import BaseModel
 
-from goblinbank import feed, ledger, recur, sync
+from goblinbank import plaidplan, feed, ledger, recur, sync
 
 
 class Sub(BaseModel):
@@ -38,6 +38,7 @@ class AccountIn(BaseModel):
     min_balance: float | None = None
     savings_mode: str | None = None        # auto | yes | no: does this account count as savings?
     nickname: str | None = None            # your own label for any account ("" clears it)
+    category: str | None = None            # what the account is for ("" clears it): Checking, Bills, Savings, Emergency fund...
     pinned: bool | None = None             # show its balance on the Overview
     joint_with: str | None = None          # "" clears; the other goblin that also links this account
     my_share: float | None = None          # percent of its balance that is mine (joint accounts); -1 clears
@@ -153,7 +154,14 @@ def register(app, ctx):
     @app.get("/api/accounts")
     def accounts(request: Request):
         auth(request)
-        return store.all("SELECT * FROM accounts ORDER BY kind, institution, name")
+        return store.all("SELECT a.*, COALESCE(a.category, i.category) AS category_effective FROM accounts a LEFT JOIN plaid_items i ON i.item_id=a.item_id ORDER BY a.kind, a.institution, a.name")
+
+    @app.get("/api/account-categories")
+    def account_categories(request: Request):
+        """The suggested categories plus any of your own already in use."""
+        auth(request)
+        used = [r["c"] for r in store.all("SELECT category c FROM accounts WHERE category IS NOT NULL UNION SELECT category FROM plaid_items WHERE category IS NOT NULL")]
+        return plaidplan.CATEGORIES + sorted(c for c in used if c not in plaidplan.CATEGORIES)
 
     @app.post("/api/accounts")
     def account_add(request: Request, a: AccountIn):
@@ -208,6 +216,11 @@ def register(app, ctx):
                 if a.my_share > 100:
                     bad("my_share is a percentage from 0 to 100")
                 c.execute("UPDATE accounts SET my_share=? WHERE id=?", (a.my_share if a.my_share >= 0 else None, aid))
+            if a.category is not None:
+                cat = a.category.strip()
+                if len(cat) > 40 or any(ord(ch) < 32 for ch in cat):
+                    bad("a category is up to 40 characters")
+                c.execute("UPDATE accounts SET category=? WHERE id=?", (cat or None, aid))
             if a.pinned is not None:
                 c.execute("UPDATE accounts SET pinned=? WHERE id=?", (1 if a.pinned else 0, aid))
             if manual:
@@ -451,10 +464,23 @@ def register(app, ctx):
         next_date: str | None = None
         category: str = "Subscriptions"
 
+    class ScanIn(BaseModel):
+        account_id: str | None = None
+        thorough: bool = True
+        include_dismissed: bool = False
+
+    @app.post("/api/subscriptions/scan")
+    def subscriptions_scan(request: Request, b: ScanIn):
+        """Look through the transactions you have (bank feed and imported CSVs) for repeating payments that are not subscriptions yet."""
+        auth(request)
+        if b.account_id and not store.one("SELECT 1 FROM accounts WHERE id=?", (b.account_id,)):
+            bad("account not found", 404)
+        return ledger.scan_subscriptions(store, ctx.today(), b.account_id, b.thorough, b.include_dismissed)
+
     @app.post("/api/suggestions/accept")
     def suggestion_accept(request: Request, a: Accept):
         auth(request)
-        sug = next((x for x in ledger.suggestions(store, ctx.today()) if x["key"] == a.key), None)
+        sug = next((x for x in ledger.suggestions(store, ctx.today()) if x["key"] == a.key), None) or next((x for x in ledger.scan_subscriptions(store, ctx.today(), None, True, True)["found"] if x["key"] == a.key), None)
         if not sug:
             bad("suggestion not found (already added or dismissed?)", 404)
         s = Sub(name=a.name, amount=a.amount if a.amount is not None else sug["amount"], next_date=a.next_date or sug["next_date"], every=a.every or sug["every"],

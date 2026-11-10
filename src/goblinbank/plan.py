@@ -7,7 +7,7 @@ created unfunded and the plan says how long it takes to save for it."""
 import math
 from datetime import date, timedelta
 
-from goblinbank import ledger, links, recur
+from goblinbank import ledger, links, plaidplan, recur
 
 SAVINGS_SUBTYPES = {"savings", "cd", "money market", "cash management", "hsa", "high yield savings", "529", "cd/money market", "money_market"}
 
@@ -36,7 +36,9 @@ def places(db, today: date) -> list[dict]:
         if a["id"] in followed or a["balance"] is None:
             continue
         pool = a.get("savings_pool")
-        auto = a["kind"] == "cash" and (a.get("subtype") or "").lower() in SAVINGS_SUBTYPES
+        cat = a.get("category") or (db.one("SELECT category FROM plaid_items WHERE item_id=?", (a.get("item_id"),)) or {}).get("category")
+        grp = plaidplan.category_group(cat)
+        auto = (grp == "savings") if grp else (a["kind"] == "cash" and (a.get("subtype") or "").lower() in SAVINGS_SUBTYPES)       # what you called it beats what the bank calls it
         if pool == 0 or not (pool == 1 or auto):                  # investment accounts count only when you switch them on
             continue
         out.append({"key": f"a:{a['id']}", "id": a["id"], "name": a["name"], "institution": a["institution"], "kind": (a.get("subtype") or "savings").replace(" ", "_"),
