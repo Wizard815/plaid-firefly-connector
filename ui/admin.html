@@ -18,6 +18,7 @@ input,button{font:inherit;color:inherit;background:var(--bg);border:1px solid va
   <form class="panel row" id="login"><input id="tok" type="password" placeholder="Admin password" autocomplete="current-password" required style="flex:1;min-width:200px"><button class="primary" type="submit">Check now</button><button type="button" id="reset">Clear counts</button><span id="msg" class="small muted"></span></form>
   <div class="panel" id="out" hidden></div>
   <div class="panel" id="people" hidden></div>
+  <div class="panel" id="person" hidden></div>
   <div class="panel" id="plaid" hidden></div>
   <div class="panel" id="orb" hidden></div>
 </main>
@@ -67,7 +68,7 @@ function renderPeople(rows) {
   });
   box.replaceChildren(el("h2", { style: "margin:0 0 6px;font-size:1.1rem" }, "People"), el("p", { class: "small muted" }, "Everyone on this gateway. A person you add here can link with the others from their own Family links tab."),
     el("table", {}, el("tbody", {}, rows.map((g) => el("tr", {}, el("td", {}, g.name), el("td", { class: "small muted" }, g.added_here ? "added here" : "from goblins.yaml"),
-      el("td", { class: "n" }, g.added_here ? (() => { const b = el("button", {}, "Remove"); b.addEventListener("click", async () => { if (!confirm("Remove " + g.name + " from the gateway? Their container keeps its data; they just cannot sign in or link.")) return; try { await call("/admin/people/" + encodeURIComponent(g.name), "DELETE"); show(); } catch (err) { note.textContent = err.message; note.className = "small err"; } }); return b; })() : ""))))),
+      el("td", { class: "n", style: "white-space:nowrap" }, (() => { const m = el("button", { type: "button" }, "Manage"); m.addEventListener("click", () => { who = g.name; renderPerson(); document.getElementById('person').scrollIntoView({ behavior: 'smooth' }); }); return m; })(), " ", g.added_here ? (() => { const b = el("button", {}, "Remove"); b.addEventListener("click", async () => { if (!confirm("Remove " + g.name + " from the gateway? Their container keeps its data; they just cannot sign in or link.")) return; try { await call("/admin/people/" + encodeURIComponent(g.name), "DELETE"); show(); } catch (err) { note.textContent = err.message; note.className = "small err"; } }); return b; })() : ""))))),
     el("div", { style: "margin-top:12px" }, add), note, res);
   box.hidden = false;
 }
@@ -85,11 +86,13 @@ async function renderPlaid(rows) {
   ktest.addEventListener("click", async () => { try { const r = await call("/admin/plaid/test", "POST"); note.textContent = `Plaid accepted the keys (${r.env}).`; note.className = "small"; } catch (e) { note.textContent = e.message; note.className = "small err"; } });
   const pub = el("input", { id: "pd-u", type: "url", placeholder: "https://bank.example.com", value: dflt.public_url || "", style: "min-width:260px" });
   const rec = el("select", { id: "pd-r" }, el("option", { value: "" }, "default (on)"), el("option", { value: "on" }, "on"), el("option", { value: "off" }, "off")); rec.value = dflt.plaid_use_recurring || "";
-  const per = rows.map((g) => ({ n: g.name, b: inp("pp-b-" + g.name, "default", (mine[g.name] || {}).plaid_budget_month, "0.01"), c: inp("pp-c-" + g.name, "default", (mine[g.name] || {}).plaid_daily_cap) }));
+  const per = rows.map((g) => ({ n: g.name, b: inp("pp-b-" + g.name, "default", (mine[g.name] || {}).plaid_budget_month, "0.01"), c: inp("pp-c-" + g.name, "default", (mine[g.name] || {}).plaid_daily_cap),
+    fu: el("input", { id: "pf-u-" + g.name, type: "url", placeholder: "https://firefly.example.com", value: (mine[g.name] || {}).firefly_url || "", style: "min-width:200px" }),
+    ft: el("input", { id: "pf-t-" + g.name, type: "password", placeholder: (pol.firefly_token_set || {})[g.name] ? "saved, leave blank to keep" : "Personal Access Token", autocomplete: "new-password", style: "min-width:200px" }) }));
   const num = (x) => x.value.trim() === "" ? "" : Number(x.value);
   const save = el("button", { class: "primary", type: "button" }, "Save limits");
   save.addEventListener("click", async () => {
-    const people = {}; for (const p of per) { const o = {}; if (p.b.value.trim() !== "") o.plaid_budget_month = num(p.b); if (p.c.value.trim() !== "") o.plaid_daily_cap = num(p.c); if (Object.keys(o).length) people[p.n] = o; }
+    const people = {}; for (const p of per) { const o = {}; if (p.b.value.trim() !== "") o.plaid_budget_month = num(p.b); if (p.c.value.trim() !== "") o.plaid_daily_cap = num(p.c); if (p.fu.value.trim() !== "") o.firefly_url = p.fu.value.trim(); if (p.ft.value.trim() !== "") o.firefly_token = p.ft.value.trim(); if (Object.keys(o).length || (pol.firefly_token_set || {})[p.n]) people[p.n] = o; }
     const d = {}; if (fD.b.value.trim() !== "") d.plaid_budget_month = num(fD.b); if (fD.c.value.trim() !== "") d.plaid_daily_cap = num(fD.c); if (fD.m.value.trim() !== "") d.plaid_min_minutes = num(fD.m); if (rec.value) d.plaid_use_recurring = rec.value; if (pub.value.trim()) d.public_url = pub.value.trim(); if (kid.value.trim()) d.plaid_client_id = kid.value.trim(); if (ksec.value.trim()) d.plaid_secret = ksec.value.trim(); d.plaid_env = kenv.value; if (kred.value.trim()) d.plaid_redirect_url = kred.value.trim();
     try { await call("/admin/policy", "PUT", { default: d, people }); note.textContent = "Saved. Each goblin picks it up within five minutes."; note.className = "small"; } catch (e) { note.textContent = e.message; note.className = "small err"; }
   });
@@ -106,6 +109,10 @@ async function renderPlaid(rows) {
     el("table", {}, el("thead", {}, el("tr", {}, ["Person", "Banks", "Estimated / month", "Their budget", "Calls today", "Webhooks live", "Own budget", "Own daily cap"].map((h, i) => el("th", i > 0 && i < 6 ? { class: "n" } : {}, h)))),
       el("tbody", {}, rows.map((g, i) => { const p = g.plaid || {}; return el("tr", {}, el("td", {}, g.name), el("td", { class: "n" }, p.items ?? "?"), el("td", { class: "n" }, p.est_monthly_cost == null ? "?" : usd(p.est_monthly_cost)), el("td", { class: "n" }, p.budget == null ? "none" : usd(p.budget)), el("td", { class: "n" }, p.calls_today == null ? "?" : `${p.calls_today} / ${p.daily_cap}`), el("td", { class: "n" }, p.items == null ? "?" : p.webhook_set ? `${p.webhook_banks} of ${p.items}` : "not set up"), el("td", {}, per[i].b), el("td", {}, per[i].c)); }))),
     el("p", { class: "small muted" }, `Everyone together: about ${usd(total)} a month. Counts only; nothing about what is in anyone's accounts.`),
+    el("h2", { style: "margin:14px 0 4px;font-size:1.05rem" }, "Firefly III for each person"),
+    el("p", { class: "small muted" }, "Each person's bank data is pushed into their own Firefly III. Enter that person's Firefly III address and a Personal Access Token (in Firefly III: Options, Profile, OAuth, Personal Access Tokens; they last at most a year). The token is sent to that person's container, kept encrypted there, and never shown again. They see it as set by you."),
+    el("table", {}, el("thead", {}, el("tr", {}, ["Person", "Firefly III address", "Token", "Sent / failed / waiting", "Last good push"].map((h) => el("th", {}, h)))),
+      el("tbody", {}, rows.map((g, i) => { const f = (g.plaid || {}).firefly || {}; return el("tr", {}, el("td", {}, g.name), el("td", {}, per[i].fu), el("td", {}, per[i].ft), el("td", { class: "small" }, f.configured ? `${f.sent} / ${f.failed} / ${f.waiting}${f.problem ? " (problem)" : ""}` : "not set up"), el("td", { class: "small muted" }, f.last_ok ? f.last_ok.slice(0, 16).replace("T", " ") : "never")); }))),
     el("div", { class: "row" }, save), note);
   box.hidden = false;
 }
@@ -125,6 +132,69 @@ async function renderOrb() {
     el("div", { class: "row", style: "margin-top:10px" }, name, go), orbRes, note);
   box.hidden = false;
 }
+
+/* ---------- one person: their bank links and their Firefly III connection, run from here ---------- */
+let who = null;
+const P = (path, method = "GET", body) => call(`/admin/p/${encodeURIComponent(who)}/${path}`, method, body);
+const loadPlaid = () => new Promise((ok, no) => { if (window.Plaid) return ok(); const sc = document.createElement("script"); sc.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js"; sc.onload = ok; sc.onerror = no; document.head.append(sc); });
+async function openLink(itemId, resume) {
+  await loadPlaid();
+  let token;
+  if (resume) { const s = JSON.parse(localStorage.getItem("gb_link") || "{}"); token = s.token; who = s.who; itemId = s.item || null; }
+  else { token = (await P("plaid/link-token" + (itemId ? "?item_id=" + encodeURIComponent(itemId) : ""), "POST", {})).link_token; localStorage.setItem("gb_link", JSON.stringify({ token, who, item: itemId || "" })); }
+  if (!token) throw new Error("This sign-in expired. Press Link a bank again.");
+  const cfg = { token, onExit: (err) => { if (err) { msg.textContent = err.display_message || err.error_message || "Linking stopped"; msg.className = "small err"; } },
+    onSuccess: async (pt, meta) => { localStorage.removeItem("gb_link");
+      try { if (itemId) msg.textContent = "Relinked."; else { const r = await P("plaid/exchange", "POST", { public_token: pt, institution: (meta.institution || {}).name || "" }); msg.textContent = `Linked ${(meta.institution || {}).name || "the bank"}. ${(r.sync || {}).added || 0} transactions pulled and sent on to Firefly III.`; }
+        msg.className = "small"; renderPerson(); } catch (e) { msg.textContent = e.message; msg.className = "small err"; } } };
+  if (resume) cfg.receivedRedirectUri = location.href;
+  window.Plaid.create(cfg).open();
+}
+async function renderPerson() {
+  const box = $("#person");
+  if (!who) { box.hidden = true; return; }
+  const note = el("p", { class: "small muted" });
+  const say = (t, bad) => { msg.textContent = t; msg.className = "small" + (bad ? " err" : ""); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  let st, ff, fa;
+  try { [st, ff, fa] = await Promise.all([P("api/status"), P("api/firefly/status"), P("api/firefly/accounts")]); }
+  catch (e) { box.replaceChildren(el("h2", { style: "margin:0 0 6px;font-size:1.1rem" }, who), el("p", { class: "small err" }, e.message)); box.hidden = false; return; }
+  const plaid = st.plaid || {}, run = async (fn, ok) => { try { const r = await fn(); say(typeof ok === "function" ? ok(r) : ok); await renderPerson(); } catch (e) { say(e.message, true); } };
+  const sel = (opts, cur, onchange) => { const s = el("select", {}, opts.map(([v, t]) => el("option", { value: v }, t))); s.value = cur; s.addEventListener("change", () => onchange(s.value)); return s; };
+  const SCH = [["auto", "Automatic"], ["15m", "Every 15 minutes"], ["3h", "Every 3 hours"], ["daily", "Daily"], ["weekly", "Weekly"], ["biweekly", "Every 2 weeks"], ["monthly", "Monthly"], ["manual", "Only when pulled by hand"]];
+  const link = el("button", { class: "primary", type: "button" }, "Link a bank"); link.addEventListener("click", () => run(() => openLink(null), "Plaid Link opened."));
+  const pull = el("button", { type: "button" }, "Pull banks now"); pull.addEventListener("click", () => run(() => P("sync", "POST", {}), "Banks pulled and Firefly III updated."));
+  const banks = (plaid.items || []).length ? el("table", {}, el("tbody", {}, plaid.items.map((it) => {
+    const upd = (patch) => run(() => P("api/plaid/items/" + encodeURIComponent(it.item_id), "PUT", patch), "Saved.");
+    const rel = el("button", { type: "button" }, "Relink"); rel.addEventListener("click", () => run(() => openLink(it.item_id), "Plaid Link opened."));
+    const un = el("button", { type: "button" }, "Unlink"); un.addEventListener("click", () => { if (!confirm(`Unlink ${it.institution}? On a Plaid free plan the link slot is NOT given back. To repair a login use Relink.`)) return; run(() => P("api/plaid/items/" + encodeURIComponent(it.item_id), "DELETE"), "Unlinked. What is already in Firefly III stays there."); });
+    return el("tr", {}, el("td", {}, el("b", {}, it.institution || "Bank"), it.status ? el("span", { class: "pill down", style: "margin-left:8px" }, it.status === "error" ? "sign in again" : it.status) : null, it.webhook_live ? el("span", { class: "pill up", style: "margin-left:8px" }, "live updates") : null,
+        el("div", { class: "small muted" }, (it.accounts || []).map((a) => `${a.nickname || a.name}${a.mask ? " ••" + a.mask : ""}`).join(", "))),
+      el("td", {}, sel(SCH, it.schedule || "auto", (v) => upd({ schedule: v }))), el("td", {}, sel([["auto", "Recurring: automatic"], ["on", "Recurring: on"], ["off", "Recurring: off"]], it.recurring || "auto", (v) => upd({ recurring: v }))), el("td", { class: "n", style: "white-space:nowrap" }, rel, " ", un)); })))
+    : el("p", { class: "small muted" }, plaid.configured ? "No bank linked yet. Press Link a bank and sign in to the bank in the window that opens." : "Enter the Plaid keys below first.");
+  const fmap = (fa.accounts || []).length ? el("table", {}, el("thead", {}, el("tr", {}, ["Bank account", "In Firefly III", ""].map((h) => el("th", {}, h)))), el("tbody", {}, fa.accounts.map((a) => {
+    const set = (mode, id) => run(() => P("api/firefly/accounts/" + encodeURIComponent(a.id), "PUT", { mode, ff_id: id }), "Saved.");
+    const opts = [...(a.mode === "pending" ? [["pending", "Needs approval: nothing sent yet"]] : []), ["create", a.created ? "Created by Goblin Bank" : "Create in Firefly III"], ["skip", "Do not send"], ...(fa.firefly_accounts || []).map((f) => ["link:" + f.id, "Link to: " + f.name])];
+    const s = sel(opts, a.mode === "link" ? "link:" + a.ff_id : a.mode, (v) => (v === "create" || v === "skip" || v === "pending") ? set(v) : set("link", parseInt(v.slice(5))));
+    const fix = el("button", { type: "button", title: "Move the opening balance in Firefly III so it matches the bank. No transaction is invented." }, "Match balance"); fix.addEventListener("click", () => run(() => P(`api/firefly/accounts/${encodeURIComponent(a.id)}/rebalance`, "POST", {}), (r) => r.changed ? "Balances now match." : "Already matching."));
+    return el("tr", {}, el("td", {}, a.label, el("div", { class: "small muted" }, a.kind)), el("td", {}, s), el("td", { class: "n" }, a.drift ? [el("span", { class: "pill down" }, "balance differs"), " ", fix] : "")); }))) : el("p", { class: "small muted" }, "Link a bank first. Its accounts show up here.");
+  const inv = el("div", { class: "small" }), mins = sel([["30", "30 minutes"], ["60", "1 hour"], ["1440", "1 day"], ["10080", "7 days"]], "60", () => {});
+  const mk = el("button", { type: "button" }, "Make a temporary link code");
+  mk.addEventListener("click", () => run(async () => { const r = await call(`/admin/people/${encodeURIComponent(who)}/invite`, "POST", { minutes: parseInt(mins.value) }); inv.replaceChildren(el("b", {}, `Code for ${who} (shown once): ${r.code}`), el("div", {}, `They open ${location.origin}/link and enter it. It lets them link their own banks and nothing else.`)); }, "Code made. Copy it now."));
+  const lst = el("div", { class: "small muted" });
+  call("/admin/invites").then((d) => lst.replaceChildren(...d.invites.filter((i) => i.name === who).map((i) => { const b = el("button", { type: "button" }, "Revoke"); b.addEventListener("click", () => run(() => call("/admin/invites/" + i.id, "DELETE"), "Revoked.")); return el("div", {}, `Active code, ${i.minutes_left} min left `, b); }))).catch(() => {});
+  const ffbtn = (label, path, ok, primary) => { const b = el("button", primary ? { class: "primary", type: "button" } : { type: "button" }, label); b.addEventListener("click", () => run(() => P(path, "POST", {}), ok)); return b; };
+  box.replaceChildren(el("div", { class: "row", style: "justify-content:space-between" }, el("h2", { style: "margin:0;font-size:1.1rem" }, "Managing " + who), (() => { const x = el("button", { type: "button" }, "Close"); x.addEventListener("click", () => { who = null; renderPerson(); }); return x; })()),
+    el("h3", { style: "margin:12px 0 4px;font-size:1rem" }, "Bank links (Plaid)"),
+    el("p", { class: "small muted" }, `Plaid ${plaid.configured ? "is set up (" + plaid.env + ")" : "is NOT set up: enter the keys below"}. Linking opens Plaid's window; the bank login goes straight to Plaid and Goblin Bank never sees it. Each linked bank's accounts are sent into ${who}'s Firefly III automatically.`),
+    el("div", { class: "row" }, link, pull), banks,
+    el("div", { class: "row" }, mins, mk), inv, lst,
+    el("h3", { style: "margin:14px 0 4px;font-size:1rem" }, "Firefly III"),
+    el("p", { class: "small muted" }, (ff.awaiting_approval ? `${ff.awaiting_approval} bank account(s) await your approval below; nothing is sent for them. ` : "") + (ff.configured ? `Connected to ${ff.host}. ${ff.sent} transactions sent, ${ff.waiting} waiting, ${ff.failed} failed. Last good push: ${ff.last_ok ? ff.last_ok.slice(0, 16).replace("T", " ") : "never"}.${ff.last_error ? " Last problem: " + ff.last_error : ""}` : "Not connected. Enter this person's Firefly III address and token in the table at the bottom (Firefly III for each person), Save, then come back.")),
+    el("div", { class: "row" }, ffbtn("Test the connection", "api/firefly/test", (r) => "Connected to Firefly III " + r.version), ffbtn("Send now", "api/firefly/sync", (r) => `Sent ${r.created || 0} new, ${r.updated || 0} changed, ${r.deleted || 0} removed.`, true), ffbtn("Retry failed", "api/firefly/retry", "Retried.")),
+    fmap, note);
+  box.hidden = false;
+}
+
 async function show() {
   msg.textContent = "Checking…"; msg.className = "small muted";
   try {
@@ -137,9 +207,13 @@ async function show() {
           el("td", { class: "n" }, ["app", "api_token", "webhook"].reduce((a, k) => a + calls(g, k, "client_errors") + calls(g, k, "server_errors"), 0)))))),
       el("p", { class: "small muted" }, `Pondering Orb summary calls: ${d.orb.calls || 0}. All calls: ${d.total.calls} (${d.total.client_errors} refused or invalid, ${d.total.server_errors} server errors), since the gateway last started or was cleared ${Math.round(d.since_seconds / 60)} minutes ago.`),
       el("p", { class: "small muted" }, d.note));
-    out.hidden = false; renderPeople(rows); renderPlaid(rows).catch(() => {}); renderOrb().catch(() => {}); msg.textContent = "Updated " + new Date().toLocaleTimeString();
+    sessionStorage.setItem("gb_admin", $("#tok").value.trim()); out.hidden = false; renderPeople(rows); renderPlaid(rows).catch(() => {}); renderOrb().catch(() => {}); msg.textContent = "Updated " + new Date().toLocaleTimeString();
   } catch (e) { msg.textContent = e.message; msg.className = "small err"; out.hidden = true; }
 }
 $("#login").addEventListener("submit", (e) => { e.preventDefault(); show(); });
+(async () => {                                              // after a bank that signs you in on its own site sends you back here: reopen Plaid Link and finish
+  const saved = sessionStorage.getItem("gb_admin");
+  if (saved) { $("#tok").value = saved; await show(); if (new URLSearchParams(location.search).has("oauth_state_id")) { try { await openLink(null, true); } catch (e) { msg.textContent = e.message; msg.className = "small err"; } history.replaceState(null, "", location.pathname); } }
+})();
 $("#reset").addEventListener("click", async () => { try { await call("/admin/reset", "POST"); msg.textContent = "Counts cleared."; await show(); } catch (e) { msg.textContent = e.message; msg.className = "small err"; } });
 </script>

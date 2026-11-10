@@ -193,7 +193,7 @@ def test_the_gateway_admin_public_address_sets_the_webhook_and_banks_learn_it(tm
     posted.clear(); tc.get("/api/settings", headers=H)
     assert ("update", "https://bank.example.com/webhooks/plaid") not in posted                            # and not again
     tc.post("/plaid/link-token", headers=H)
-    assert posted[-1] == ("link", "https://bank.example.com/webhooks/plaid", "https://bank.example.com/")   # new links carry the webhook and the OAuth return address
+    assert posted[-1] == ("link", "https://bank.example.com/webhooks/plaid", "https://bank.example.com/link")   # new links carry the webhook and the OAuth return address
     # the gateway forgets which bank is whose when it restarts; the goblin tells it again
     gw2 = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_goblin)))
     holder["gw"] = gw2

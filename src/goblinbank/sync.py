@@ -101,6 +101,8 @@ def sync_item(db, plaid: Plaid, item_id: str, force: bool = False) -> dict:
             stats["added" if is_new else "modified"] += 1
         for t in r.get("removed", []):
             with db.tx() as c:
+                c.execute("UPDATE ff_tx SET state='deleted' WHERE tx_id=? AND ff_id IS NOT NULL", (t["transaction_id"],))      # Firefly III's copy goes at the next push
+                c.execute("DELETE FROM ff_tx WHERE tx_id=? AND ff_id IS NULL", (t["transaction_id"],))
                 c.execute("DELETE FROM transactions WHERE id=?", (t["transaction_id"],))
             stats["removed"] += 1
         cursor, more = r["next_cursor"], r.get("has_more", False)

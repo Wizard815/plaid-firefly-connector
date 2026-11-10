@@ -1,4 +1,40 @@
-# Goblin-Bank
+# Goblin-Bank: a Plaid router for Firefly III
+
+Goblin-Bank holds your Plaid bank connections and forwards the accounts and
+transactions you approve into Firefly III. Firefly III is where you look at
+your money; Goblin-Bank only has an **admin page** (`/admin`). The old
+per-person app lives on the `full-ui` branch.
+
+## How it works
+
+1. **Admin** adds a person, enters the Plaid keys, sets API cost limits.
+2. A bank is linked with Plaid (by you in Admin, or by the person with a
+   temporary link code at `/link`).
+3. Every new bank account starts as **Needs approval**: nothing is sent.
+   In Admin, per account, pick **Create in Firefly III**, **Link to** an
+   existing Firefly account, or **Do not send**. One Firefly account can
+   receive only one bank account.
+4. Goblin-Bank pushes transactions to Firefly III after each sync, safely
+   repeatable (no duplicates, edits and deletions follow the bank).
+
+## Quick how-to
+
+- **New person:** Admin, *Add person*. Press *Manage*.
+- **Link Huntington or another bank:** Manage, *Link a bank*, search the bank
+  in Plaid's window and sign in there. Goblin-Bank never sees the login. Which
+  banks Plaid supports (PayPal included) depends on your Plaid plan; check in
+  the Link window.
+- **Let the person link their own:** Manage, choose a time, *Make a temporary
+  link code*. Give them the code and `https://<your address>/link`. It works
+  only for that person, only for linking, and expires or can be revoked.
+- **Connect Firefly III:** in Firefly III go to Options, Profile, OAuth,
+  Personal Access Tokens, create one. In Admin, under *Firefly III for each
+  person*, enter its address and token, Save. Then Manage: *Test the
+  connection*, approve accounts, *Send now*.
+
+The rest of this file is the original install guide (some sections talk about
+the per-person app, which is now on the `full-ui` branch).
+
 
 Self-hosted family finance. **One gateway, one private container per person.**
 

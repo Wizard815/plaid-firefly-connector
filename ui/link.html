@@ -1,0 +1,69 @@
+<!doctype html>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Link my banks</title>
+<style>
+:root{--bg:#edf1f2;--panel:#f8fafa;--line:#d5dde0;--fg:#14232b;--muted:#5a6b73;--teal:#17766b;--red:#b3372f}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1a1f;--panel:#13242b;--line:#24383f;--fg:#e4eeef;--muted:#8ea4ab;--teal:#4cc2b0;--red:#f07f73;color-scheme:dark}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,"Segoe UI",sans-serif;padding:16px}
+main{max-width:620px;margin:6vh auto;display:grid;gap:14px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+h1{font-size:1.4rem;margin:0}.muted{color:var(--muted)}.small{font-size:.86rem}.err{color:var(--red)}
+input,button{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 12px}button{cursor:pointer}button.primary{background:var(--teal);border-color:var(--teal);color:#fff}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}table{width:100%;border-collapse:collapse}td{padding:8px 4px;border-bottom:1px solid var(--line)}
+</style>
+<main>
+  <h1>Link my banks</h1>
+  <form class="panel row" id="codeform"><input id="code" placeholder="Your temporary code" autocomplete="off" required style="flex:1;min-width:200px"><button class="primary" type="submit">Continue</button></form>
+  <div class="panel" id="work" hidden></div>
+  <p class="small muted" id="msg"></p>
+</main>
+<script>
+const $ = (s) => document.querySelector(s), msg = $("#msg");
+const el = (t, a = {}, ...k) => { const e = document.createElement(t); for (const [x, v] of Object.entries(a)) e.setAttribute(x, v); k.flat().forEach((c) => e.append(c?.nodeType ? c : document.createTextNode(String(c)))); return e; };
+const say = (t, bad) => { msg.textContent = t; msg.className = "small " + (bad ? "err" : "muted"); };
+let S = JSON.parse(sessionStorage.getItem("gb_lnk") || "null");
+async function call(path, method = "GET", body) {
+  const r = await fetch("/link/p/" + path, { method, headers: { Authorization: "Bearer " + S.token, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401) { sessionStorage.removeItem("gb_lnk"); S = null; $("#work").hidden = true; $("#codeform").hidden = false; throw new Error("Your code has run out. Ask for a new one."); }
+  if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : "That did not work (" + r.status + ")");
+  return j;
+}
+const loadPlaid = () => new Promise((ok, no) => { if (window.Plaid) return ok(); const sc = document.createElement("script"); sc.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js"; sc.onload = ok; sc.onerror = no; document.head.append(sc); });
+async function openLink(itemId, resume) {
+  await loadPlaid();
+  let token;
+  if (resume) { const s = JSON.parse(localStorage.getItem("gb_link") || "{}"); token = s.token; itemId = s.item || null; }
+  else { token = (await call("plaid/link-token" + (itemId ? "?item_id=" + encodeURIComponent(itemId) : ""), "POST", {})).link_token; localStorage.setItem("gb_link", JSON.stringify({ token, mode: "person", item: itemId || "" })); }
+  if (!token) throw new Error("This sign-in expired. Press Link a bank again.");
+  const cfg = { token, onExit: (err) => { if (err) say(err.display_message || err.error_message || "Linking stopped", true); },
+    onSuccess: async (pt, meta) => { localStorage.removeItem("gb_link");
+      try { if (!itemId) await call("plaid/exchange", "POST", { public_token: pt, institution: (meta.institution || {}).name || "" }); say(`Linked ${(meta.institution || {}).name || "the bank"}. It will show up in your Firefly III shortly.`); show(); } catch (e) { say(e.message, true); } } };
+  if (resume) cfg.receivedRedirectUri = location.href;
+  window.Plaid.create(cfg).open();
+}
+async function show() {
+  $("#codeform").hidden = true;
+  const w = $("#work");
+  try {
+    const st = (await call("api/status")).plaid || {}, ff = await call("api/firefly/status");
+    const link = el("button", { class: "primary", type: "button" }, "Link a bank"); link.addEventListener("click", () => openLink(null).catch((e) => say(e.message, true)));
+    w.replaceChildren(el("h2", { style: "margin:0 0 6px;font-size:1.1rem" }, "Hello " + S.name), el("p", { class: "small muted" }, "Link your banks here. The bank login goes straight to Plaid, never through this page. Once linked, your accounts and transactions are sent on to your Firefly III automatically. This page stops working when your code runs out."),
+      el("div", { class: "row" }, link),
+      (st.items || []).length ? el("table", {}, el("tbody", {}, st.items.map((it) => { const rel = el("button", { type: "button" }, "Relink"); rel.addEventListener("click", () => openLink(it.item_id).catch((e) => say(e.message, true)));
+        return el("tr", {}, el("td", {}, el("b", {}, it.institution || "Bank"), it.status ? el("span", { class: "err small", style: "margin-left:8px" }, "needs signing in again") : null, el("div", { class: "small muted" }, (it.accounts || []).map((a) => `${a.nickname || a.name}${a.mask ? " ••" + a.mask : ""}`).join(", "))), el("td", { style: "text-align:right" }, rel)); }))) : el("p", { class: "small muted" }, "No bank linked yet."),
+      el("p", { class: "small muted" }, ff.configured ? `Firefly III: ${ff.sent} transactions sent so far${ff.failed ? ", " + ff.failed + " need attention (tell your admin)" : ""}.` : "Your Firefly III connection is not set up yet (your admin does that)."));
+    w.hidden = false;
+  } catch (e) { say(e.message, true); }
+}
+$("#codeform").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try { const r = await fetch("/link/session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: $("#code").value.trim() }) }); const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(r.status === 429 ? (j.detail || "Too many wrong tries, wait a little") : (j.detail || "That code is wrong or has run out"));
+    S = { token: j.token, name: j.name }; sessionStorage.setItem("gb_lnk", JSON.stringify(S)); say(`This code works for about ${j.minutes_left} more minutes.`); show(); } catch (err) { say(err.message, true); } });
+(async () => {                                              // a bank that signs you in on its own site sends you back here: finish, or hand over to the admin page if that is where you started
+  const back = new URLSearchParams(location.search).has("oauth_state_id");
+  const saved = JSON.parse(localStorage.getItem("gb_link") || "{}");
+  if (back && saved.mode === "admin") { location.replace("/admin" + location.search); return; }
+  if (S) { await show(); if (back) { try { await openLink(null, true); } catch (e) { say(e.message, true); } history.replaceState(null, "", "/link"); } }
+})();
+</script>

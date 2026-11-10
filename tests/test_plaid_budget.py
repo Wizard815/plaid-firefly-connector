@@ -137,7 +137,7 @@ def test_the_gateway_admin_sets_the_limits_and_the_goblin_obeys(tmp_path, monkey
     # a per-person override beats the default, and the admin page sees counts only
     gw.put("/admin/policy", headers=A, json={"default": {"plaid_budget_month": 1}, "people": {"alice": {"plaid_budget_month": 3}}})
     status = gw.get("/admin/status", headers=A).json()["goblins"][0]
-    assert status["plaid"]["items"] == 3 and "est_monthly_cost" in status["plaid"] and set(status["plaid"]) <= {"items", "est_monthly_cost", "budget", "calls_today", "daily_cap", "calls_month", "min_minutes", "webhook_banks", "webhook_set"}
+    assert status["plaid"]["items"] == 3 and "est_monthly_cost" in status["plaid"] and set(status["plaid"]) <= {"items", "est_monthly_cost", "budget", "calls_today", "daily_cap", "calls_month", "min_minutes", "webhook_banks", "webhook_set", "firefly"}
 
 
 # ---------------------------------------------------------------- per-bank schedules and per-bank recurring

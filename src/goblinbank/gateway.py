@@ -16,6 +16,7 @@ import httpx
 import yaml
 from fastapi.concurrency import run_in_threadpool
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 
 from goblinbank.oplog import log
 from goblinbank.security import Throttle, bearer, check_password_strength, check_token, hash_password, require_internal, sha256, verify_password
@@ -56,6 +57,9 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     orb_keys = list(cfg.get("orb_keys", []))                    # from gateway.yaml; keys made on the admin page are added to this same list (they are remembered in the state file)
     orb_added: list[dict] = []
     creds: dict[str, str] = {}                                  # passwords people set or changed in the app (scrypt hashes); they take over from gateway.yaml
+    invites: dict[str, dict] = {}                               # temporary link codes the admin hands to a person (hash -> who, until when); memory only
+    link_sessions: dict[str, tuple[str, float]] = {}           # what a code turns into: a token that can only link that person's banks, until the code runs out
+    invite_throttle = Throttle()
     sessions: dict[str, tuple[str, float]] = {}                 # session token -> (name, expiry); memory only, so a restart signs everyone out
     throttle = Throttle()
     failed = {"sign_in": 0, "locked": 0}                       # counts only, for the heartbeat line
@@ -274,7 +278,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             return {"delivered": False}
         return {"delivered": r.status_code == 200}
 
-    POLICY_KEYS = {"plaid_budget_month": float, "plaid_daily_cap": int, "plaid_min_minutes": int, "plaid_use_recurring": str, "public_url": str, "plaid_client_id": str, "plaid_secret": str, "plaid_env": str, "plaid_redirect_url": str}
+    POLICY_KEYS = {"plaid_budget_month": float, "plaid_daily_cap": int, "plaid_min_minutes": int, "plaid_use_recurring": str, "public_url": str, "plaid_client_id": str, "plaid_secret": str, "plaid_env": str, "plaid_redirect_url": str, "firefly_url": str, "firefly_token": str, "firefly_apply_rules": str, "firefly_send_categories": str, "firefly_include_pending": str}
 
     def effective_policy(name: str) -> dict:
         return {**policy["default"], **policy["people"].get(name, {})}
@@ -360,13 +364,25 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
                         raise ValueError
                     out[k] = t
                     continue
+                if k == "firefly_token":
+                    t = str(v).strip()
+                    if not re.fullmatch(r"[A-Za-z0-9._~+/=-]{20,4096}", t):
+                        raise ValueError
+                    out[k] = t
+                    continue
+                if k == "firefly_url":
+                    u = str(v).strip().rstrip("/")
+                    if not re.fullmatch(r"https?://[A-Za-z0-9.-]+(:\d+)?(/[A-Za-z0-9._~/-]*)?", u):
+                        raise ValueError
+                    out[k] = u
+                    continue
                 if k in ("public_url", "plaid_redirect_url"):
                     u = str(v).strip().rstrip("/")
                     if not re.fullmatch(r"https://[A-Za-z0-9.-]+(:\d+)?(/[A-Za-z0-9._~/-]*)?", u):
                         raise ValueError
                     out[k] = u
                     continue
-                if k == "plaid_use_recurring":
+                if k in ("plaid_use_recurring", "firefly_apply_rules", "firefly_send_categories", "firefly_include_pending"):
                     if str(v) not in ("on", "off"):
                         raise ValueError
                     out[k] = str(v)
@@ -376,7 +392,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
                         raise ValueError
                     out[k] = int(n) if n == int(n) else n
             except (TypeError, ValueError):
-                raise HTTPException(422, f"{k} must be " + ("an https:// address" if k in ("public_url", "plaid_redirect_url") else "your Plaid Client ID" if k == "plaid_client_id" else "your Plaid secret" if k == "plaid_secret" else "sandbox or production" if k == "plaid_env" else "on or off" if k == "plaid_use_recurring" else "a non-negative number"))
+                raise HTTPException(422, f"{k} must be " + ("an https:// address" if k in ("public_url", "plaid_redirect_url") else "on or off" if k.startswith("firefly_") and k not in ("firefly_url", "firefly_token") else "your Plaid Client ID" if k == "plaid_client_id" else "your Plaid secret" if k == "plaid_secret" else "sandbox or production" if k == "plaid_env" else "your Firefly III address (http:// or https://)" if k == "firefly_url" else "a Firefly III Personal Access Token" if k == "firefly_token" else "on or off" if k == "plaid_use_recurring" else "a non-negative number"))
         return out
 
     def redacted() -> dict:
@@ -384,7 +400,8 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         d = {k: dict(v) if isinstance(v, dict) else v for k, v in policy.items()}
         d["default"] = {k: v for k, v in policy["default"].items() if k != "plaid_secret"}
         d["plaid_secret_set"] = bool(policy["default"].get("plaid_secret"))
-        d["people"] = {n: {k: v for k, v in o.items() if k != "plaid_secret"} for n, o in policy["people"].items()}
+        d["people"] = {n: {k: v for k, v in o.items() if k not in ("plaid_secret", "firefly_token")} for n, o in policy["people"].items()}
+        d["firefly_token_set"] = {n: True for n, o in policy["people"].items() if o.get("firefly_token")}
         return d
 
     @app.get("/admin/policy")
@@ -398,6 +415,15 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         admin(request)
         body = await request.json()
         new = {"default": clean_policy(body.get("default", {})), "people": {n: clean_policy(v) for n, v in (body.get("people") or {}).items() if n in goblins and v}}
+        if "people" not in body:                                                    # a call that only sets the defaults leaves per-person settings alone, and the other way round
+            new["people"] = {n: dict(o) for n, o in policy["people"].items()}
+        if "default" not in body:
+            new["default"] = dict(policy["default"])
+        if "firefly_token" in new["default"]:
+            raise HTTPException(422, "a Firefly III token belongs to one person: set it on that person, not as a default")
+        for n, o_old in policy["people"].items():                                  # saving limits must not wipe anyone's saved token (send "" to clear it)
+            if o_old.get("firefly_token") and n in goblins and "firefly_token" not in ((body.get("people") or {}).get(n) or {}):
+                new["people"].setdefault(n, {})["firefly_token"] = o_old["firefly_token"]
         for k in ("plaid_client_id", "plaid_secret", "plaid_env", "plaid_redirect_url"):
             if k not in (body.get("default") or {}) and policy["default"].get(k):
                 new["default"][k] = policy["default"][k]                                # saving the limits must not wipe the saved keys (send "" to clear one)
@@ -464,6 +490,127 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         save_state()
         return {"removed": kid}
 
+    # ---- the admin operates each person's bank links and Firefly III connection through these. Only an allowlist of calls goes through, and what comes back
+    # is scrubbed: bank and account labels and counts, never a balance or a transaction.
+    ADMIN_CALLS = [("GET", r"api/status"), ("GET", r"api/plaid/usage"), ("POST", r"plaid/link-token"), ("POST", r"plaid/exchange"), ("PUT", r"api/plaid/items/[^/]+"), ("DELETE", r"api/plaid/items/[^/]+"),
+                   ("POST", r"plaid/test"), ("POST", r"plaid/test-webhook"), ("POST", r"sync"), ("GET", r"api/firefly/status"), ("POST", r"api/firefly/(test|sync|retry)"), ("GET", r"api/firefly/accounts"),
+                   ("PUT", r"api/firefly/accounts/[^/]+"), ("POST", r"api/firefly/accounts/[^/]+/rebalance")]
+
+    def scrub(path: str, data):
+        if path == "api/status" and isinstance(data, dict):
+            plaid = data.get("plaid", {})
+            for it in plaid.get("items", []):
+                for a in it.get("accounts", []):
+                    a.pop("balance", None)
+            return {"plaid": plaid}
+        if path == "api/firefly/accounts" and isinstance(data, dict):
+            by = {f["id"]: f for f in data.get("firefly_accounts", [])}
+            for a in data.get("accounts", []):
+                bank = (-1 if a.get("kind") == "credit" else 1) * (a.get("balance") or 0.0)
+                theirs = (by.get(a.get("ff_id")) or {}).get("balance")
+                a["drift"] = theirs is not None and abs(float(theirs) - bank) > 0.005
+                a.pop("balance", None)
+                a.pop("ff_balance", None)
+            for f in data.get("firefly_accounts", []):
+                f.pop("balance", None)
+        return data
+
+    @app.api_route("/admin/p/{name}/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+    async def admin_person(request: Request, name: str, path: str):
+        admin(request)
+        g = goblins.get(name)
+        if not g:
+            raise HTTPException(404, "no such person")
+        if not any(request.method == m and re.fullmatch(p, path) for m, p in ADMIN_CALLS):
+            raise HTTPException(403, "the admin page cannot make that call")
+        body = await request.body()
+        try:
+            r = await run_in_threadpool(client.request, request.method, f"{g['url']}/{path}", params=dict(request.query_params), content=body, timeout=60,
+                                        headers={**goblin_headers(g), "Content-Type": request.headers.get("content-type", "application/json")})
+        except httpx.HTTPError:
+            raise HTTPException(502, f"{name}'s container is not answering")
+        try:
+            data = scrub(path, r.json())
+        except ValueError:
+            return Response(r.content, r.status_code, media_type=r.headers.get("content-type"))
+        return Response(json.dumps(data), r.status_code, media_type="application/json")
+
+    @app.post("/admin/people/{name}/invite")
+    async def admin_invite(request: Request, name: str):
+        """A temporary code for one person: with it they can open /link and link their own banks (they type their own bank login into Plaid, not into the admin's screen). It stops working when its time is up."""
+        admin(request)
+        if name not in goblins:
+            raise HTTPException(404, "no such person")
+        minutes = int(((await request.json()) or {}).get("minutes", 60))
+        if not 5 <= minutes <= 7 * 24 * 60:
+            raise HTTPException(422, "between 5 minutes and 7 days")
+        code = secrets.token_urlsafe(9)
+        invites[sha256(code)] = {"id": sha256(code)[:8], "name": name, "expires": time.time() + minutes * 60, "made": time.strftime("%Y-%m-%d %H:%M")}
+        return {"code": code, "name": name, "minutes": minutes, "page": "/link"}
+
+    @app.get("/admin/invites")
+    def admin_invites(request: Request):
+        admin(request)
+        now = time.time()
+        for k in [k for k, v in invites.items() if v["expires"] < now]:
+            del invites[k]
+        return {"invites": [{"id": v["id"], "name": v["name"], "minutes_left": int((v["expires"] - now) / 60) + 1, "made": v["made"]} for v in invites.values()]}
+
+    @app.delete("/admin/invites/{iid}")
+    def admin_invite_revoke(request: Request, iid: str):
+        admin(request)
+        hit = [k for k, v in invites.items() if v["id"] == iid]
+        if not hit:
+            raise HTTPException(404, "not found")
+        gone = invites.pop(hit[0])
+        for t in [t for t, (n, _) in link_sessions.items() if n == gone["name"]]:
+            del link_sessions[t]
+        return {"revoked": iid}
+
+    @app.post("/link/session")
+    async def link_session(request: Request):
+        """Swap a temporary code for a session that can link banks for one person, and nothing else."""
+        invite_throttle.check("invite")
+        code = str((await request.json()).get("code", "")).strip()
+        inv = invites.get(sha256(code))
+        if not inv or inv["expires"] < time.time():
+            invite_throttle.fail("invite")
+            raise HTTPException(401, "that code is wrong or has run out")
+        invite_throttle.ok("invite")
+        token = "lnk_" + secrets.token_urlsafe(32)
+        link_sessions[token] = (inv["name"], inv["expires"])
+        return {"token": token, "name": inv["name"], "minutes_left": int((inv["expires"] - time.time()) / 60) + 1}
+
+    LINK_CALLS = [("GET", r"api/status"), ("GET", r"api/firefly/status"), ("POST", r"plaid/link-token"), ("POST", r"plaid/exchange"), ("POST", r"sync")]
+
+    @app.api_route("/link/p/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def link_person(request: Request, path: str):
+        """The few calls a person with a temporary code may make: see their banks, link or relink one, pull. Nothing about balances or transactions comes back."""
+        s = link_sessions.get(bearer(request) or "")
+        if not s or s[1] < time.time():
+            raise HTTPException(401, "your link code has run out; ask for a new one")
+        name = s[0]
+        if name not in goblins or not any(request.method == m and re.fullmatch(p, path) for m, p in LINK_CALLS):
+            raise HTTPException(403, "not available here")
+        g = goblins[name]
+        body = await request.body()
+        try:
+            r = await run_in_threadpool(client.request, request.method, f"{g['url']}/{path}", params=dict(request.query_params), content=body, timeout=60,
+                                        headers={**goblin_headers(g), "Content-Type": request.headers.get("content-type", "application/json")})
+        except httpx.HTTPError:
+            raise HTTPException(502, "your container is not answering")
+        try:
+            return Response(json.dumps(scrub(path, r.json())), r.status_code, media_type="application/json")
+        except ValueError:
+            return Response(r.content, r.status_code, media_type=r.headers.get("content-type"))
+
+    @app.get("/link")
+    def link_page():
+        f = ui / "link.html"
+        if not f.exists():
+            raise HTTPException(404, "ui not installed")
+        return Response(f.read_text(), media_type="text/html")
+
     @app.post("/admin/people")
     async def admin_add_person(request: Request):
         """Register a new person without touching any yaml. Returns their login token and internal secret once; only the token's hash is kept."""
@@ -520,10 +667,8 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
 
     @app.get("/")
     def index():
-        f = ui / "index.html"
-        if not f.exists():
-            raise HTTPException(404, "ui not installed")
-        return Response(f.read_text(), media_type="text/html")
+        """The admin page is the only screen. (The full per-person app lives on the `full-ui` branch.)"""
+        return RedirectResponse("/admin", status_code=307)
 
 
     up_state: dict[str, bool] = {}

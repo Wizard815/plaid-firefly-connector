@@ -73,7 +73,7 @@ def main():
     plaid = httpx.Client(base_url=f"http://127.0.0.1:{PORTS['plaid']}", timeout=10)
 
     # --- auth & isolation ---
-    check("gateway serves the UI", "Goblin Bank" in c.get("/").text)
+    check("gateway serves the UI", "Goblin Bank" in c.get("/admin").text)
     check("no token -> 401", c.get("/g/alice/api/overview").status_code == 401)
     check("bob cannot open alice's goblin", c.get("/g/alice/api/overview", headers=B).status_code == 401)
     check("goblin refuses direct access without the internal secret", httpx.get(f"http://127.0.0.1:{PORTS['alice']}/api/overview").status_code == 401)

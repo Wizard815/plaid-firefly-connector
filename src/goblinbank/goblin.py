@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from goblinbank.oplog import log
-from goblinbank import plaidcost, plaidplan, agent, api_links, api_money, api_plan, links, external, notify, plan, crypto, feed, importers, ledger, settings as cfg, sync
+from goblinbank import firefly, plaidcost, plaidplan, agent, api_links, api_money, api_plan, links, external, notify, plan, crypto, feed, importers, ledger, settings as cfg, sync
 from goblinbank.connectors.base import now_iso
 from goblinbank.connectors.rh_csv import CsvConnector
 from goblinbank.db import DB
@@ -37,7 +37,7 @@ def _equity(bal) -> float | None:
     return None
 
 
-def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: DB | None = None, today=None, llm_transport=None, autosync: bool = False, inline_webhooks: bool = False, ops_log: bool = False, autosync_tick: float | None = None, notify_transport=None) -> FastAPI:
+def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: DB | None = None, today=None, llm_transport=None, autosync: bool = False, inline_webhooks: bool = False, ops_log: bool = False, firefly_transport=None, autosync_tick: float | None = None, notify_transport=None) -> FastAPI:
     name = os.environ.get("GOBLIN_NAME", "goblin")
     secret = os.environ.get("INTERNAL_SECRET", "")
     connector_secret = os.environ.get("CONNECTOR_SECRET", secret)
@@ -92,9 +92,16 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         if pub.startswith("https://"):
             plaid.webhook_url = pub + "/webhooks/plaid"          # one address on the admin page sets both of these for everyone
             if not os.environ.get("PLAID_REDIRECT_URI"):
-                plaid.redirect_uri = (pol.get("plaid_redirect_url") or "").rstrip("/") + "/" if pol.get("plaid_redirect_url") else pub + "/"
+                plaid.redirect_uri = pol["plaid_redirect_url"] if pol.get("plaid_redirect_url") else pub + "/link"          # banks that sign you in on their own site send you back to /link, which hands off to wherever you started
             update_item_webhooks()
         keys = set()
+        for k in ("firefly_url", "firefly_token", "firefly_apply_rules", "firefly_send_categories", "firefly_include_pending"):          # this person's Firefly III connection and options, set by the admin
+            if pol.get(k):
+                try:
+                    cfg.put(store, k, pol[k])
+                    keys.add(k)
+                except ValueError:
+                    pass
         for k in ("plaid_client_id", "plaid_secret", "plaid_env"):                 # Plaid keys the admin entered once for everyone
             if pol.get(k):
                 try:
@@ -276,6 +283,92 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         except PlaidError as e:
             raise HTTPException(502, str(e))
 
+    # ---------------- Firefly III: Goblin Bank pushes your bank data there ----------------
+    @app.get("/api/firefly/status")
+    def ff_status(request: Request):
+        auth(request)
+        apply_policy(force=True)                          # pick up what the admin just saved
+        return firefly.status(store)
+
+    @app.post("/api/firefly/test")
+    def ff_test(request: Request):
+        """Check the address and token with one harmless call."""
+        auth(request)
+        apply_policy(force=True)                          # pick up what the admin just saved
+        c = firefly.conf(store)
+        if not (c["url"] and c["token"]):
+            raise HTTPException(409, "enter your Firefly III address and a Personal Access Token first")
+        try:
+            info = firefly.Firefly(c["url"], c["token"], firefly_transport).about()
+        except firefly.FireflyError as e:
+            raise HTTPException(502, str(e))
+        return {"ok": True, "version": info.get("version"), "api_version": info.get("api_version")}
+
+    @app.post("/api/firefly/sync")
+    def ff_sync(request: Request):
+        """Push everything new now (it also happens after every bank sync)."""
+        auth(request)
+        apply_policy(force=True)                          # pick up what the admin just saved
+        with sync_lock:
+            return firefly.run(store, firefly_transport)
+
+    @app.post("/api/firefly/retry")
+    def ff_retry(request: Request):
+        """Give failed transactions another go."""
+        auth(request)
+        apply_policy(force=True)                          # pick up what the admin just saved
+        with store.tx() as c:
+            c.execute("UPDATE ff_tx SET attempts=0 WHERE state='error'")
+        with sync_lock:
+            return firefly.run(store, firefly_transport)
+
+    @app.get("/api/firefly/accounts")
+    def ff_accounts(request: Request):
+        """Each bank account and what happens to it in Firefly III, plus the asset accounts already there to link to."""
+        auth(request)
+        apply_policy(force=True)                          # pick up what the admin just saved
+        firefly.ensure_mappings(store)
+        mine = store.all("SELECT a.id, a.institution, a.name, a.nickname, a.mask, a.kind, a.balance, a.category, m.mode, m.ff_id, m.created FROM accounts a JOIN ff_accounts m ON m.account_id=a.id ORDER BY a.institution, a.name")
+        theirs, error = [], None
+        c = firefly.conf(store)
+        if c["url"] and c["token"]:
+            try:
+                theirs = [{"id": x["id"], "name": x["name"], "balance": x.get("current_balance"), "role": x.get("account_role")} for x in firefly.Firefly(c["url"], c["token"], firefly_transport).accounts("asset")]
+            except firefly.FireflyError as e:
+                error = str(e)
+        by = {x["id"]: x for x in theirs}
+        return {"accounts": [{**a, "label": firefly.account_label(a), "ff_name": (by.get(a["ff_id"]) or {}).get("name"), "ff_balance": (by.get(a["ff_id"]) or {}).get("balance")} for a in mine], "firefly_accounts": theirs, "error": error}
+
+    @app.post("/api/firefly/accounts/{account_id}/rebalance")
+    def ff_rebalance(request: Request, account_id: str):
+        """Make Firefly III's balance for this account equal the bank's (moves the opening balance)."""
+        auth(request)
+        apply_policy(force=True)                          # pick up what the admin just saved
+        c = firefly.conf(store)
+        if not (c["url"] and c["token"]):
+            raise HTTPException(409, "set up Firefly III first")
+        try:
+            return firefly.rebalance(store, firefly.Firefly(c["url"], c["token"], firefly_transport), account_id)
+        except KeyError:
+            raise HTTPException(404, "that account is not in Firefly III yet")
+        except firefly.FireflyError as e:
+            raise HTTPException(502, str(e))
+
+    class FFMap(BaseModel):
+        mode: str                             # pending | create | link | skip
+        ff_id: int | None = None
+
+    @app.put("/api/firefly/accounts/{account_id}")
+    def ff_map(request: Request, account_id: str, b: FFMap):
+        auth(request)
+        try:
+            firefly.set_mapping(store, account_id, b.mode, b.ff_id)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        except KeyError:
+            raise HTTPException(404, "account not found")
+        return {"ok": True}
+
     @app.post("/plaid/test")
     def plaid_test(request: Request):
         """Check the saved keys with a free call, so a typo shows up here and not later as a mysterious failure."""
@@ -345,7 +438,9 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         if inline_webhooks:                                   # tests: do the work before answering
             def now_():
                 with sync_lock:
-                    return sync.handle_webhook(store, plaid, body)
+                    r = sync.handle_webhook(store, plaid, body)
+                    firefly.run(store, firefly_transport)
+                    return r
             return await run_in_threadpool(now_)
         hook_q.put(body)                                      # Plaid wants an answer within 10 seconds (and retries for a day), so answer now and do the pull in the background
         if hook_state["t"] is None:
@@ -364,6 +459,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             try:
                 with sync_lock:                               # one at a time, and never alongside a scheduled pull
                     sync.handle_webhook(store, plaid, body)
+                    firefly.run(store, firefly_transport)
             except Exception:
                 pass                                          # the weekly safety-net pull covers anything missed
 
@@ -378,6 +474,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                 except PlaidError as e:
                     out["plaid_error"] = str(e)
             sync_state["last"], sync_state["at"] = time.time(), sync.now()
+        out["firefly"] = firefly.run(store, firefly_transport)                 # also picks up CSV imports; with nothing new it makes no calls to Firefly III
         out["notify"] = notify.run(store, (today or date.today)(), name, notify_transport)
         banks = out["plaid"]
         pulled, skipped = sum(1 for b in banks if "skipped" not in b and "error" not in b), sum(1 for b in banks if "skipped" in b)
@@ -465,7 +562,9 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             rows, bal = importers.parse_bank((await request.body()).decode("utf-8", "replace"), flip)
         except ValueError as e:
             raise HTTPException(422, str(e))
-        return {"rows": len(rows), "added": importers.store_bank(store, account_id, rows, bal), "balance": bal}
+        added = importers.store_bank(store, account_id, rows, bal)
+        threading.Thread(target=lambda: firefly.run(store, firefly_transport), daemon=True).start() if added and firefly.conf(store)["enabled"] else None
+        return {"rows": len(rows), "added": added, "balance": bal}
 
     def link_send(peer: str, kind: str, payload: dict) -> bool:
         """Hand a message for another goblin to the gateway, which relays it and keeps nothing."""
@@ -563,7 +662,8 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         today_n = store.one("SELECT COALESCE(SUM(calls),0) n FROM plaid_usage WHERE day=?", (date.today().isoformat(),))["n"]
         return {"items": b["items"], "est_monthly_cost": b["est"], "budget": b["budget"], "calls_today": today_n, "daily_cap": int(float(cfg.get(store, "plaid_daily_cap") or 300)),
                 "calls_month": sum(month_calls().values()), "min_minutes": int(float(cfg.get(store, "plaid_min_minutes") or 0)),
-                "webhook_banks": sum(1 for r in store.all("SELECT last_hook FROM plaid_items") if plaidplan.hook_live(r, time.time())), "webhook_set": bool(plaid.webhook_url)}
+                "webhook_banks": sum(1 for r in store.all("SELECT last_hook FROM plaid_items") if plaidplan.hook_live(r, time.time())), "webhook_set": bool(plaid.webhook_url),
+                "firefly": (lambda s: {"configured": s["configured"], "sent": s["sent"], "failed": s["failed"], "waiting": s["waiting"], "last_ok": s["last_ok"], "problem": bool(s["last_error"])})(firefly.status(store))}
 
     @app.put("/api/settings")
     async def settings_put(request: Request):

@@ -11,6 +11,7 @@ SPEC = {
     "share": ("list", False, "SHARE"),
     "rh_main_source": ("choice", False, ""),
     "plaid_client_id": ("str", False, "PLAID_CLIENT_ID"), "plaid_secret": ("str", True, "PLAID_SECRET"), "plaid_env": ("str", False, "PLAID_ENV"),
+    "firefly_url": ("str", False, "FIREFLY_URL"), "firefly_token": ("str", True, "FIREFLY_TOKEN"), "firefly_enabled": ("onoff", False, ""), "firefly_send_categories": ("onoff", False, ""), "firefly_include_pending": ("onoff", False, ""), "firefly_apply_rules": ("onoff", False, ""),
     "caldav_url": ("str", False, "CALDAV_URL"), "caldav_user": ("str", False, "CALDAV_USER"),
     "caldav_password": ("str", True, "CALDAV_PASSWORD"),
     "rh_mcp_url": ("str", False, "RH_MCP_URL"), "rh_mcp_token": ("str", True, "RH_MCP_TOKEN"),
@@ -24,7 +25,7 @@ SPEC = {
 
 
 # Out of the box Plaid is kept cheap: at most $5 a month and a modest daily call cap; each bank is asked on a schedule that suits what it holds (see plaidplan.py).
-DEFAULTS = {"plaid_budget_month": "5", "plaid_min_minutes": "0", "plaid_daily_cap": "300"}
+DEFAULTS = {"firefly_send_categories": "off", "firefly_include_pending": "off", "firefly_apply_rules": "on", "plaid_budget_month": "5", "plaid_min_minutes": "0", "plaid_daily_cap": "300"}
 
 
 def get(db, key: str) -> str:
