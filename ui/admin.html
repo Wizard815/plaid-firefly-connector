@@ -155,8 +155,8 @@ async function renderPerson() {
   if (!who) { box.hidden = true; return; }
   const note = el("p", { class: "small muted" });
   const say = (t, bad) => { msg.textContent = t; msg.className = "small" + (bad ? " err" : ""); window.scrollTo({ top: 0, behavior: "smooth" }); };
-  let st, ff, fa;
-  try { [st, ff, fa] = await Promise.all([P("api/status"), P("api/firefly/status"), P("api/firefly/accounts")]); }
+  let st, ff, fa, pol0 = {};
+  try { [st, ff, fa, pol0] = await Promise.all([P("api/status"), P("api/firefly/status"), P("api/firefly/accounts"), call("/admin/policy")]); }
   catch (e) { box.replaceChildren(el("h2", { style: "margin:0 0 6px;font-size:1.1rem" }, who), el("p", { class: "small err" }, e.message)); box.hidden = false; return; }
   const plaid = st.plaid || {}, run = async (fn, ok) => { try { const r = await fn(); say(typeof ok === "function" ? ok(r) : ok); await renderPerson(); } catch (e) { say(e.message, true); } };
   const sel = (opts, cur, onchange) => { const s = el("select", {}, opts.map(([v, t]) => el("option", { value: v }, t))); s.value = cur; s.addEventListener("change", () => onchange(s.value)); return s; };
@@ -182,6 +182,10 @@ async function renderPerson() {
   mk.addEventListener("click", () => run(async () => { const r = await call(`/admin/people/${encodeURIComponent(who)}/invite`, "POST", { minutes: parseInt(mins.value) }); inv.replaceChildren(el("b", {}, `Code for ${who} (shown once): ${r.code}`), el("div", {}, `They open ${location.origin}/link and enter it. It lets them link their own banks and nothing else.`)); }, "Code made. Copy it now."));
   const lst = el("div", { class: "small muted" });
   call("/admin/invites").then((d) => lst.replaceChildren(...d.invites.filter((i) => i.name === who).map((i) => { const b = el("button", { type: "button" }, "Revoke"); b.addEventListener("click", () => run(() => call("/admin/invites/" + i.id, "DELETE"), "Revoked.")); return el("div", {}, `Active code, ${i.minutes_left} min left `, b); }))).catch(() => {});
+  const fu = el("input", { type: "url", placeholder: "https://firefly.example.com", value: ((pol0.people || {})[who] || {}).firefly_url || "", style: "min-width:240px" });
+  const ft = el("input", { type: "password", placeholder: (pol0.firefly_token_set || {})[who] ? "token saved, leave blank to keep" : "Personal Access Token", autocomplete: "new-password", style: "min-width:240px" });
+  const fsave = el("button", { type: "button" }, "Save Firefly III connection");
+  fsave.addEventListener("click", () => run(() => call(`/admin/people/${encodeURIComponent(who)}/firefly`, "PUT", { url: fu.value.trim(), token: ft.value.trim() }), "Saved. It reaches the person's container within a few minutes; then press Test the connection."));
   const ffbtn = (label, path, ok, primary) => { const b = el("button", primary ? { class: "primary", type: "button" } : { type: "button" }, label); b.addEventListener("click", () => run(() => P(path, "POST", {}), ok)); return b; };
   box.replaceChildren(el("div", { class: "row", style: "justify-content:space-between" }, el("h2", { style: "margin:0;font-size:1.1rem" }, "Managing " + who), (() => { const x = el("button", { type: "button" }, "Close"); x.addEventListener("click", () => { who = null; renderPerson(); }); return x; })()),
     el("h3", { style: "margin:12px 0 4px;font-size:1rem" }, "Bank links (Plaid)"),
@@ -189,7 +193,9 @@ async function renderPerson() {
     el("div", { class: "row" }, link, pull), banks,
     el("div", { class: "row" }, mins, mk), inv, lst,
     el("h3", { style: "margin:14px 0 4px;font-size:1rem" }, "Firefly III"),
-    el("p", { class: "small muted" }, (ff.awaiting_approval ? `${ff.awaiting_approval} bank account(s) await your approval below; nothing is sent for them. ` : "") + (ff.configured ? `Connected to ${ff.host}. ${ff.sent} transactions sent, ${ff.waiting} waiting, ${ff.failed} failed. Last good push: ${ff.last_ok ? ff.last_ok.slice(0, 16).replace("T", " ") : "never"}.${ff.last_error ? " Last problem: " + ff.last_error : ""}` : "Not connected. Enter this person's Firefly III address and token in the table at the bottom (Firefly III for each person), Save, then come back.")),
+    el("p", { class: "small muted" }, `Where ${who}'s approved bank accounts go. In Firefly III: Options, Profile, OAuth, Personal Access Tokens, create one (valid up to a year). The token is kept encrypted and never shown again.`),
+    el("div", { class: "row" }, fu, ft, fsave),
+    el("p", { class: "small muted" }, (ff.awaiting_approval ? `${ff.awaiting_approval} bank account(s) await your approval below; nothing is sent for them. ` : "") + (ff.configured ? `Connected to ${ff.host}. ${ff.sent} transactions sent, ${ff.waiting} waiting, ${ff.failed} failed. Last good push: ${ff.last_ok ? ff.last_ok.slice(0, 16).replace("T", " ") : "never"}.${ff.last_error ? " Last problem: " + ff.last_error : ""}` : "Not connected. Enter the address and token above and save.")),
     el("div", { class: "row" }, ffbtn("Test the connection", "api/firefly/test", (r) => "Connected to Firefly III " + r.version), ffbtn("Send now", "api/firefly/sync", (r) => `Sent ${r.created || 0} new, ${r.updated || 0} changed, ${r.deleted || 0} removed.`, true), ffbtn("Retry failed", "api/firefly/retry", "Retried.")),
     fmap, note);
   box.hidden = false;

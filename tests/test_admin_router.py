@@ -137,3 +137,16 @@ def test_a_firefly_account_takes_one_bank_account_and_a_person_cannot_approve_th
     gw.post("/admin/p/alice/api/firefly/sync", headers=A)
     sent = {t["external_id"] for g in ff.groups.values() for t in g["transactions"]}
     assert sent == {"t1", "t2"}                                                                          # only the approved account's transactions went to that Firefly account
+
+
+def test_each_persons_firefly_address_and_token_are_attached_from_their_own_panel(tmp_path, monkeypatch):
+    gw, *_ = world(tmp_path, monkeypatch)
+    assert gw.put("/admin/people/alice/firefly", json={"url": "https://ff.example.com", "token": "T"}).status_code == 401
+    assert gw.put("/admin/people/nobody/firefly", headers=A, json={"url": "https://ff.example.com"}).status_code == 404
+    r = gw.put("/admin/people/alice/firefly", headers=A, json={"url": "https://ff.example.com", "token": "eyJ" + "a" * 60}).json()
+    assert r == {"ok": True, "url": "https://ff.example.com", "token_set": True}
+    pol = gw.get("/admin/policy", headers=A).json()
+    assert pol["people"]["alice"]["firefly_url"] == "https://ff.example.com" and pol["firefly_token_set"] == {"alice": True} and "eyJ" + "a" * 60 not in str(pol)
+    assert gw.put("/admin/people/alice/firefly", headers=A, json={"url": "https://ff2.example.com", "token": ""}).json()["token_set"] is True   # blank token keeps the saved one
+    assert gw.put("/admin/people/alice/firefly", headers=A, json={"url": "", "token": ""}).json() == {"ok": True, "url": "", "token_set": False}   # no address: disconnected
+    assert "alice" not in gw.get("/admin/policy", headers=A).json()["firefly_token_set"]

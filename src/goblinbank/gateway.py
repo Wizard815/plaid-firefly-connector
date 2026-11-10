@@ -408,6 +408,34 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             raise
         return redacted()
 
+    @app.put("/admin/people/{name}/firefly")
+    async def admin_person_firefly(request: Request, name: str):
+        """Attach one person's Plaid connections to their Firefly III: its address and a Personal Access Token. Only this person's entry changes; a blank token keeps the saved one."""
+        admin(request)
+        if name not in goblins:
+            raise HTTPException(404, "no such person")
+        b = await request.json()
+        url, token = str(b.get("url", "")).strip(), str(b.get("token", "")).strip()
+        entry = dict(policy["people"].get(name, {}))
+        if url:
+            entry.update(clean_policy({"firefly_url": url}))
+        else:
+            entry.pop("firefly_url", None)
+            entry.pop("firefly_token", None)                                         # no address means no connection: the token goes too
+        if url and token:
+            entry.update(clean_policy({"firefly_token": token}))
+        old = dict(policy["people"])
+        if entry:
+            policy["people"][name] = entry
+        else:
+            policy["people"].pop(name, None)
+        try:
+            save_state()
+        except HTTPException:
+            policy["people"] = old
+            raise
+        return {"ok": True, "url": entry.get("firefly_url", ""), "token_set": bool(entry.get("firefly_token"))}
+
     @app.post("/admin/plaid/test")
     async def admin_plaid_test(request: Request):
         """Try the saved Plaid keys with a free call."""
