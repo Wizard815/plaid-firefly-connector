@@ -68,9 +68,9 @@ How sign-in works:
 * Unattended installs: `NONINTERACTIVE=1 NAME=alice GOBLIN_PASSWORD_ALICE='a long phrase here' ./scripts/install.sh`.
 
 ### 3. Set everything up in the app
-1. **Admin page** at `http://127.0.0.1:6868/admin` (the admin password): add the other people, enter your **Plaid keys** once for everyone (Client ID and secret from dashboard.plaid.com, Developers, Keys, and Sandbox or Production), set the **public address** for webhooks, and set the budget and limits. Give each new person a password (or let it make a random token, shown once) and the one command to start their container is shown there.
+1. **Admin page** at `http://127.0.0.1:6767/admin` (the admin password): add the other people, enter your **Plaid keys** once for everyone (Client ID and secret from dashboard.plaid.com, Developers, Keys, and Sandbox or Production), set the **public address** for webhooks, and set the budget and limits. Give each new person a password (or let it make a random token, shown once) and the one command to start their container is shown there.
    Or skip the admin page: each person can enter their own keys under Settings, Connect & import, **Plaid keys** (stored encrypted in their own container).
-2. Open `http://127.0.0.1:6868`, sign in with your name and password, and in Settings, Connect & import, press **Test the keys**, then **Link an account**.
+2. Open `http://127.0.0.1:6767`, sign in with your name and password, and in Settings, Connect & import, press **Test the keys**, then **Link an account**.
 3. The Pondering Orb key, CalDAV, Robinhood, models and notifications are all set up in the app too (admin page for the Orb key, Settings for the rest). `.secrets/plaid.env` and `.secrets/<name>.integrations.env` still work if you prefer files, but nothing needs them.
 
 ### Connecting your real bank
@@ -82,17 +82,17 @@ How sign-in works:
 ### Pondering Orb
 1. On the gateway's admin page, under **Pondering Orb**, press **Make a key**. It is shown once; only its hash is kept. (`orb_key: true` in `goblins.yaml` still works if you prefer a file.)
 2. Each person chooses what the Orb may see under Settings, **Sharing** (totals like net worth, bills, goals, savings; the itemised lists are separate opt-ins; never transactions).
-3. In Pondering Orb, set `GOBLIN_ORB_KEY` to that key and point its Goblin-Bank widget at the gateway: `http://gateway:8000` if the Orb runs in the same Docker network, otherwise this server's address (the one from step 4 below, or `http://<server>:6868` on your network). The Orb calls `GET /api/v1/summary` with `Authorization: Bearer <key>`. Revoke the key on the admin page any time.
+3. In Pondering Orb, set `GOBLIN_ORB_KEY` to that key and point its Goblin-Bank widget at the gateway: `http://gateway:8000` if the Orb runs in the same Docker network, otherwise this server's address (the one from step 4 below, or `http://<server>:6767` on your network). The Orb calls `GET /api/v1/summary` with `Authorization: Bearer <key>`. Revoke the key on the admin page any time.
 Nothing about this changed with the new setup: the key, the endpoint and the shape of the summary are the same.
 
 ### Calendar (CalDAV)
 Settings, **Calendar**: enter your CalDAV calendar address, user and password (stored encrypted in that person's container; `.secrets/<name>.integrations.env` is only an optional fallback) and press **Test connection**. Then, on the Subscriptions tab, **Push to CalDAV now** puts every bill into the calendar and **Download .ics** gives the same bills for any calendar app. Reading calendar events as money amounts is not built yet.
 
 ### One address for everyone
-There is **one gateway and one address** (`http://127.0.0.1:6868`, or your Tailscale / domain address). Everybody uses that same address, and so does the admin:
+There is **one gateway and one address** (`http://127.0.0.1:6767`, or your Tailscale / domain address). Everybody uses that same address, and so does the admin:
 * `/` is the sign-in page. Each person types their own name and password; the gateway then sends everything they do only to their own goblin container (`/g/<name>/...` behind the scenes). Alice and Bob never get different ports or links, and they never reach each other's containers.
 * `/admin` on the same address is the admin page, with its own password (the random hex one in `.secrets/admin.password`).
-* The goblin containers have no ports open to you at all. Only the gateway is published (port 6868, this machine only); the goblins sit behind it on the Docker network and trust only the gateway's secret.
+* The goblin containers have no ports open to you at all. Only the gateway is published (port 6767, this machine only); the goblins sit behind it on the Docker network and trust only the gateway's secret.
 
 ### Which Plaid site is which
 * **dashboard.plaid.com** is the developer dashboard: your Client ID, secrets, allowed redirect URIs, API version and usage. This is what Goblin Bank is set up with.
@@ -121,12 +121,12 @@ Plaid bills per linked bank login per month, not per call: about $0.45 each at l
 * Banks generally do not email scheduled CSV reports: Huntington, Discover, Capital One and Axos offer manual downloads (CSV or QFX) and PDF statements, plus balance and transaction alerts. There is no setting that mails a recurring CSV that I could confirm, so a monthly manual download for the quiet accounts is the realistic no-Plaid route.
 
 ### 4. Reach it from your phone and other devices
-The gateway listens only on `127.0.0.1:6868` on purpose (change it with `port:` in `goblins.yaml`). Pick one:
-* **Tailscale (simplest, recommended):** install it on the server and your devices, then `tailscale serve --bg 6868` gives you an `https://your-machine.your-tailnet.ts.net` address that only your devices can open.
+The gateway listens only on `127.0.0.1:6767` on purpose (change it with `port:` in `goblins.yaml`). Pick one:
+* **Tailscale (simplest, recommended):** install it on the server and your devices, then `tailscale serve --bg 6767` gives you an `https://your-machine.your-tailnet.ts.net` address that only your devices can open.
 * **Your own domain with automatic HTTPS:** edit `examples/Caddyfile` (your domain), point the domain at the server, open ports 80 and 443, then
   `docker compose -f docker-compose.generated.yml -f examples/docker-compose.caddy.yml up -d`.
 * **Cloudflare Tunnel** also works. Whatever you use, it must be HTTPS: your password travels at sign-in and a session token with every request.
-Never expose port 6868 to the internet as plain HTTP.
+Never expose port 6767 to the internet as plain HTTP.
 
 ### 5. Add people, link them, share
 * **Add a person:** open `/admin` (use the admin password), type a name and, if you like, a password for them under People, press Add. Without a password it prints a random login token once. It also shows the small compose file for their container, plus the one command to start it (a web page cannot start Docker). Their encryption key is made in your browser, so the gateway never sees it.

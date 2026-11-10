@@ -52,7 +52,7 @@ docker run --rm -u 0 -v "$PWD":/work -w /work -e HOST_UID="$(id -u)" -e HOST_GID
   chown -R "$HOST_UID:$HOST_GID" .secrets docker-compose.generated.yml &&
   chmod 600 .secrets/*' sh ${ARGS[@]+"${ARGS[@]}"}
 
-PORT=$(sed -n 's/^port: *\([0-9]*\).*/\1/p' goblins.yaml | head -1); PORT=${PORT:-6868}
+PORT=$(sed -n 's/^port: *\([0-9]*\).*/\1/p' goblins.yaml | head -1); PORT=${PORT:-6767}
 cat <<MSG
 
 Done. Any random login token printed above is shown ONCE, so save it now. People who chose a password sign in with it (only a salted hash is stored).
