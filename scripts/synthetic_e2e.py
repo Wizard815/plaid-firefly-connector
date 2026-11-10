@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the real gateway, two goblins, the CSV connector and a synthetic Plaid server as separate
+"""Run the real gateway, two goblins and a synthetic Plaid server as separate
 processes, then drive everything through the gateway over HTTP. Needs no Plaid account.
 
     python3 scripts/synthetic_e2e.py
@@ -22,7 +22,7 @@ from cryptography.fernet import Fernet
 
 ROOT = Path(__file__).resolve().parents[1]
 sha = lambda s: hashlib.sha256(s.encode()).hexdigest()
-PORTS = {"plaid": 9101, "csv": 9102, "alice": 9103, "gateway": 9104, "bob": 9105}
+PORTS = {"plaid": 9101, "alice": 9103, "gateway": 9104, "bob": 9105}
 GW = f"http://127.0.0.1:{PORTS['gateway']}"
 procs, results = [], []
 
@@ -59,10 +59,9 @@ def main():
     base = {"PLAID_CLIENT_ID": "synthetic-client", "PLAID_SECRET": "synthetic-secret", "PLAID_BASE_URL": f"http://127.0.0.1:{PORTS['plaid']}",
             "GATEWAY_URL": GW, "SHARE": "net_worth"}
     spawn("devtools.fake_plaid:app", PORTS["plaid"], {}, factory=False)
-    spawn("goblinbank.main:app", PORTS["csv"], {"ROLE": "rh-csv", "CSV_DIR": str(tmp / "rhcsv"), "INTERNAL_SECRET": secrets["alice"]["conn"]})
     for n, db in (("alice", "dbA"), ("bob", "dbB")):
         spawn("goblinbank.main:app", PORTS[n], {**base, "ROLE": "goblin", "GOBLIN_NAME": n, "INTERNAL_SECRET": secrets[n]["internal"], "CONNECTOR_SECRET": secrets[n]["conn"],
-              "FIELD_KEY": secrets[n]["field"], "GOBLIN_DB": str(tmp / db / "goblin.db"), "RH_CSV_URL": f"http://127.0.0.1:{PORTS['csv']}",
+              "FIELD_KEY": secrets[n]["field"], "GOBLIN_DB": str(tmp / db / "goblin.db"),
               "RH_CSV_DIR": str(tmp / "rhcsv") if n == "alice" else str(tmp / "bob-csv"), "IMPORT_DIR": str(tmp / "imports") if n == "alice" else str(tmp / "bob-imp")})
     spawn("goblinbank.main:app", PORTS["gateway"], {"ROLE": "gateway", "GATEWAY_CONFIG": str(tmp / "gateway.yaml"), "UI_DIR": str(ROOT / "ui")})
     for p in PORTS.values():
@@ -129,7 +128,7 @@ def main():
     check("robinhood CSV upload", up.status_code == 200, up.text)
     c.put("/g/alice/api/settings", headers=A, json={"rh_main_source": "csv"})
     rh = c.get("/g/alice/robinhood/main", headers=A).json()
-    check("csv connector (separate process) serves positions", rh.get("source") == "rh-main-csv" and rh["positions"][0]["symbol"] == "AAPL", str(rh))
+    check("csv parsed in-process serves positions", rh.get("source") == "rh-main-csv" and rh["positions"][0]["symbol"] == "AAPL", str(rh))
 
     # --- usage, cost, cap ---
     u = c.get("/g/alice/api/plaid/usage", headers=A).json()

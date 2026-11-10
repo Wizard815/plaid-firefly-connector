@@ -16,6 +16,8 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from goblinbank import plaidcost, plaidplan, agent, api_links, api_money, api_plan, links, external, notify, plan, crypto, feed, importers, ledger, settings as cfg, sync
+from goblinbank.connectors.base import now_iso
+from goblinbank.connectors.rh_csv import CsvConnector
 from goblinbank.db import DB
 from goblinbank.plaid import Plaid, PlaidError, PlaidLimit
 from goblinbank.security import require_internal
@@ -38,8 +40,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     name = os.environ.get("GOBLIN_NAME", "goblin")
     secret = os.environ.get("INTERNAL_SECRET", "")
     connector_secret = os.environ.get("CONNECTOR_SECRET", secret)
-    urls = {"agent": os.environ.get("RH_AGENT_URL", ""), "csv": os.environ.get("RH_CSV_URL", ""),
-            "live": os.environ.get("RH_LIVE_URL", "")}
+    urls = {"agent": os.environ.get("RH_AGENT_URL", ""), "live": os.environ.get("RH_LIVE_URL", "")}
     gateway_url = os.environ.get("GATEWAY_URL", "")
     client = httpx.Client(timeout=20, transport=transport)
     store = db or DB()
@@ -163,6 +164,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     apply_plaid_creds()
     import_dir = os.environ.get("IMPORT_DIR", "/data/imports")
     csv_dir = os.environ.get("RH_CSV_DIR", "/data/robinhood-csv")
+    csv_connector = CsvConnector(csv_dir)
     app = FastAPI(title=f"goblin:{name}")
 
     def share() -> set[str]:
@@ -171,8 +173,18 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     def auth(request: Request):
         require_internal(request, secret)
 
-    # ---------------- Robinhood (via connector containers) ----------------
+    # ---------------- Robinhood (csv parsed in-process; agent/live via connector containers) ----------------
     def fetch(kind: str):
+        if kind == "csv":
+            out = {}
+            for ep in ("balances", "positions", "history"):
+                try:
+                    out[ep] = getattr(csv_connector, ep)()
+                    out["as_of"], out["source"] = now_iso(), csv_connector.name
+                except Exception as e:
+                    out[ep] = None
+                    out.setdefault("errors", []).append(f"{ep}: {type(e).__name__}")
+            return out
         base = urls[kind]
         if not base:
             return None
@@ -585,7 +597,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         csvs = sorted(os.listdir(csv_dir)) if os.path.isdir(csv_dir) else []
         return {"plaid": {"configured": plaid.configured, "env": "production" if "production" in plaid.base else "sandbox", "webhook_set": bool(plaid.webhook_url),
                           "items": [item_view(r) for r in store.all("SELECT * FROM plaid_items ORDER BY institution")]},
-                "robinhood": {"agent": probe("agent"), "csv": probe("csv"), "live": probe("live"), "csv_files": csvs,
+                "robinhood": {"agent": probe("agent"), "csv": "built-in", "live": probe("live"), "csv_files": csvs,
                               "agent_configured": bool(cfg.get(store, "rh_mcp_url") and cfg.get(store, "rh_mcp_read_tools"))},
                 "caldav_configured": bool(cfg.get(store, "caldav_url")),
                 "imports": store.all("""SELECT substr(a.id, 8) provider, COUNT(t.id) transactions, MAX(t.date) last_transaction

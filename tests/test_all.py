@@ -94,11 +94,10 @@ def _bridge(app):
 
 
 def test_end_to_end(csv_dir, monkeypatch):
-    conn = make_connector_app(CsvConnector(str(csv_dir)), "conn")
     for k, v in {"GOBLIN_NAME": "alice", "INTERNAL_SECRET": "isec", "CONNECTOR_SECRET": "conn",
-                 "SHARE": "robinhood_main", "RH_CSV_URL": "http://csv", "GATEWAY_URL": "http://gw"}.items():
+                 "SHARE": "robinhood_main", "RH_CSV_DIR": str(csv_dir), "GATEWAY_URL": "http://gw"}.items():
         monkeypatch.setenv(k, v)
-    g = goblin.create_app(transport=_bridge(conn), db=DB(":memory:"))
+    g = goblin.create_app(db=DB(":memory:"))
     cfg = {"goblins": [
         {"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("alice-tok")},
         {"name": "bob", "url": "http://bob", "internal_secret": "x", "user_token_sha256": sha256("bob-tok")}],

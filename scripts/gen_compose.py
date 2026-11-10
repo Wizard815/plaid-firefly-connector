@@ -39,10 +39,14 @@ def main(src="goblins.yaml", *flags):
         reset, src = flags[0] if flags else sys.exit("usage: --reset-token <name>"), "goblins.yaml"
     spec = yaml.safe_load((ROOT / src).read_text())
     SEC.mkdir(exist_ok=True, mode=0o700)
+    network = spec.get("network")
+    if not network:
+        sys.exit("set `network: <docker network name>` in goblins.yaml — an existing external network "
+                  "(docker network create <name>) that goblin and connector containers join")
     names = [g["name"] for g in spec["goblins"]]
     if len(set(names)) != len(names):
         sys.exit("duplicate goblin names")
-    gw_goblins, services, networks = [], {}, {"edge": {}}
+    gw_goblins, services, networks = [], {}, {"edge": {}, network: {"external": True}}
     for g in spec["goblins"]:
         n = g["name"]
         if not n.replace("-", "").isalnum() or not n.islower():
@@ -78,31 +82,27 @@ def main(src="goblins.yaml", *flags):
                 os.chown(d, 10001, 10001)    # the containers run as uid 10001
             except PermissionError:
                 print(f"hint: sudo chown -R 10001:10001 data/{n}")
-        net = f"net-{n}"
-        networks["egress"] = {}
-        networks[net] = {"internal": True}  # connectors sit on an internal-only network
+        networks["egress"] = {"ipam": {"config": [{"subnet": "10.89.1.0/24"}]}}
         env = {"ROLE": "goblin", "GOBLIN_NAME": n, "SHARE": ",".join(g.get("share", [])),
-               "GATEWAY_URL": "http://gateway:8000", "RH_CSV_URL": f"http://{n}-rh-csv:8000"}
+               "GATEWAY_URL": "http://gateway:8000"}
         services[f"goblin-{n}"] = {"build": ".", "env_file": [f".secrets/{n}.env", f".secrets/{n}.integrations.env", ".secrets/plaid.env"], "environment": env,
                                    "volumes": [f"./data/{n}/db:/data", f"./data/{n}/robinhood-csv:/data/robinhood-csv", f"./data/{n}/imports:/data/imports"], "user": "10001", "extra_hosts": ["host.docker.internal:host-gateway"],
-                                   "networks": ["edge", net, "egress"], "restart": "unless-stopped"}
+                                   "networks": ["edge", network, "egress"], "restart": "unless-stopped"}
         conn_env = {"INTERNAL_SECRET": connector}
-        services[f"{n}-rh-csv"] = {"build": ".", "environment": {"ROLE": "rh-csv", "CSV_DIR": "/csv", **conn_env},
-                                   "volumes": [f"./data/{n}/robinhood-csv:/csv:ro"], "networks": [net], "restart": "unless-stopped"}
         if g.get("rh_agent"):
             _stub(SEC / f"{n}.rh-agent.env", "# Optional. Leave empty and set these on the Settings page instead.\n")
             env["RH_AGENT_URL"] = f"http://{n}-rh-agent:8000"
             services[f"{n}-rh-agent"] = {"build": ".", "env_file": [f".secrets/{n}.rh-agent.env"],
-                                         "environment": {"ROLE": "rh-agent", "CONFIG_URL": f"http://goblin-{n}:8000/internal/connector-config/rh-agent", **conn_env}, "networks": [net, "egress"], "restart": "unless-stopped"}
-            networks["egress"] = {}
+                                         "environment": {"ROLE": "rh-agent", "CONFIG_URL": f"http://goblin-{n}:8000/internal/connector-config/rh-agent", **conn_env}, "networks": [network, "egress"], "restart": "unless-stopped"}
+            networks["egress"] = {"ipam": {"config": [{"subnet": "10.89.1.0/24"}]}}
         if g.get("rh_live"):
             _stub(SEC / f"{n}.rh-live.env", "RH_USERNAME=\nRH_PASSWORD=\n")
             env["RH_LIVE_URL"] = f"http://{n}-rh-live:8000"
             services[f"{n}-rh-live"] = {"build": {"context": ".", "args": {"WITH_LIVE": "1"}},
                                         "env_file": [f".secrets/{n}.rh-live.env"],
                                         "environment": {"ROLE": "rh-live", "RH_LIVE_ENABLED": "1", **conn_env},
-                                        "volumes": [f"./data/{n}/rh-live-session:/session"], "networks": [net, "egress"], "restart": "unless-stopped"}
-            networks["egress"] = {}
+                                        "volumes": [f"./data/{n}/rh-live-session:/session"], "networks": [network, "egress"], "restart": "unless-stopped"}
+            networks["egress"] = {"ipam": {"config": [{"subnet": "10.89.1.0/24"}]}}
         env["CONNECTOR_SECRET"] = connector
     if reset and reset not in names:
         sys.exit(f"{reset!r} is not in goblins.yaml (people added on the admin page: remove and re-add them there)")

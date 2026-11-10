@@ -10,5 +10,6 @@ goblins:
   - name: bob
     share: []
 # port: 6767              # the port the app listens on (this machine only); 6767 is the default
+network: ai_net          # existing external Docker network for goblin <-> connector traffic (must already exist: docker network create ai_net)
 # orb_key: true            # uncomment to create a read-only key for Pondering Orb (printed once)
 orb_key: false

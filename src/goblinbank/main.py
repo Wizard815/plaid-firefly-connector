@@ -1,4 +1,4 @@
-"""Single image, many roles: ROLE=gateway|goblin|rh-agent|rh-csv|rh-live."""
+"""Single image, many roles: ROLE=gateway|goblin|rh-agent|rh-live."""
 import os
 
 
@@ -15,9 +15,6 @@ def build():
     if role == "rh-agent":
         from goblinbank.connectors.rh_agent import AgentConnector
         return make_connector_app(AgentConnector(config_url=os.environ.get("CONFIG_URL", ""), config_secret=secret), secret)
-    if role == "rh-csv":
-        from goblinbank.connectors.rh_csv import CsvConnector
-        return make_connector_app(CsvConnector(os.environ.get("CSV_DIR", "/csv")), secret)
     if role == "rh-live":
         from goblinbank.connectors.rh_live import LiveConnector
         return make_connector_app(LiveConnector(), secret)

@@ -324,7 +324,7 @@ def test_plaid_robinhood_holdings_feed_main_portfolio():
     assert r["sync"]["holdings"] == 1
     m = c.get("/robinhood/main", headers=H).json()
     assert m["source"] == "plaid" and m["balances"]["equity"] == 5000.0 and m["positions"][0]["symbol"] == "VTI"
-    c.put("/api/settings", headers=H, json={"rh_main_source": "csv"})                 # force another source
+    c.put("/api/settings", headers=H, json={"rh_main_source": "live"})                # force a source with no connector deployed
     assert "error" in c.get("/robinhood/main", headers=H).json()
 
 

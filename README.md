@@ -3,7 +3,7 @@
 Self-hosted family finance. **One gateway, one private container per person.**
 
 ```
-Pondering Orb ──(read-only key)──► CoinGateway ──► goblin-alice ─► alice-rh-csv / rh-agent / rh-live
+Pondering Orb ──(read-only key)──► CoinGateway ──► goblin-alice ─► alice-rh-agent / rh-live
                                         │──────► goblin-bob   ─► ...
 ```
 
@@ -12,9 +12,9 @@ Pondering Orb ──(read-only key)──► CoinGateway ──► goblin-alice 
 * **Goblin** (`ROLE=goblin`): one person's data. Shares with the gateway/Orb only what that person ticks under Settings, Sharing (or `share:` in `goblins.yaml` as a starting value).
   Shareable: `net_worth`, `subscriptions`, `bills` (totals), `bill_list` (each bill for the next 30 days), `alerts` (counts),
   `alert_list` (each alert), `savings`, `goals`, `robinhood_main`, `robinhood_agent`. The lists are separate opt-ins from the totals.
+  Parses Robinhood activity CSVs dropped in `data/<name>/robinhood-csv/` itself, in-process (no account access, deduped) — not a separate container, since there's no credential to isolate.
 * **Connectors** (one container each, read-only, GET-only, secret-protected):
   * `rh-agent` – official Robinhood MCP (agent account). Fails closed: only tools in `RH_MCP_READ_TOOLS` are callable.
-  * `rh-csv` – parses Robinhood activity CSVs dropped in `data/<name>/robinhood-csv/`. No account access. Deduped.
   * `rh-live` – **unofficial** `robin_stocks`. Off by default, opt-in, own container + session volume, min 3h between upstream calls. Violates Robinhood ToS.
 * Main portfolio view = live if enabled and answering, otherwise CSV (with `as_of`).
 
