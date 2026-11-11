@@ -7,16 +7,16 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from goblinbank import gateway, goblin, settings, sync
-from goblinbank.db import DB
-from goblinbank.security import sha256
+from plaidproxy import gateway, worker, settings, sync
+from plaidproxy.db import DB
+from plaidproxy.security import sha256
 
 H = {"X-Internal-Secret": "isec"}
 
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
-    for k, v in {"GOBLIN_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode(), "PLAID_CLIENT_ID": "c", "PLAID_SECRET": "s"}.items():
+    for k, v in {"PERSON_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode(), "PLAID_CLIENT_ID": "c", "PLAID_SECRET": "s"}.items():
         monkeypatch.setenv(k, v)
 
 
@@ -49,7 +49,7 @@ def plaid(with_investments=False):
 def rig(**kw):
     t, n = plaid(**kw)
     db = DB(":memory:")
-    c = TestClient(goblin.create_app(db=db, plaid_transport=t))
+    c = TestClient(worker.create_app(db=db, plaid_transport=t))
     return c, db, n
 
 
@@ -67,12 +67,12 @@ def test_a_bank_is_asked_at_most_every_three_hours_and_slow_endpoints_once_a_day
     n.clear()                                                             # ten hours of the 15-minute timer (rounds that are not forced):
     for _ in range(40):
         now[0] += 900
-        sync.sync_all(db, goblin_plaid(c, db, n))
+        sync.sync_all(db, worker_plaid(c, db, n))
     assert n["/transactions/sync"] <= 4 and n["/transactions/recurring/get"] <= 1 and n["/investments/holdings/get"] <= 1
 
 
-def goblin_plaid(c, db, n):
-    from goblinbank.plaid import Plaid
+def worker_plaid(c, db, n):
+    from plaidproxy.plaid import Plaid
     t, _ = plaid(with_investments=True)
     p = Plaid(httpx.MockTransport(lambda r: (n.update([r.url.path]), t.handler(r))[1]))
     p.client_id, p.secret = "c", "s"
@@ -95,18 +95,18 @@ def test_the_default_budget_is_five_dollars_and_blocks_a_bank_that_would_exceed_
     assert link(c, "B13").status_code == 200
 
 
-def gateway_with_policy(tmp_path, monkeypatch, goblin_app):
+def gateway_with_policy(tmp_path, monkeypatch, worker_app):
     monkeypatch.setenv("GATEWAY_STATE", str(tmp_path / "s.json"))
-    tc = TestClient(goblin_app)
+    tc = TestClient(worker_app)
 
-    def to_goblin(req: httpx.Request):
+    def to_worker(req: httpx.Request):
         r = tc.request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
         return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
-    cfg = {"goblins": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("t")}], "orb_keys": [], "admin_token_sha256": sha256("adm")}
-    return TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_goblin))), tc
+    cfg = {"people": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("t")}], "orb_keys": [], "admin_token_sha256": sha256("adm")}
+    return TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_worker))), tc
 
 
-def test_the_gateway_admin_sets_the_limits_and_the_goblin_obeys(tmp_path, monkeypatch):
+def test_the_gateway_admin_sets_the_limits_and_the_worker_obeys(tmp_path, monkeypatch):
     monkeypatch.setenv("GATEWAY_URL", "http://gateway")
     holder = {}
 
@@ -115,17 +115,17 @@ def test_the_gateway_admin_sets_the_limits_and_the_goblin_obeys(tmp_path, monkey
         return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
     t, n = plaid()
     db = DB(":memory:")
-    g = goblin.create_app(db=db, plaid_transport=t, transport=httpx.MockTransport(to_gateway))
+    g = worker.create_app(db=db, plaid_transport=t, transport=httpx.MockTransport(to_gateway))
     gw, gtc = gateway_with_policy(tmp_path, monkeypatch, g)
     holder["gw"] = gw
     A = {"Authorization": "Bearer adm"}
-    assert gw.get("/internal/policy", headers={"X-Goblin": "alice", "X-Internal-Secret": "isec"}).json() == {}
+    assert gw.get("/internal/policy", headers={"X-Person": "alice", "X-Internal-Secret": "isec"}).json() == {}
     assert gw.put("/admin/policy", json={"default": {}}).status_code == 401
     assert gw.put("/admin/policy", headers=A, json={"default": {"plaid_budget_month": "lots"}}).status_code == 422
     assert gw.put("/admin/policy", headers=A, json={"default": {"nonsense": 1}}).status_code == 422
     r = gw.put("/admin/policy", headers=A, json={"default": {"plaid_budget_month": 1, "plaid_daily_cap": 50, "plaid_min_minutes": 360, "plaid_use_recurring": "off"}})
     assert r.status_code == 200
-    s = gtc.get("/api/settings", headers=H).json()                          # the goblin picks it up and shows it as managed
+    s = gtc.get("/api/settings", headers=H).json()                          # the worker picks it up and shows it as managed
     assert s["plaid_budget_month"] == "1" and s["plaid_daily_cap"] == "50" and s["plaid_min_minutes"] == "360" and s["plaid_use_recurring"] == "off"
     assert set(s["managed"]) == {"plaid_budget_month", "plaid_daily_cap", "plaid_min_minutes", "plaid_use_recurring"}
     assert gtc.put("/api/settings", headers=H, json={"plaid_budget_month": "100"}).status_code == 409      # the person cannot raise it
@@ -136,7 +136,7 @@ def test_the_gateway_admin_sets_the_limits_and_the_goblin_obeys(tmp_path, monkey
     assert link(gtc, "B4").status_code == 409
     # a per-person override beats the default, and the admin page sees counts only
     gw.put("/admin/policy", headers=A, json={"default": {"plaid_budget_month": 1}, "people": {"alice": {"plaid_budget_month": 3}}})
-    status = gw.get("/admin/status", headers=A).json()["goblins"][0]
+    status = gw.get("/admin/status", headers=A).json()["workers"][0]
     assert status["plaid"]["items"] == 3 and "est_monthly_cost" in status["plaid"] and set(status["plaid"]) <= {"items", "est_monthly_cost", "budget", "calls_today", "daily_cap", "calls_month", "min_minutes", "webhook_banks", "webhook_set", "firefly"}
 
 
@@ -163,7 +163,7 @@ def mixed_rig():
             return httpx.Response(200, json={"holdings": [], "securities": []})
         return httpx.Response(404, json={"error_code": "X", "error_message": p})
     db = DB(":memory:")
-    c = TestClient(goblin.create_app(db=db, plaid_transport=httpx.MockTransport(h)))
+    c = TestClient(worker.create_app(db=db, plaid_transport=httpx.MockTransport(h)))
     for nm in ("Checking bank", "Savings bank", "Brokerage"):
         assert link(c, nm).status_code == 200
     return c, db, n
@@ -182,13 +182,13 @@ def test_banks_default_to_a_schedule_and_recurring_setting_that_suit_what_they_h
     before = Counter(n)
     for _ in range(96 * 31):                                                      # a month of the 15-minute timer
         now[0] += 900
-        sync.sync_all(db, goblin_plaid_mixed(n))
+        sync.sync_all(db, worker_plaid_mixed(n))
     got = {k: n[k] - before[k] for k in ("/transactions/sync", "/accounts/get", "/transactions/recurring/get", "/investments/holdings/get")}
     assert got["/transactions/sync"] <= 31 + 5 + 2 and got["/investments/holdings/get"] <= 2 and got["/transactions/recurring/get"] <= 5     # ~daily, ~weekly, ~monthly; recurring weekly at most
 
 
-def goblin_plaid_mixed(n):
-    from goblinbank.plaid import Plaid
+def worker_plaid_mixed(n):
+    from plaidproxy.plaid import Plaid
     layout = {"a1": ("depository", "checking"), "a2": ("depository", "savings"), "a3": ("investment", "ira")}
 
     def h(req: httpx.Request):
@@ -221,7 +221,7 @@ def test_you_can_change_a_banks_schedule_and_recurring_and_manual_banks_are_neve
     before = n["/transactions/sync"]
     for _ in range(96 * 40):
         now[0] += 900
-        res = sync.sync_all(db, goblin_plaid_mixed(n))
+        res = sync.sync_all(db, worker_plaid_mixed(n))
     assert any(x.get("skipped") == "manual" for x in res)
     saved = [x for x in db.all("SELECT * FROM plaid_items") if x["item_id"] == ids["Savings bank"]][0]
     assert saved["last_sync"] == 3_000_000.0                                                  # never pulled again on its own

@@ -1,8 +1,8 @@
-"""Pull data from Plaid into the goblin DB and record money-movement events."""
+"""Pull data from Plaid into the worker DB and record money-movement events."""
 from datetime import datetime, timezone
 
-from goblinbank import crypto, ledger, recur, settings
-from goblinbank.plaid import Plaid, PlaidError, PlaidLimit
+from plaidproxy import crypto, ledger, recur, settings
+from plaidproxy.plaid import Plaid, PlaidError, PlaidLimit
 
 KIND = {"depository": "cash", "credit": "credit", "investment": "investment", "loan": "loan", "brokerage": "investment"}
 CYCLE = {"WEEKLY": (1, "week"), "BIWEEKLY": (2, "week"), "SEMI_MONTHLY": (1, "month"), "MONTHLY": (1, "month"), "ANNUALLY": (1, "year")}
@@ -35,7 +35,7 @@ def record_balance(db, acct_id: str, name: str, balance: float | None, kind: str
 
 import time
 
-from goblinbank import plaidplan
+from plaidproxy import plaidplan
 
 clock = time.time          # tests replace this
 

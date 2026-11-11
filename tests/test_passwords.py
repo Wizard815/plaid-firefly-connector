@@ -9,8 +9,8 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-from goblinbank import gateway, security
-from goblinbank.security import Throttle, check_password_strength, hash_password, sha256, verify_password
+from plaidproxy import gateway, security
+from plaidproxy.security import Throttle, check_password_strength, hash_password, sha256, verify_password
 
 PW = "correct horse battery"
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,13 +28,13 @@ def site(tmp_path, monkeypatch):
     gen = load_gen()
     monkeypatch.setattr(gen, "ROOT", tmp_path)
     monkeypatch.setattr(gen, "SEC", tmp_path / ".secrets")
-    monkeypatch.delenv("GOBLIN_NEW_PASSWORD", raising=False)
-    (tmp_path / "goblins.yaml").write_text(yaml.safe_dump({"network": "testnet", "goblins": [{"name": "alice", "password": PW}, {"name": "bob"}]}))
+    monkeypatch.delenv("PROXY_NEW_PASSWORD", raising=False)
+    (tmp_path / "people.yaml").write_text(yaml.safe_dump({"network": "testnet", "people": [{"name": "alice", "password": PW}, {"name": "bob"}]}))
     return gen, tmp_path
 
 
 def everything(root: Path) -> str:
-    return "\n".join(p.read_text(errors="replace") for p in root.rglob("*") if p.is_file() and p.name != "goblins.yaml")
+    return "\n".join(p.read_text(errors="replace") for p in root.rglob("*") if p.is_file() and p.name != "people.yaml")
 
 
 # ---------------------------------------------------------------- hashing
@@ -78,7 +78,7 @@ def test_throttle_backs_off_doubles_and_clears(monkeypatch):
 # ---------------------------------------------------------------- gen_compose
 def test_password_is_hashed_never_written_and_the_admin_password_is_a_random_hex_file(site, capsys):
     gen, root = site
-    gen.main("goblins.yaml")
+    gen.main("people.yaml")
     out = capsys.readouterr().out
     alice = (root / ".secrets" / "alice.env").read_text()
     assert "USER_PASSWORD_SCRYPT=scrypt$131072$8$1$" in alice and "USER_TOKEN_SHA256" not in alice
@@ -86,37 +86,37 @@ def test_password_is_hashed_never_written_and_the_admin_password_is_a_random_hex
     assert "[bob] login token (shown once)" in out and "[alice] password set" in out and PW not in out
     assert PW not in everything(root) and sha256(PW) not in everything(root)                         # not in .secrets/*.env, gateway.yaml, the compose file, anywhere
     gw = yaml.safe_load((root / "gateway.yaml").read_text())
-    entries = {g["name"]: g for g in gw["goblins"]}
+    entries = {g["name"]: g for g in gw["people"]}
     assert entries["alice"]["user_password_scrypt"].startswith("scrypt$") and "user_token_sha256" not in entries["alice"] and "user_token_sha256" in entries["bob"]
     # the admin password: random hex in a 0600 file, printed, only its hash goes to the gateway
     ap = (root / ".secrets" / "admin.password").read_text().strip()
     assert re.fullmatch(r"[0-9a-f]{32}", ap) and oct((root / ".secrets" / "admin.password").stat().st_mode)[-3:] == "600"
     assert f"[admin] admin password: {ap}" in out and gw["admin_token_sha256"] == sha256(ap) and ap not in (root / "gateway.yaml").read_text()
     before = alice
-    gen.main("goblins.yaml")                                                                           # running it again keeps everything and prints the admin password again
+    gen.main("people.yaml")                                                                           # running it again keeps everything and prints the admin password again
     assert (root / ".secrets" / "alice.env").read_text() == before and (root / ".secrets" / "admin.password").read_text().strip() == ap
     assert f"[admin] admin password: {ap}" in capsys.readouterr().out
 
 
 def test_too_short_password_fails_with_a_clear_error(site):
     gen, root = site
-    (root / "goblins.yaml").write_text(yaml.safe_dump({"network": "n", "goblins": [{"name": "alice", "password": "tooshort"}]}))
+    (root / "people.yaml").write_text(yaml.safe_dump({"network": "n", "people": [{"name": "alice", "password": "tooshort"}]}))
     with pytest.raises(SystemExit) as e:
-        gen.main("goblins.yaml")
+        gen.main("people.yaml")
     assert "bad password for 'alice'" in str(e.value) and "at least 12" in str(e.value)
     assert not (root / ".secrets" / "alice.env").exists()
 
 
 def test_set_password_takes_it_from_the_environment_only(site, monkeypatch, capsys):
     gen, root = site
-    gen.main("goblins.yaml"); capsys.readouterr()
+    gen.main("people.yaml"); capsys.readouterr()
     with pytest.raises(SystemExit):
-        gen.main("--set-password", "bob")                                                              # no GOBLIN_NEW_PASSWORD: refuses
-    monkeypatch.setenv("GOBLIN_NEW_PASSWORD", "a brand new phrase here")
+        gen.main("--set-password", "bob")                                                              # no PROXY_NEW_PASSWORD: refuses
+    monkeypatch.setenv("PROXY_NEW_PASSWORD", "a brand new phrase here")
     gen.main("--set-password", "bob")
     bob = (root / ".secrets" / "bob.env").read_text()
     assert "USER_PASSWORD_SCRYPT=" in bob and "USER_TOKEN_SHA256" not in bob and "a brand new phrase here" not in everything(root)
-    monkeypatch.setenv("GOBLIN_NEW_PASSWORD", "short")
+    monkeypatch.setenv("PROXY_NEW_PASSWORD", "short")
     with pytest.raises(SystemExit):
         gen.main("--set-password", "bob")
 
@@ -131,12 +131,12 @@ def gateway_from(root: Path, monkeypatch):
 
 def test_password_login_session_throttle_and_change(site, monkeypatch, capsys):
     gen, root = site
-    gen.main("goblins.yaml"); capsys.readouterr()
+    gen.main("people.yaml"); capsys.readouterr()
     gw, _ = gateway_from(root, monkeypatch)
     ok = gw.post("/login", json={"name": "alice", "password": PW})
     assert ok.status_code == 200
     tok = ok.json()["token"]
-    assert gw.get("/g/alice/api/overview", headers={"Authorization": "Bearer " + tok}).status_code == 200      # the session token opens her goblin
+    assert gw.get("/g/alice/api/overview", headers={"Authorization": "Bearer " + tok}).status_code == 200      # the session token opens her worker
     assert gw.get("/g/bob/api/overview", headers={"Authorization": "Bearer " + tok}).status_code == 401          # and only hers
     assert gw.get("/g/alice/api/overview", headers={"Authorization": "Bearer " + PW}).status_code == 401         # the password itself is not a bearer token
     # wrong passwords: same answer for a real and an unknown name, then slowed down
@@ -165,7 +165,7 @@ def test_password_login_session_throttle_and_change(site, monkeypatch, capsys):
 
 def test_random_token_users_and_the_admin_password_still_work_and_are_throttled(site, monkeypatch, capsys):
     gen, root = site
-    gen.main("goblins.yaml")
+    gen.main("people.yaml")
     out = capsys.readouterr().out
     bob_tok = re.search(r"\[bob\] login token \(shown once\): (\S+)", out).group(1)
     ap = (root / ".secrets" / "admin.password").read_text().strip()
@@ -180,7 +180,7 @@ def test_random_token_users_and_the_admin_password_still_work_and_are_throttled(
 
 def test_admin_can_add_a_person_with_a_password(site, monkeypatch, capsys):
     gen, root = site
-    gen.main("goblins.yaml")
+    gen.main("people.yaml")
     ap = (root / ".secrets" / "admin.password").read_text().strip()
     gw, _ = gateway_from(root, monkeypatch)
     A = {"Authorization": "Bearer " + ap}

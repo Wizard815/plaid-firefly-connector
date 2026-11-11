@@ -1,14 +1,14 @@
 """Read-only data for other systems (Home Assistant, Pondering Orb, scripts), behind per-person API tokens.
 
-A token belongs to one goblin, has a name and a list of scopes, and can be revoked. Only a hash is stored. Tokens read
+A token belongs to one worker, has a name and a list of scopes, and can be revoked. Only a hash is stored. Tokens read
 data; nothing here can change anything."""
 import secrets
 import time
 from collections import defaultdict, deque
 from datetime import timedelta
 
-from goblinbank import ledger
-from goblinbank.security import sha256
+from plaidproxy import ledger
+from plaidproxy.security import sha256
 
 SCOPES = {
     "summary": "Totals: net worth, bills due, savings, alert counts (and the flat sensor values for Home Assistant)",
@@ -22,11 +22,11 @@ REFRESH_MIN_SECONDS = 300
 RESOURCES = {"summary": "summary", "ha": "summary", "bills": "bills", "alerts": "alerts", "savings": "savings", "transactions": "transactions"}
 
 
-def new_token(goblin: str) -> str:
-    return f"gb_{goblin}_{secrets.token_urlsafe(32)}"
+def new_token(worker: str) -> str:
+    return f"gb_{worker}_{secrets.token_urlsafe(32)}"
 
 
-def goblin_of(token: str) -> str | None:
+def worker_of(token: str) -> str | None:
     parts = (token or "").split("_", 2)
     return parts[1] if len(parts) == 3 and parts[0] == "gb" and parts[1] else None
 

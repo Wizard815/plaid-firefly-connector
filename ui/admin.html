@@ -36,11 +36,11 @@ async function call(path, method = "GET", body) {
 
 const b64 = () => { const a = crypto.getRandomValues(new Uint8Array(32)); return btoa(String.fromCharCode(...a)).replace(/\+/g, "-").replace(/\//g, "_"); };   // a Fernet key; made here, so the gateway never sees it
 const composeFor = (n, secret) => `services:
-  goblin-${n}:
+  worker-${n}:
     build: .
     environment:
-      ROLE: goblin
-      GOBLIN_NAME: ${n}
+      ROLE: worker
+      PERSON_NAME: ${n}
       INTERNAL_SECRET: ${secret}
       FIELD_KEY: ${b64()}
       GATEWAY_URL: http://gateway:8000
@@ -68,7 +68,7 @@ function renderPeople(rows) {
     } catch (err) { note.textContent = err.message; note.className = "small err"; }
   });
   box.replaceChildren(el("h2", { style: "margin:0 0 6px;font-size:1.1rem" }, "People"), el("p", { class: "small muted" }, "Everyone on this gateway. A person you add here can link with the others from their own Family links tab."),
-    el("table", {}, el("tbody", {}, rows.map((g) => el("tr", {}, el("td", {}, g.name), el("td", { class: "small muted" }, g.added_here ? "added here" : "from goblins.yaml"),
+    el("table", {}, el("tbody", {}, rows.map((g) => el("tr", {}, el("td", {}, g.name), el("td", { class: "small muted" }, g.added_here ? "added here" : "from people.yaml"),
       el("td", { class: "n", style: "white-space:nowrap" }, (() => { const m = el("button", { type: "button" }, "Manage"); m.addEventListener("click", () => { who = g.name; renderPerson(); document.getElementById('person').scrollIntoView({ behavior: 'smooth' }); }); return m; })(), " ", g.added_here ? (() => { const b = el("button", {}, "Remove"); b.addEventListener("click", async () => { if (!confirm("Remove " + g.name + " from the gateway? Their container keeps its data; they just cannot sign in or link.")) return; try { await call("/admin/people/" + encodeURIComponent(g.name), "DELETE"); show(); } catch (err) { note.textContent = err.message; note.className = "small err"; } }); return b; })() : ""))))),
     el("div", { style: "margin-top:12px" }, add), note, res);
   box.hidden = false;
@@ -95,12 +95,12 @@ async function renderPlaid(rows) {
   save.addEventListener("click", async () => {
     const people = {}; for (const p of per) { const o = {}; if (p.b.value.trim() !== "") o.plaid_budget_month = num(p.b); if (p.c.value.trim() !== "") o.plaid_daily_cap = num(p.c); if (p.fu.value.trim() !== "") o.firefly_url = p.fu.value.trim(); if (p.ft.value.trim() !== "") o.firefly_token = p.ft.value.trim(); if (Object.keys(o).length || (pol.firefly_token_set || {})[p.n]) people[p.n] = o; }
     const d = {}; if (fD.b.value.trim() !== "") d.plaid_budget_month = num(fD.b); if (fD.c.value.trim() !== "") d.plaid_daily_cap = num(fD.c); if (fD.m.value.trim() !== "") d.plaid_min_minutes = num(fD.m); if (rec.value) d.plaid_use_recurring = rec.value; if (pub.value.trim()) d.public_url = pub.value.trim(); if (kid.value.trim()) d.plaid_client_id = kid.value.trim(); if (ksec.value.trim()) d.plaid_secret = ksec.value.trim(); d.plaid_env = kenv.value; if (kred.value.trim()) d.plaid_redirect_url = kred.value.trim();
-    try { await call("/admin/policy", "PUT", { default: d, people }); note.textContent = "Saved. Each goblin picks it up within five minutes."; note.className = "small"; } catch (e) { note.textContent = e.message; note.className = "small err"; }
+    try { await call("/admin/policy", "PUT", { default: d, people }); note.textContent = "Saved. Each worker picks it up within five minutes."; note.className = "small"; } catch (e) { note.textContent = e.message; note.className = "small err"; }
   });
   const total = rows.reduce((a, g) => a + ((g.plaid || {}).est_monthly_cost || 0), 0);
   box.replaceChildren(el("h2", { style: "margin:0 0 6px;font-size:1.1rem" }, "Plaid limits"),
-    el("p", { class: "small muted" }, "These are enforced by every goblin and cannot be raised from inside the app. Empty = the built-in default. Budget is each person's own monthly maximum for Plaid (estimated at list price). Plaid bills you the combined total of everyone."),
-    el("p", { class: "small muted" }, "Plaid keys for everyone on this server, entered once (from dashboard.plaid.com, Developers, Keys). They are sent to each goblin, which keeps them encrypted; the secret is never shown again. Leave these empty to let each person enter their own."),
+    el("p", { class: "small muted" }, "These are enforced by every worker and cannot be raised from inside the app. Empty = the built-in default. Budget is each person's own monthly maximum for Plaid (estimated at list price). Plaid bills you the combined total of everyone."),
+    el("p", { class: "small muted" }, "Plaid keys for everyone on this server, entered once (from dashboard.plaid.com, Developers, Keys). They are sent to each worker, which keeps them encrypted; the secret is never shown again. Leave these empty to let each person enter their own."),
     el("div", { class: "row" }, kid, ksec, kenv, ktest),
     el("div", { class: "row" }, el("label", { class: "small" }, "Public address (https) ", pub),
       el("label", { class: "small" }, "Sign-in return address ", kred),
@@ -206,10 +206,10 @@ async function renderPerson() {
 async function show() {
   msg.textContent = "Checking…"; msg.className = "small muted";
   try {
-    const d = await call("/admin/status"), rows = d.goblins;
+    const d = await call("/admin/status"), rows = d.workers;
     const calls = (g, k, f = "calls") => get(g.calls, k, f);
     out.replaceChildren(
-      el("table", {}, el("thead", {}, el("tr", {}, ["Goblin", "Status", "App calls", "Token calls", "Webhooks", "Errors"].map((h, i) => el("th", i > 1 ? { class: "n" } : {}, h)))),
+      el("table", {}, el("thead", {}, el("tr", {}, ["Worker", "Status", "App calls", "Token calls", "Webhooks", "Errors"].map((h, i) => el("th", i > 1 ? { class: "n" } : {}, h)))),
         el("tbody", {}, rows.map((g) => el("tr", {}, el("td", {}, g.name), el("td", {}, el("span", { class: "pill " + (g.up ? "up" : "down") }, g.up ? "up" : "down")),
           el("td", { class: "n" }, calls(g, "app")), el("td", { class: "n" }, calls(g, "api_token")), el("td", { class: "n" }, calls(g, "webhook")),
           el("td", { class: "n" }, ["app", "api_token", "webhook"].reduce((a, k) => a + calls(g, k, "client_errors") + calls(g, k, "server_errors"), 0)))))),

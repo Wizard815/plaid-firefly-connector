@@ -11,9 +11,9 @@ from datetime import date, timedelta
 
 import httpx
 
-from goblinbank import crypto, settings as cfg
+from plaidproxy import crypto, settings as cfg
 
-MARK = "goblin-bank"
+MARK = "goblin-bank"          # the tag and internal reference on every transaction already in Firefly III: kept so nothing old looks new
 RUN_LIMIT = 300                      # transactions created or changed per run; the rest carries on at the next run
 MAX_ATTEMPTS = 5
 

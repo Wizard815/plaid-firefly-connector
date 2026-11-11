@@ -8,15 +8,15 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from devtools.seed import seed
-from goblinbank import goblin, ledger
-from goblinbank.db import DB
+from plaidproxy import worker, ledger
+from plaidproxy.db import DB
 
 H = {"X-Internal-Secret": "isec"}
 
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
-    for k, v in {"GOBLIN_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode()}.items():
+    for k, v in {"PERSON_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode()}.items():
         monkeypatch.setenv(k, v)
 
 
@@ -124,11 +124,11 @@ def test_transfers_and_income_are_not_spending():
 
 def test_endpoint_agent_tool_and_home_assistant_values():
     db = world()
-    c = TestClient(goblin.create_app(db=db, today=lambda: date(2026, 11, 15)))
+    c = TestClient(worker.create_app(db=db, today=lambda: date(2026, 11, 15)))
     f = c.get("/api/forecast?months=3", headers=H).json()
     assert f["months_used"] == 3 and f["income_avg"] == 4000 and c.get("/api/forecast", headers=H).status_code == 200 and c.get("/api/forecast").status_code == 401
     assert c.get("/api/forecast?months=999", headers=H).json()["months_used"] == 6                 # clamped to 24, and only 6 months exist
-    from goblinbank import external
+    from plaidproxy import external
     s = external.summary(db, date(2026, 11, 15))
     assert s["spend_month_projected"] == c.get("/api/forecast", headers=H).json()["projected"] and s["income_avg_month"] == 4000 and "spend_month_so_far" in external.flat(s)
 

@@ -1,8 +1,8 @@
-"""Per-goblin settings stored in the DB (secrets Fernet-encrypted). Env vars are the fallback."""
+"""Per-worker settings stored in the DB (secrets Fernet-encrypted). Env vars are the fallback."""
 import os
 import re
 
-from goblinbank import crypto
+from plaidproxy import crypto
 
 SOURCES = ("auto", "plaid", "csv", "live")
 SHAREABLE = ("net_worth", "subscriptions", "bills", "bill_list", "alerts", "alert_list", "savings", "spending", "robinhood_main", "robinhood_agent")

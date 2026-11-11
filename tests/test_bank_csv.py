@@ -3,8 +3,8 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from goblinbank import goblin, importers
-from goblinbank.db import DB
+from plaidproxy import worker, importers
+from plaidproxy.db import DB
 
 H = {"X-Internal-Secret": "isec"}
 CAPONE = "Transaction Date,Posted Date,Card No.,Description,Category,Debit,Credit\n2026-11-01,2026-11-02,1234,KROGER #66,Groceries,54.20,\n2026-11-03,2026-11-04,1234,PAYMENT THANK YOU,Payment,,300.00\n2026-11-03,2026-11-04,1234,COFFEE,Dining,4.50,\n2026-11-03,2026-11-04,1234,COFFEE,Dining,4.50,\n"
@@ -14,7 +14,7 @@ CHECKING = "Account notes,,,\nDate,Description,Amount,Balance\n11/02/2026,PAYROL
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
-    for k, v in {"GOBLIN_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode()}.items():
+    for k, v in {"PERSON_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode()}.items():
         monkeypatch.setenv(k, v)
 
 
@@ -31,7 +31,7 @@ def test_credit_card_file_with_positive_purchases_needs_flip():
 
 
 def test_a_balance_column_sets_the_account_balance_and_reimport_adds_nothing():
-    c = TestClient(goblin.create_app(db=DB(":memory:")))
+    c = TestClient(worker.create_app(db=DB(":memory:")))
     a = c.post("/api/accounts", headers=H, json={"name": "Axos Checking", "institution": "Axos", "kind": "cash", "balance": 0}).json()
     r = c.post(f"/import/bank-csv?account_id={a['id']}", headers=H, content=CHECKING).json()
     assert r == {"rows": 2, "added": 2, "balance": 3068.8}
@@ -43,11 +43,11 @@ def test_a_balance_column_sets_the_account_balance_and_reimport_adds_nothing():
 
 
 def test_rejects_unreadable_files_and_plaid_linked_accounts():
-    c = TestClient(goblin.create_app(db=DB(":memory:")))
+    c = TestClient(worker.create_app(db=DB(":memory:")))
     a = c.post("/api/accounts", headers=H, json={"name": "X", "kind": "cash", "balance": 0}).json()
     assert c.post(f"/import/bank-csv?account_id={a['id']}", headers=H, content="foo,bar\n1,2\n").status_code == 422
     db = DB(":memory:")
-    c2 = TestClient(goblin.create_app(db=db))
+    c2 = TestClient(worker.create_app(db=db))
     db.conn.execute("INSERT INTO accounts(id,source,institution,name,kind,balance) VALUES('p1','plaid','Huntington','Checking','cash',1)"); db.conn.commit()
     assert c2.post("/import/bank-csv?account_id=p1", headers=H, content=CHECKING).status_code == 409
     assert c.post("/import/bank-csv?account_id=nope", headers=H, content=CHECKING).status_code == 404

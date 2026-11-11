@@ -1,11 +1,11 @@
-# Copy to goblins.yaml and edit. Each entry below becomes one private container (a "goblin") for one person.
+# Copy to people.yaml and edit. Each entry below becomes one private container (a "worker") for one person.
 # You can also add people later from the gateway's /admin page; this file is just the starting set.
-goblins:
+people:
   - name: alice            # lowercase letters, digits and hyphens. This is what the person signs in with.
     # password: "a few words make a good password"
                            # OPTIONAL. The person's own password, 12 or more characters (generation fails with a clear error if it is shorter).
                            # Only a salted scrypt hash is stored; this plaintext is never copied into any generated file, but it does sit here
-                           # in goblins.yaml (which is git-ignored), so delete the line after the first run, or leave it out and use the install
+                           # in people.yaml (which is git-ignored), so delete the line after the first run, or leave it out and use the install
                            # prompt / `./scripts/install.sh --set-password alice` instead (those never write it to a file).
                            # A password you can remember is much weaker than a random token, so make it long. Wrong guesses are slowed down per name.
                            # Leave it out and a random high-entropy login token is generated and printed once instead.
@@ -19,6 +19,6 @@ goblins:
 # listen: 127.0.0.1       # who can open the app: 127.0.0.1 = only this machine (the safe default). Use your server's LAN address, or 0.0.0.0, to open it from other devices
                           # on your network (plain http: fine at home, but use Tailscale or HTTPS for anything beyond that).
 # port: 6421              # the port the app listens on (this machine only); 6421 is the default
-network: ai_net          # existing external Docker network for goblin <-> connector traffic (must already exist: docker network create ai_net)
+network: ai_net          # existing external Docker network for worker <-> connector traffic (must already exist: docker network create ai_net)
 # orb_key: true            # uncomment to create a read-only key for Pondering Orb (printed once)
 orb_key: false

@@ -1,4 +1,4 @@
-"""Per-goblin SQLite store. Signed amounts: positive = money IN, negative = money OUT."""
+"""Per-worker SQLite store. Signed amounts: positive = money IN, negative = money OUT."""
 import os
 import sqlite3
 import threading
@@ -77,7 +77,7 @@ DEFAULT_CATEGORIES = [("Income", "income"), ("Food", "expense"), ("Groceries", "
 
 class DB:
     def __init__(self, path: str | None = None):
-        path = path or os.environ.get("GOBLIN_DB", "/data/goblin.db")
+        path = path or os.environ.get("WORKER_DB", "/data/proxy.db")
         if path != ":memory:":
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         self.conn = sqlite3.connect(path, check_same_thread=False)

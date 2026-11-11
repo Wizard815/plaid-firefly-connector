@@ -5,8 +5,8 @@ from datetime import date, timedelta
 import pytest
 
 from devtools.seed import seed
-from goblinbank import ledger, recur
-from goblinbank.db import DB
+from plaidproxy import ledger, recur
+from plaidproxy.db import DB
 
 TODAY = date(2026, 11, 7)
 SEEDS = range(1, 13)

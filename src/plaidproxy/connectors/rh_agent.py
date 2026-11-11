@@ -27,7 +27,7 @@ class AgentConnector:
         self._cached: tuple[float, dict] | None = None
 
     def _config(self) -> dict:
-        """Env wins when RH_MCP_URL is set; otherwise ask the goblin (Settings page), cached 30s."""
+        """Env wins when RH_MCP_URL is set; otherwise ask the worker (Settings page), cached 30s."""
         if os.environ.get("RH_MCP_URL") or not self._config_url:
             return {"url": os.environ.get("RH_MCP_URL", ""), "token": os.environ.get("RH_MCP_TOKEN", ""),
                     "read_tools": os.environ.get("RH_MCP_READ_TOOLS", ""),

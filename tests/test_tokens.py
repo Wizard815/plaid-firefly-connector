@@ -1,4 +1,4 @@
-"""API tokens for Home Assistant / scripts, through the gateway to the right goblin, with scopes, revoke and rate limits."""
+"""API tokens for Home Assistant / scripts, through the gateway to the right worker, with scopes, revoke and rate limits."""
 from datetime import date
 
 import httpx
@@ -7,9 +7,9 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from devtools.seed import seed
-from goblinbank import external, gateway, goblin
-from goblinbank.db import DB
-from goblinbank.security import sha256
+from plaidproxy import external, gateway, worker
+from plaidproxy.db import DB
+from plaidproxy.security import sha256
 
 TODAY = date(2026, 11, 7)
 H = {"X-Internal-Secret": "isec"}
@@ -17,7 +17,7 @@ H = {"X-Internal-Secret": "isec"}
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
-    for k, v in {"GOBLIN_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode(), "API_RATE_PER_MIN": "5"}.items():
+    for k, v in {"PERSON_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode(), "API_RATE_PER_MIN": "5"}.items():
         monkeypatch.setenv(k, v)
 
 
@@ -25,13 +25,13 @@ def rig():
     db = DB(":memory:")
     seed(db, 3, TODAY)
     db.conn.execute("INSERT INTO savings(name,kind,balance,apy) VALUES('HYSA','savings',4000,4)"); db.conn.commit()
-    g = TestClient(goblin.create_app(db=db, today=lambda: TODAY))
+    g = TestClient(worker.create_app(db=db, today=lambda: TODAY))
 
-    def to_goblin(req: httpx.Request):
+    def to_worker(req: httpx.Request):
         r = g.request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
         return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
-    cfg = {"goblins": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("login")}], "orb_keys": []}
-    return g, TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_goblin))), db
+    cfg = {"people": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("login")}], "orb_keys": []}
+    return g, TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_worker))), db
 
 
 def mint(g, scopes, name="Home Assistant"):
@@ -43,7 +43,7 @@ def mint(g, scopes, name="Home Assistant"):
 def test_token_lifecycle_and_storage():
     g, gw, db = rig()
     t = mint(g, ["summary", "bills"])
-    assert t["token"].startswith("gb_alice_") and external.goblin_of(t["token"]) == "alice" and "not shown again" in t["note"]
+    assert t["token"].startswith("gb_alice_") and external.worker_of(t["token"]) == "alice" and "not shown again" in t["note"]
     assert t["token"] not in str(db.all("SELECT * FROM api_tokens"))                      # only a hash is stored
     listing = g.get("/api/tokens", headers=H).json()
     assert [(x["name"], x["scopes"], x["revoked"]) for x in listing["items"]] == [("Home Assistant", ["bills", "summary"], 0)] and "transactions" in listing["scopes"]
@@ -54,7 +54,7 @@ def test_token_lifecycle_and_storage():
     assert gw.get("/api/v1/me/summary", headers={"Authorization": "Bearer " + t["token"]}).status_code == 401      # revoked means dead
 
 
-def test_gateway_routes_a_token_to_its_goblin_and_enforces_scopes():
+def test_gateway_routes_a_token_to_its_worker_and_enforces_scopes():
     g, gw, _ = rig()
     t = mint(g, ["summary", "savings"])
     A = {"Authorization": "Bearer " + t["token"]}
@@ -80,7 +80,7 @@ def test_bad_tokens_all_look_the_same():
         assert r.status_code == 401 and r.json()["detail"] == "invalid token", tok
     assert gw.get("/api/v1/me/summary").status_code == 401
     assert g.get("/external/summary", headers={**H, "X-API-Token": "nope"}).status_code == 401
-    assert g.get("/external/summary").status_code == 401                                            # the goblin itself needs the gateway's secret too
+    assert g.get("/external/summary").status_code == 401                                            # the worker itself needs the gateway's secret too
 
 
 def test_each_scope_returns_only_its_data_and_transactions_stay_private_by_default(monkeypatch):
@@ -113,11 +113,11 @@ def test_rate_limit_and_last_used():
 
 def test_orb_summary_shows_only_what_was_shared():
     g, gw, db = rig()
-    cfg = {"goblins": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("login")}], "orb_keys": [{"sha256": sha256("orb"), "scopes": ["summary:read"]}]}
-    def to_goblin(req):
+    cfg = {"people": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("login")}], "orb_keys": [{"sha256": sha256("orb"), "scopes": ["summary:read"]}]}
+    def to_worker(req):
         r = g.request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
         return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
-    orb = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_goblin)))
+    orb = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_worker)))
     O = {"Authorization": "Bearer orb"}
     assert orb.get("/api/v1/summary", headers=O).json()["goblins"]["alice"] == {"goblin": "alice"}                     # nothing shared yet
     g.put("/api/settings", headers=H, json={"share": ["net_worth", "bills", "alerts", "savings"]})
@@ -155,16 +155,16 @@ def fresh_rig(monkeypatch, **kw):
     monkeypatch.setenv("PLAID_CLIENT_ID", "c"); monkeypatch.setenv("PLAID_SECRET", "s")
     t, calls = counting_plaid()
     db = DB(":memory:")
-    g = TestClient(goblin.create_app(db=db, today=lambda: TODAY, plaid_transport=t, **kw))
+    g = TestClient(worker.create_app(db=db, today=lambda: TODAY, plaid_transport=t, **kw))
     g.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "Bank"})
     db.conn.execute("UPDATE plaid_items SET schedule='always'"); db.conn.commit()      # these tests are about on-demand and automatic syncs, not the per-bank schedule
     calls["sync"] = 0
 
-    def to_goblin(req: httpx.Request):
+    def to_worker(req: httpx.Request):
         r = g.request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
         return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
-    cfg = {"goblins": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("login")}], "orb_keys": []}
-    return g, TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_goblin))), calls
+    cfg = {"people": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("login")}], "orb_keys": []}
+    return g, TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_worker))), calls
 
 
 def test_refresh_on_demand_needs_its_own_scope_and_is_rate_limited(monkeypatch):
@@ -186,7 +186,7 @@ def test_refresh_allowed_again_after_the_window(monkeypatch):
     full = {"Authorization": "Bearer " + mint(g, ["summary", "refresh"])["token"]}
     gw.get("/api/v1/me/ha?refresh=1", headers=full)
     assert calls["sync"] == 1
-    monkeypatch.setattr("goblinbank.external.REFRESH_MIN_SECONDS", 0)
+    monkeypatch.setattr("plaidproxy.external.REFRESH_MIN_SECONDS", 0)
     gw.get("/api/v1/me/ha?refresh=1", headers=full)
     assert calls["sync"] == 2
 
@@ -211,7 +211,7 @@ def test_autosync_off_by_default_in_tests_and_survives_errors(monkeypatch):
     assert calls["sync"] == 0                                                                                       # no thread unless asked
     def boom(req): raise httpx.ConnectError("down")
     monkeypatch.setenv("PLAID_CLIENT_ID", "c"); monkeypatch.setenv("PLAID_SECRET", "s")
-    g2 = TestClient(goblin.create_app(db=DB(":memory:"), today=lambda: TODAY, plaid_transport=httpx.MockTransport(boom), autosync=True, autosync_tick=0.05))
+    g2 = TestClient(worker.create_app(db=DB(":memory:"), today=lambda: TODAY, plaid_transport=httpx.MockTransport(boom), autosync=True, autosync_tick=0.05))
     _time.sleep(0.3)
     assert g2.get("/health").status_code == 200                                                                     # the app stays up while syncs fail
 

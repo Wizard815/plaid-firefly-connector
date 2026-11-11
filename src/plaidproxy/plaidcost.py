@@ -1,4 +1,4 @@
-"""What Plaid charges on the pay-as-you-go plan (the list price you pasted), and an estimate of this goblin's month from what it really uses.
+"""What Plaid charges on the pay-as-you-go plan (the list price you pasted), and an estimate of this worker's month from what it really uses.
 
 Billed per linked item per month: Transactions $0.30, Recurring Transactions $0.15 (only if used), Investments Holdings $0.18 (only for items with an investment account).
 Billed per call: Transactions Refresh $0.12 (successful), Balance $0.10. Auth, Identity, Income, Assets and the rest are not used by this app.
@@ -9,7 +9,7 @@ LIST_AS_OF = "pay-as-you-go list price you provided"
 
 
 def estimate(db, use_recurring: bool, by_endpoint: dict) -> dict:
-    from goblinbank import plaidplan
+    from plaidproxy import plaidplan
     items = db.all("SELECT * FROM plaid_items")
     lines = []
     n = len(items)

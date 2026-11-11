@@ -8,8 +8,8 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from goblinbank import goblin, notify
-from goblinbank.db import DB
+from plaidproxy import worker, notify
+from plaidproxy.db import DB
 
 TODAY = date(2026, 11, 7)
 H = {"X-Internal-Secret": "isec"}
@@ -17,7 +17,7 @@ H = {"X-Internal-Secret": "isec"}
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
-    for k, v in {"GOBLIN_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode()}.items():
+    for k, v in {"PERSON_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode()}.items():
         monkeypatch.setenv(k, v)
 
 
@@ -28,7 +28,7 @@ def rig(status=200, **kw):
         sent.append({"url": str(req.url), "body": json.loads(req.content)})
         return httpx.Response(status, text="ok")
     db = DB(":memory:")
-    c = TestClient(goblin.create_app(db=db, today=lambda: TODAY, notify_transport=httpx.MockTransport(h), **kw))
+    c = TestClient(worker.create_app(db=db, today=lambda: TODAY, notify_transport=httpx.MockTransport(h), **kw))
     return c, db, sent
 
 
@@ -148,7 +148,7 @@ def test_message_is_capped_and_never_contains_secrets():
     for i in range(20):
         db.conn.execute("INSERT INTO accounts(id,source,name,kind,balance) VALUES(?,?,?,?,?)", (f"n{i}", "manual", f"Acct {i}", "cash", -1.0))
     db.conn.commit()
-    from goblinbank import ledger
+    from plaidproxy import ledger
     body = notify.payload(ledger.alerts(db, TODAY), "alice")
     assert body["text"].count("**") // 2 == notify.MAX_PER_MESSAGE and "and 5 more in the app" in body["text"] and "20 things" in body["text"]
 
@@ -157,7 +157,7 @@ def test_background_loop_notifies_on_its_own(monkeypatch):
     sent = []
     t = httpx.MockTransport(lambda r: sent.append(1) or httpx.Response(200))
     db = DB(":memory:")
-    c = TestClient(goblin.create_app(db=db, today=lambda: TODAY, notify_transport=t, autosync=True, autosync_tick=0.05))
+    c = TestClient(worker.create_app(db=db, today=lambda: TODAY, notify_transport=t, autosync=True, autosync_tick=0.05))
     c.put("/api/settings", headers=H, json={"notify_url": HOOK, "sync_minutes": "0"})                           # data sync off, alerts still watched
     overdrawn(db)
     deadline = time.time() + 5
@@ -179,7 +179,7 @@ def rig2(fail=()):
         sent.append((str(req.url), json.loads(req.content)))
         return httpx.Response(500 if str(req.url) in fail else 200)
     db = DB(":memory:")
-    return TestClient(goblin.create_app(db=db, today=lambda: TODAY, notify_transport=httpx.MockTransport(h))), db, sent
+    return TestClient(worker.create_app(db=db, today=lambda: TODAY, notify_transport=httpx.MockTransport(h))), db, sent
 
 
 def test_test_buttons_per_route_and_secret_storage():

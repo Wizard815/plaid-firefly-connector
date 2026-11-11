@@ -33,7 +33,7 @@ def require_internal(request: Request, secret: str) -> None:
 # ---------------------------------------------------------------- passwords people choose
 # A password a person picks has far less entropy than a random 256-bit token, so it is never kept as a plain sha256: it is salted and run through scrypt
 # with the OWASP-recommended minimum cost (N=2^17, r=8, p=1, about 128 MiB and a fraction of a second). Random tokens (api tokens, the admin password,
-# the per-goblin fallback token) are high entropy, so the fast sha256 check above stays correct for them.
+# the per-worker fallback token) are high entropy, so the fast sha256 check above stays correct for them.
 SCRYPT_N, SCRYPT_R, SCRYPT_P = 2 ** 17, 8, 1
 MIN_PASSWORD = 12
 

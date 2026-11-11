@@ -3,7 +3,7 @@ Signed amounts everywhere: positive = money in, negative = money out."""
 import re
 from datetime import date, timedelta
 
-from goblinbank import recur, settings as cfg
+from plaidproxy import recur, settings as cfg
 
 OUT_KINDS = {"credit", "loan"}
 
@@ -216,7 +216,7 @@ def late_payments(db, today: date, grace: int = 3, look_back: int = 3) -> list[d
 
 # ------------------------------------------------------------------ joint accounts
 def mine(a: dict, bal: float | None = None) -> float:
-    """My part of an account's balance. A joint account is linked in both people's goblins, so each counts only their share (default all of it)."""
+    """My part of an account's balance. A joint account is linked in both people's workers, so each counts only their share (default all of it)."""
     b = a["balance"] if bal is None else bal
     s = a.get("my_share")
     return (b or 0.0) * (100.0 if s is None else s) / 100.0

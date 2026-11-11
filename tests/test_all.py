@@ -2,13 +2,13 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from goblinbank import gateway, goblin
-from goblinbank.db import DB
-from goblinbank.connectors.base import make_connector_app
-from goblinbank.connectors.rh_agent import AgentConnector
-from goblinbank.connectors.rh_csv import CsvConnector
-from goblinbank.connectors.rh_live import LiveConnector
-from goblinbank.security import sha256
+from plaidproxy import gateway, worker
+from plaidproxy.db import DB
+from plaidproxy.connectors.base import make_connector_app
+from plaidproxy.connectors.rh_agent import AgentConnector
+from plaidproxy.connectors.rh_csv import CsvConnector
+from plaidproxy.connectors.rh_live import LiveConnector
+from plaidproxy.security import sha256
 
 CSV = """Activity Date,Process Date,Settle Date,Instrument,Description,Trans Code,Quantity,Price,Amount
 1/2/2026,1/2/2026,1/4/2026,AAPL,Apple,Buy,10,$100.00,($1000.00)
@@ -94,11 +94,11 @@ def _bridge(app):
 
 
 def test_end_to_end(csv_dir, monkeypatch):
-    for k, v in {"GOBLIN_NAME": "alice", "INTERNAL_SECRET": "isec", "CONNECTOR_SECRET": "conn",
+    for k, v in {"PERSON_NAME": "alice", "INTERNAL_SECRET": "isec", "CONNECTOR_SECRET": "conn",
                  "SHARE": "robinhood_main", "RH_CSV_DIR": str(csv_dir), "GATEWAY_URL": "http://gw"}.items():
         monkeypatch.setenv(k, v)
-    g = goblin.create_app(db=DB(":memory:"))
-    cfg = {"goblins": [
+    g = worker.create_app(db=DB(":memory:"))
+    cfg = {"people": [
         {"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("alice-tok")},
         {"name": "bob", "url": "http://bob", "internal_secret": "x", "user_token_sha256": sha256("bob-tok")}],
         "orb_keys": [{"sha256": sha256("orbkey"), "scopes": ["summary:read"]}]}
@@ -107,10 +107,10 @@ def test_end_to_end(csv_dir, monkeypatch):
 
     A = {"Authorization": "Bearer alice-tok"}
     assert gw.get("/g/alice/robinhood/main", headers=A).json()["positions"][0]["symbol"] == "AAPL"
-    # isolation: bob's token can't open alice's goblin; unknown goblin looks identical
+    # isolation: bob's token can't open alice's worker; unknown worker looks identical
     assert gw.get("/g/alice/robinhood/main", headers={"Authorization": "Bearer bob-tok"}).status_code == 401
     assert gw.get("/g/nobody/health", headers=A).status_code == 401
-    # orb: needs the key; sees only shared data; an unreachable goblin degrades, not crashes
+    # orb: needs the key; sees only shared data; an unreachable worker degrades, not crashes
     assert gw.get("/api/v1/summary").status_code == 401
     out = gw.get("/api/v1/summary", headers={"Authorization": "Bearer orbkey"}).json()["goblins"]
     assert out["alice"]["robinhood_main"]["source"] == "rh-main-csv"

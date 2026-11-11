@@ -18,15 +18,15 @@ from cryptography.fernet import Fernet
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
 os.environ.setdefault("PLAID_ENV", "sandbox")
-os.environ.update({"GOBLIN_NAME": "sandbox", "INTERNAL_SECRET": "x", "FIELD_KEY": Fernet.generate_key().decode()})
+os.environ.update({"PERSON_NAME": "sandbox", "INTERNAL_SECRET": "x", "FIELD_KEY": Fernet.generate_key().decode()})
 if os.environ.get("PLAID_AUTH") == "header":
     os.environ.setdefault("PLAID_SECRET", "proxy-injected")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from goblinbank import goblin  # noqa: E402
-from goblinbank.db import DB  # noqa: E402
-from goblinbank.plaid import Plaid, PlaidError  # noqa: E402
+from plaidproxy import worker  # noqa: E402
+from plaidproxy.db import DB  # noqa: E402
+from plaidproxy.plaid import Plaid, PlaidError  # noqa: E402
 
 H = {"X-Internal-Secret": "x"}
 results = []
@@ -53,7 +53,7 @@ def main():
         check("credentials accepted by Plaid Sandbox", False, str(e))
         sys.exit(1)
     db = DB(":memory:")
-    app = TestClient(goblin.create_app(db=db, today=date.today))
+    app = TestClient(worker.create_app(db=db, today=date.today))
     get = lambda p: app.get(p, headers=H)
 
     # --- link: a sandbox item for Plaid's test bank, then through OUR exchange endpoint

@@ -3,7 +3,7 @@ __pycache__/
 .venv/
 .secrets/
 data/
-goblins.yaml
+people.yaml
 gateway.yaml
 docker-compose.generated.yml
 .env

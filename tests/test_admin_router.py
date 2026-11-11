@@ -4,9 +4,9 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from goblinbank import gateway, goblin
-from goblinbank.db import DB
-from goblinbank.security import sha256
+from plaidproxy import gateway, worker
+from plaidproxy.db import DB
+from plaidproxy.security import sha256
 from tests.fake_firefly import FakeFirefly
 from tests.test_firefly import approve, bank, d, H as GH
 
@@ -15,7 +15,7 @@ A = {"Authorization": "Bearer adm"}
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
-    for k, v in {"GOBLIN_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode(), "PLAID_CLIENT_ID": "c", "PLAID_SECRET": "s"}.items():
+    for k, v in {"PERSON_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode(), "PLAID_CLIENT_ID": "c", "PLAID_SECRET": "s"}.items():
         monkeypatch.setenv(k, v)
 
 
@@ -27,19 +27,19 @@ def world(tmp_path, monkeypatch):
     def plaid(req: httpx.Request):
         plaid_calls.append(req.url.path)
         return httpx.Response(200, json={"link_token": "link-sandbox-x"} if req.url.path == "/link/token/create" else {})
-    g = TestClient(goblin.create_app(db=db, firefly_transport=ff.transport(), plaid_transport=httpx.MockTransport(plaid)))
+    g = TestClient(worker.create_app(db=db, firefly_transport=ff.transport(), plaid_transport=httpx.MockTransport(plaid)))
     g.put("/api/settings", headers={"X-Internal-Secret": "isec"}, json={"firefly_url": "https://firefly.example.com", "firefly_token": "good-token"})
 
-    def to_goblin(req: httpx.Request):
+    def to_worker(req: httpx.Request):
         r = g.request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
         return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
-    cfg = {"goblins": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("t")}], "orb_keys": [], "admin_token_sha256": sha256("adm")}
+    cfg = {"people": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("t")}], "orb_keys": [], "admin_token_sha256": sha256("adm")}
     online = {"v": True}
 
     def route(req):
         if not online["v"]:
             raise httpx.ConnectError("down")
-        return to_goblin(req)
+        return to_worker(req)
     return TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(route))), db, ff, plaid_calls, online
 
 
@@ -162,20 +162,20 @@ def test_a_joint_account_is_shared_with_a_second_person_who_must_approve_it_for_
         return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
 
     def person(name):
-        monkeypatch.setenv("GOBLIN_NAME", name)
+        monkeypatch.setenv("PERSON_NAME", name)
         ff, db = FakeFirefly(), DB(":memory:")
-        g = TestClient(goblin.create_app(db=db, firefly_transport=ff.transport(), transport=httpx.MockTransport(to_gateway)))
+        g = TestClient(worker.create_app(db=db, firefly_transport=ff.transport(), transport=httpx.MockTransport(to_gateway)))
         g.put("/api/settings", headers={"X-Internal-Secret": "isec"}, json={"firefly_url": f"https://{name}.example.com", "firefly_token": "good-token"})
         return g, db, ff
     (ga, dba, ffa), (gb, dbb, ffb) = person("alice"), person("bob")
     bank(dba)
     apps = {"alice": ga, "bob": gb}
 
-    def to_goblin(req: httpx.Request):
+    def to_worker(req: httpx.Request):
         r = apps[req.url.host].request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
         return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
-    cfg = {"goblins": [{"name": n, "url": f"http://{n}", "internal_secret": "isec", "user_token_sha256": sha256("t" + n)} for n in apps], "orb_keys": [], "admin_token_sha256": sha256("adm")}
-    gw = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_goblin)))
+    cfg = {"people": [{"name": n, "url": f"http://{n}", "internal_secret": "isec", "user_token_sha256": sha256("t" + n)} for n in apps], "orb_keys": [], "admin_token_sha256": sha256("adm")}
+    gw = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_worker)))
     holder["gw"] = gw
     approve(ga)
     assert gw.put("/admin/p/alice/api/shares/plaid-chk", json={"peer": "bob"}).status_code == 401
@@ -234,7 +234,7 @@ def test_odd_spellings_do_not_get_round_the_admin_rule(tmp_path, monkeypatch, pa
     assert db.one("SELECT mode FROM ff_accounts WHERE account_id='plaid-chk'")["mode"] == "pending"
 
 
-def test_a_person_cannot_reach_the_goblins_internal_endpoints(tmp_path, monkeypatch):
+def test_a_person_cannot_reach_the_workers_internal_endpoints(tmp_path, monkeypatch):
     gw, db, ff, _, _ = world(tmp_path, monkeypatch)
     P = {"Authorization": "Bearer t"}
     r = gw.post("/g/alice/internal/share/inbox", headers=P, json={"type": "share-data", "sender": "bob", "payload": {"account": {"id": "x", "name": "Fake"}, "transactions": []}})

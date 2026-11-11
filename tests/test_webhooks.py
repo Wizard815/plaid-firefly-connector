@@ -12,9 +12,9 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, utils
 from fastapi.testclient import TestClient
 
-from goblinbank import gateway, goblin, ledger, plaidplan, sync
-from goblinbank.db import DB
-from goblinbank.security import sha256
+from plaidproxy import gateway, worker, ledger, plaidplan, sync
+from plaidproxy.db import DB
+from plaidproxy.security import sha256
 
 H = {"X-Internal-Secret": "isec"}
 KEY = ec.generate_private_key(ec.SECP256R1())
@@ -32,7 +32,7 @@ def signed(body: bytes) -> str:
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
-    for k, v in {"GOBLIN_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode(), "PLAID_CLIENT_ID": "c", "PLAID_SECRET": "s"}.items():
+    for k, v in {"PERSON_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode(), "PLAID_CLIENT_ID": "c", "PLAID_SECRET": "s"}.items():
         monkeypatch.setenv(k, v)
 
 
@@ -58,7 +58,7 @@ def rig():
             return httpx.Response(200, json={})
         return httpx.Response(404, json={"error_code": "X", "error_message": p})
     db = DB(":memory:")
-    c = TestClient(goblin.create_app(db=db, plaid_transport=httpx.MockTransport(h), inline_webhooks=True))
+    c = TestClient(worker.create_app(db=db, plaid_transport=httpx.MockTransport(h), inline_webhooks=True))
     c.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "Huntington"})
     return c, db, n, posted
 
@@ -98,14 +98,14 @@ def test_a_live_bank_is_not_polled_daily_and_recurring_arrives_by_webhook(monkey
     for _ in range(96 * 6):                                                              # six days of the 15-minute timer: nothing is due
         now[0] += 900
         db.conn.execute("UPDATE plaid_items SET last_hook=?", (now[0],)); db.conn.commit()
-        sync.sync_all(db, goblin_plaid(n))
+        sync.sync_all(db, worker_plaid(n))
     assert n["/transactions/sync"] == before and n["/transactions/recurring/get"] == 1          # no polling, and no recurring call beyond the one made when the bank was linked
     r = hook(c, {"webhook_type": "TRANSACTIONS", "webhook_code": "RECURRING_TRANSACTIONS_UPDATE", "item_id": "item-1"})
     assert r.json() == {"recurring": "updated"}
 
 
-def goblin_plaid(n):
-    from goblinbank.plaid import Plaid
+def worker_plaid(n):
+    from plaidproxy.plaid import Plaid
     p = Plaid(httpx.MockTransport(lambda r: (n.update([r.url.path]), httpx.Response(200, json={"added": [], "modified": [], "removed": [], "next_cursor": "c", "has_more": False, "accounts": [], "outflow_streams": []}))[1]))
     p.client_id, p.secret = "c", "s"
     return p
@@ -125,7 +125,7 @@ def test_a_login_problem_becomes_an_alert_and_clears_when_repaired():
 
 def test_one_bank_failing_does_not_stop_the_others(monkeypatch):
     c, db, n, _ = rig()
-    from goblinbank.plaid import PlaidError
+    from plaidproxy.plaid import PlaidError
 
     class Boom:
         def accounts(self, t): raise PlaidError("ITEM_LOGIN_REQUIRED: the login details changed")
@@ -135,7 +135,7 @@ def test_one_bank_failing_does_not_stop_the_others(monkeypatch):
     assert len(out) == 2 and all("error" in o for o in out)
     assert db.one("SELECT status FROM plaid_items WHERE item_id='item-2'")["status"] == "error"
     # but our own cap is not a bank problem: no alert, and the round stops
-    from goblinbank.plaid import PlaidLimit
+    from plaidproxy.plaid import PlaidLimit
     db.conn.execute("UPDATE plaid_items SET status=NULL"); db.conn.commit()
 
     class Capped:
@@ -175,14 +175,14 @@ def test_the_gateway_admin_public_address_sets_the_webhook_and_banks_learn_it(tm
             return httpx.Response(200, json={})
         return httpx.Response(404, json={"error_code": "X", "error_message": p})
     db = DB(":memory:")
-    g = goblin.create_app(db=db, plaid_transport=httpx.MockTransport(h), transport=httpx.MockTransport(to_gateway))
+    g = worker.create_app(db=db, plaid_transport=httpx.MockTransport(h), transport=httpx.MockTransport(to_gateway))
     tc = TestClient(g)
 
-    def to_goblin(req: httpx.Request):
+    def to_worker(req: httpx.Request):
         r = tc.request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
         return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
-    cfg = {"goblins": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("t")}], "orb_keys": [], "admin_token_sha256": sha256("adm")}
-    gw = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_goblin)))
+    cfg = {"people": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("t")}], "orb_keys": [], "admin_token_sha256": sha256("adm")}
+    gw = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_worker)))
     holder["gw"] = gw
     A = {"Authorization": "Bearer adm"}
     tc.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "Huntington"})        # linked before any address existed
@@ -194,11 +194,11 @@ def test_the_gateway_admin_public_address_sets_the_webhook_and_banks_learn_it(tm
     assert ("update", "https://bank.example.com/webhooks/plaid") not in posted                            # and not again
     tc.post("/plaid/link-token", headers=H)
     assert posted[-1] == ("link", "https://bank.example.com/webhooks/plaid", "https://bank.example.com/link")   # new links carry the webhook and the OAuth return address
-    # the gateway forgets which bank is whose when it restarts; the goblin tells it again
-    gw2 = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_goblin)))
+    # the gateway forgets which bank is whose when it restarts; the worker tells it again
+    gw2 = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_worker)))
     holder["gw"] = gw2
     assert gw2.post("/webhooks/plaid", json={"item_id": "item-1"}).json() == {"ignored": True}
-    tc.post("/sync", headers=H)                                                               # any tick of the goblin's background round re-registers its banks
+    tc.post("/sync", headers=H)                                                               # any tick of the worker's background round re-registers its banks
     assert gw2.post("/webhooks/plaid", json={"item_id": "item-1", "webhook_type": "TRANSACTIONS"}).json() != {"ignored": True}     # now it finds its way home (and is refused there: no signature)
 
 
@@ -216,7 +216,7 @@ def test_the_webhook_is_answered_at_once_and_the_pull_happens_in_the_background(
             return httpx.Response(200, json={"added": [], "modified": [], "removed": [], "next_cursor": "c", "has_more": False, "accounts": [{"account_id": "x", "name": "C", "type": "depository", "balances": {"current": 1.0}}]})
         return httpx.Response(200, json={"outflow_streams": []})
     db = DB(":memory:")
-    c = TestClient(goblin.create_app(db=db, plaid_transport=httpx.MockTransport(h)))              # the default: not inline
+    c = TestClient(worker.create_app(db=db, plaid_transport=httpx.MockTransport(h)))              # the default: not inline
     c.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "B"})
     before = n["/transactions/sync"]
     r = hook(c, {"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE", "item_id": "item-1"})
@@ -229,7 +229,7 @@ def test_the_webhook_is_answered_at_once_and_the_pull_happens_in_the_background(
 
 
 def test_the_plaid_api_version_is_pinned(monkeypatch):
-    from goblinbank.plaid import Plaid
+    from plaidproxy.plaid import Plaid
     seen = []
     monkeypatch.setenv("PLAID_CLIENT_ID", "c"); monkeypatch.setenv("PLAID_SECRET", "s"); monkeypatch.delenv("PLAID_VERSION", raising=False)
     handler = lambda r: (seen.append(r.headers.get("plaid-version")), httpx.Response(200, json={}))[1]
@@ -261,15 +261,15 @@ def test_the_sandbox_test_webhook_button_reports_whether_it_arrived(monkeypatch)
             return httpx.Response(200, json={})
         return httpx.Response(200, json={"outflow_streams": []})
     db = DB(":memory:")
-    c = TestClient(goblin.create_app(db=db, plaid_transport=httpx.MockTransport(h), inline_webhooks=True))
+    c = TestClient(worker.create_app(db=db, plaid_transport=httpx.MockTransport(h), inline_webhooks=True))
     holder["c"] = c
     c.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "B"})
     assert c.post("/plaid/test-webhook", headers=H).status_code == 409                     # no public address yet
-    c2 = TestClient(goblin.create_app(db=DB(":memory:"), plaid_transport=httpx.MockTransport(h), inline_webhooks=True))
+    c2 = TestClient(worker.create_app(db=DB(":memory:"), plaid_transport=httpx.MockTransport(h), inline_webhooks=True))
     holder["c"] = c2
     c2.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "B"})
     monkeypatch.setenv("PLAID_WEBHOOK_URL", "https://hooks.example.com/webhooks/plaid")
-    c3 = TestClient(goblin.create_app(db=DB(":memory:"), plaid_transport=httpx.MockTransport(h), inline_webhooks=True))
+    c3 = TestClient(worker.create_app(db=DB(":memory:"), plaid_transport=httpx.MockTransport(h), inline_webhooks=True))
     holder["c"] = c3
     c3.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "B"})
     holder["deliver"] = True
@@ -278,6 +278,6 @@ def test_the_sandbox_test_webhook_button_reports_whether_it_arrived(monkeypatch)
     holder["deliver"] = False
     assert c3.post("/plaid/test-webhook?wait=1", headers=H).json()["arrived"] is False             # Plaid fired it but nothing reached us: the address is not public
     monkeypatch.setenv("PLAID_ENV", "production"); monkeypatch.setenv("PLAID_BASE_URL", "")
-    c4 = TestClient(goblin.create_app(db=DB(":memory:"), plaid_transport=httpx.MockTransport(h), inline_webhooks=True))
+    c4 = TestClient(worker.create_app(db=DB(":memory:"), plaid_transport=httpx.MockTransport(h), inline_webhooks=True))
     c4.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "B"})
     assert c4.post("/plaid/test-webhook", headers=H).status_code == 409                     # production: a real update is the test

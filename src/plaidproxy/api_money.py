@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from fastapi import HTTPException, Request
 from pydantic import BaseModel
 
-from goblinbank import plaidplan, feed, ledger, recur, sync
+from plaidproxy import plaidplan, feed, ledger, recur, sync
 
 
 class Sub(BaseModel):
@@ -40,7 +40,7 @@ class AccountIn(BaseModel):
     nickname: str | None = None            # your own label for any account ("" clears it)
     category: str | None = None            # what the account is for ("" clears it): Checking, Bills, Savings, Emergency fund...
     pinned: bool | None = None             # show its balance on the Overview
-    joint_with: str | None = None          # "" clears; the other goblin that also links this account
+    joint_with: str | None = None          # "" clears; the other worker that also links this account
     my_share: float | None = None          # percent of its balance that is mine (joint accounts); -1 clears
 
 

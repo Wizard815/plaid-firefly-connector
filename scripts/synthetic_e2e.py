@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the real gateway, two goblins and a synthetic Plaid server as separate
+"""Run the real gateway, two workers and a synthetic Plaid server as separate
 processes, then drive everything through the gateway over HTTP. Needs no Plaid account.
 
     python3 scripts/synthetic_e2e.py
@@ -49,10 +49,10 @@ def wait(port):
 
 
 def main():
-    tmp = Path(tempfile.mkdtemp(prefix="goblin-e2e-"))
+    tmp = Path(tempfile.mkdtemp(prefix="worker-e2e-"))
     secrets = {n: {"internal": f"int-{n}", "conn": f"conn-{n}", "token": f"login-{n}", "field": Fernet.generate_key().decode()} for n in ("alice", "bob")}
     (tmp / "gateway.yaml").write_text(yaml.safe_dump({
-        "goblins": [{"name": n, "url": f"http://127.0.0.1:{PORTS[n]}", "internal_secret": secrets[n]["internal"], "user_token_sha256": sha(secrets[n]["token"])} for n in secrets],
+        "people": [{"name": n, "url": f"http://127.0.0.1:{PORTS[n]}", "internal_secret": secrets[n]["internal"], "user_token_sha256": sha(secrets[n]["token"])} for n in secrets],
         "orb_keys": [{"sha256": sha("orb-key"), "scopes": ["summary:read"]}]}))
     for d in ("rhcsv", "imports", "dbA", "dbB"):
         (tmp / d).mkdir()
@@ -60,10 +60,10 @@ def main():
             "GATEWAY_URL": GW, "SHARE": "net_worth"}
     spawn("devtools.fake_plaid:app", PORTS["plaid"], {}, factory=False)
     for n, db in (("alice", "dbA"), ("bob", "dbB")):
-        spawn("goblinbank.main:app", PORTS[n], {**base, "ROLE": "goblin", "GOBLIN_NAME": n, "INTERNAL_SECRET": secrets[n]["internal"], "CONNECTOR_SECRET": secrets[n]["conn"],
-              "FIELD_KEY": secrets[n]["field"], "GOBLIN_DB": str(tmp / db / "goblin.db"),
+        spawn("plaidproxy.main:app", PORTS[n], {**base, "ROLE": "worker", "PERSON_NAME": n, "INTERNAL_SECRET": secrets[n]["internal"], "CONNECTOR_SECRET": secrets[n]["conn"],
+              "FIELD_KEY": secrets[n]["field"], "WORKER_DB": str(tmp / db / "proxy.db"),
               "RH_CSV_DIR": str(tmp / "rhcsv") if n == "alice" else str(tmp / "bob-csv"), "IMPORT_DIR": str(tmp / "imports") if n == "alice" else str(tmp / "bob-imp")})
-    spawn("goblinbank.main:app", PORTS["gateway"], {"ROLE": "gateway", "GATEWAY_CONFIG": str(tmp / "gateway.yaml"), "UI_DIR": str(ROOT / "ui")})
+    spawn("plaidproxy.main:app", PORTS["gateway"], {"ROLE": "gateway", "GATEWAY_CONFIG": str(tmp / "gateway.yaml"), "UI_DIR": str(ROOT / "ui")})
     for p in PORTS.values():
         wait(p)
 
@@ -75,8 +75,8 @@ def main():
     # --- auth & isolation ---
     check("gateway serves the UI", "Plaid Firefly Connector" in c.get("/admin").text)
     check("no token -> 401", c.get("/g/alice/api/overview").status_code == 401)
-    check("bob cannot open alice's goblin", c.get("/g/alice/api/overview", headers=B).status_code == 401)
-    check("goblin refuses direct access without the internal secret", httpx.get(f"http://127.0.0.1:{PORTS['alice']}/api/overview").status_code == 401)
+    check("bob cannot open alice's worker", c.get("/g/alice/api/overview", headers=B).status_code == 401)
+    check("worker refuses direct access without the internal secret", httpx.get(f"http://127.0.0.1:{PORTS['alice']}/api/overview").status_code == 401)
 
     # --- plaid link + first sync (2 pages) ---
     check("link token", c.post("/g/alice/plaid/link-token", headers=A).json().get("link_token") == "link-sandbox-synthetic")
@@ -118,7 +118,7 @@ def main():
     check("secret setting never echoed", st["caldav_password"] == {"set": True} and "s3cret" not in json.dumps(st))
     orb = c.get("/api/v1/summary", headers={"Authorization": "Bearer orb-key"}).json()["goblins"]
     check("orb sees only opted-in totals", orb["alice"] == {"goblin": "alice", "net_worth": 13820.35} and orb["bob"]["goblin"] == "bob", str(orb))
-    check("orb key cannot open a goblin", c.get("/g/alice/api/overview", headers={"Authorization": "Bearer orb-key"}).status_code == 401)
+    check("orb key cannot open a worker", c.get("/g/alice/api/overview", headers={"Authorization": "Bearer orb-key"}).status_code == 401)
 
     # --- drop folder + robinhood csv ---
     (tmp / "imports" / "cashapp.csv").write_text("Transaction ID,Date,Transaction Type,Currency,Amount,Fee,Net Amount,Asset Type,Account,Notes\nCA1,2026-11-06,Sent,USD,-$8.00,$0,-$8.00,Cash,Cash,Coffee\n")

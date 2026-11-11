@@ -1,5 +1,5 @@
 """An OpenAI-compatible HTTP server that behaves like a small tool-calling model: picks tools from keywords in the
-question, then answers from what they returned. For click-through tests of the whole path (UI -> gateway -> goblin -> model server)."""
+question, then answers from what they returned. For click-through tests of the whole path (UI -> gateway -> worker -> model server)."""
 import json
 
 from fastapi import FastAPI, Request

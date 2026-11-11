@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from goblinbank import ledger, settings as cfg
+from plaidproxy import ledger, settings as cfg
 
 SEV = {"info": 0, "warning": 1, "critical": 2}
 ICON = {"critical": ":rotating_light:", "warning": ":warning:", "info": ":information_source:"}

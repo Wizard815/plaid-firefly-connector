@@ -5,8 +5,8 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from goblinbank import goblin, plaidplan
-from goblinbank.db import DB
+from plaidproxy import worker, plaidplan
+from plaidproxy.db import DB
 
 H = {"X-Internal-Secret": "isec"}
 TODAY = date(2026, 11, 7)
@@ -14,13 +14,13 @@ TODAY = date(2026, 11, 7)
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
-    for k, v in {"GOBLIN_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode()}.items():
+    for k, v in {"PERSON_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode()}.items():
         monkeypatch.setenv(k, v)
 
 
 def app():
     db = DB(":memory:")
-    return TestClient(goblin.create_app(db=db, today=lambda: TODAY)), db
+    return TestClient(worker.create_app(db=db, today=lambda: TODAY)), db
 
 
 def tx(db, acct, name, amount, days_ago, tid):

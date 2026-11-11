@@ -6,8 +6,8 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from devtools.seed import seed
-from goblinbank import goblin
-from goblinbank.db import DB
+from plaidproxy import worker
+from plaidproxy.db import DB
 
 TODAY = date(2026, 11, 7)
 H = {"X-Internal-Secret": "isec"}
@@ -15,7 +15,7 @@ H = {"X-Internal-Secret": "isec"}
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
-    for k, v in {"GOBLIN_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode()}.items():
+    for k, v in {"PERSON_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode()}.items():
         monkeypatch.setenv(k, v)
 
 
@@ -23,7 +23,7 @@ def env(monkeypatch):
 def api():
     db = DB(":memory:")
     seed(db, 4, TODAY)
-    return TestClient(goblin.create_app(db=db, today=lambda: TODAY)), db
+    return TestClient(worker.create_app(db=db, today=lambda: TODAY)), db
 
 
 def sub(**kw):
@@ -194,6 +194,6 @@ def test_upgrade_from_old_database(tmp_path):
         CREATE TABLE accounts(id TEXT PRIMARY KEY, source TEXT NOT NULL, institution TEXT, name TEXT, kind TEXT, balance REAL, currency TEXT DEFAULT 'USD', updated TEXT);
         CREATE TABLE transactions(id TEXT PRIMARY KEY, account_id TEXT, date TEXT, name TEXT, amount REAL, currency TEXT DEFAULT 'USD', category TEXT, pending INTEGER DEFAULT 0, source TEXT);""")
     con.commit(); con.close()
-    c = TestClient(goblin.create_app(db=DB(f), today=lambda: TODAY))
+    c = TestClient(worker.create_app(db=DB(f), today=lambda: TODAY))
     s = c.get("/api/subscriptions", headers=H).json()["items"][0]
     assert s["name"] == "Old Netflix" and s["every"] == 1 and s["unit"] == "month" and s["payer"] == "me" and s["next_due"] == "2026-11-20" and s["monthly"] == 15

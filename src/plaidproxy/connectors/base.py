@@ -23,7 +23,7 @@ def now_iso() -> str:
 
 def make_connector_app(connector: ReadOnlyConnector, internal_secret: str) -> FastAPI:
     """Wrap a connector in an HTTP service exposing GET-only read endpoints."""
-    from goblinbank.security import require_internal
+    from plaidproxy.security import require_internal
     from fastapi import Request
 
     app = FastAPI(title=f"connector:{connector.name}")

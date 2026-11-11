@@ -11,15 +11,15 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, utils
 from fastapi.testclient import TestClient
 
-from goblinbank import feed, gateway, goblin, importers, sync
-from goblinbank.db import DB
-from goblinbank.plaid import Plaid
-from goblinbank.security import sha256
+from plaidproxy import feed, gateway, worker, importers, sync
+from plaidproxy.db import DB
+from plaidproxy.plaid import Plaid
+from plaidproxy.security import sha256
 
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
-    for k, v in {"GOBLIN_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode(),
+    for k, v in {"PERSON_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode(),
                  "PLAID_CLIENT_ID": "cid", "PLAID_SECRET": "sec", "SHARE": "net_worth,subscriptions"}.items():
         monkeypatch.setenv(k, v)
 
@@ -54,7 +54,7 @@ def plaid_mock(calls=None):
 
 
 def mk(**kw):
-    return goblin.create_app(db=kw.pop("db", DB(":memory:")), **kw)
+    return worker.create_app(db=kw.pop("db", DB(":memory:")), **kw)
 
 
 def test_plaid_exchange_encrypts_token_and_syncs():
@@ -137,16 +137,16 @@ def test_gateway_webhook_relay(monkeypatch):
     gtc = TestClient(g)
     gtc.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "X"})
 
-    def to_goblin(req: httpx.Request):
+    def to_worker(req: httpx.Request):
         r = gtc.request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
         return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
 
-    cfg = {"goblins": [{"name": "alice", "url": "http://alice", "internal_secret": "isec",
+    cfg = {"people": [{"name": "alice", "url": "http://alice", "internal_secret": "isec",
                         "user_token_sha256": sha256("tok")}], "orb_keys": []}
-    gw = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_goblin)))
+    gw = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_worker)))
     # webhook: unknown item ignored; known item relayed but rejected without a valid signature
     assert gw.post("/webhooks/plaid", json={"item_id": "nope"}).json() == {"ignored": True}
-    gw.post("/internal/items", json={"item_id": "item-1"}, headers={"X-Internal-Secret": "isec", "X-Goblin": "alice"})
+    gw.post("/internal/items", json={"item_id": "item-1"}, headers={"X-Internal-Secret": "isec", "X-Person": "alice"})
     assert gw.post("/webhooks/plaid", json={"item_id": "item-1", "webhook_type": "TRANSACTIONS"}).status_code == 401
     assert gw.get("/feed/alice/x/money.atom").status_code == 404 and gw.get("/g/alice/feed.atom", headers={"Authorization": "Bearer tok"}).status_code == 404
 
@@ -198,12 +198,12 @@ def test_net_worth_history():
 def test_gateway_proxies_json_put_delete_and_csv():
     gtc = TestClient(mk())
 
-    def to_goblin(req: httpx.Request):
+    def to_worker(req: httpx.Request):
         r = gtc.request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
         return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
 
-    cfg = {"goblins": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("tok")}], "orb_keys": []}
-    gw = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_goblin)))
+    cfg = {"people": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("tok")}], "orb_keys": []}
+    gw = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_worker)))
     A = {"Authorization": "Bearer tok"}
     sub = {"name": "Gym", "amount": 10, "cycle": "monthly", "next_date": "2026-12-01"}
     s = gw.post("/g/alice/api/subscriptions", headers=A, json=sub)
@@ -266,7 +266,7 @@ def test_caldav_from_settings_and_test_button():
 
 
 def test_agent_config_endpoint_and_connector_fetches_it(monkeypatch):
-    from goblinbank.connectors.rh_agent import AgentConnector
+    from plaidproxy.connectors.rh_agent import AgentConnector
     monkeypatch.setenv("CONNECTOR_SECRET", "csec")
     c = TestClient(mk())
     assert c.get("/internal/connector-config/rh-agent", headers=H).status_code == 401       # internal secret is NOT enough
@@ -278,14 +278,14 @@ def test_agent_config_endpoint_and_connector_fetches_it(monkeypatch):
     seen = []
 
     def t(req: httpx.Request):
-        if req.url.host == "goblin":
+        if req.url.host == "worker":
             r = c.get(req.url.raw_path.decode(), headers=dict(req.headers))
             return httpx.Response(r.status_code, json=r.json())
         seen.append(req.headers.get("authorization"))
         return httpx.Response(200, json={"result": {"cash": 1}})
 
     monkeypatch.delenv("RH_MCP_URL", raising=False)
-    a = AgentConnector(transport=httpx.MockTransport(t), config_url="http://goblin/internal/connector-config/rh-agent", config_secret="csec")
+    a = AgentConnector(transport=httpx.MockTransport(t), config_url="http://worker/internal/connector-config/rh-agent", config_secret="csec")
     assert a.balances() == {"cash": 1} and seen == ["Bearer tok"]
     with pytest.raises(PermissionError):
         a.positions()          # no positions tool configured -> refuses
@@ -298,7 +298,7 @@ def test_csv_upload_validates_and_connector_reads_it(tmp_path, monkeypatch):
     r = c.post("/robinhood/csv-upload", headers=H, content=good)
     assert r.status_code == 200 and (tmp_path / r.json()["saved"]).exists()
     assert c.post("/robinhood/csv-upload", headers=H, content="a,b\n1,2\n").status_code == 422
-    from goblinbank.connectors.rh_csv import CsvConnector
+    from plaidproxy.connectors.rh_csv import CsvConnector
     assert CsvConnector(str(tmp_path)).positions()[0]["symbol"] == "AAPL"
     assert c.get("/api/status", headers=H).json()["robinhood"]["csv_files"] == [r.json()["saved"]]
 

@@ -5,8 +5,8 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from goblinbank import firefly, goblin
-from goblinbank.db import DB
+from plaidproxy import firefly, worker
+from plaidproxy.db import DB
 from tests.fake_firefly import FakeFirefly
 
 H = {"X-Internal-Secret": "isec"}
@@ -16,14 +16,14 @@ d = lambda n: (TODAY - timedelta(days=n)).isoformat()
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
-    for k, v in {"GOBLIN_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode()}.items():
+    for k, v in {"PERSON_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode()}.items():
         monkeypatch.setenv(k, v)
 
 
 def rig(token="good-token"):
     ff = FakeFirefly()
     db = DB(":memory:")
-    c = TestClient(goblin.create_app(db=db, firefly_transport=ff.transport()))
+    c = TestClient(worker.create_app(db=db, firefly_transport=ff.transport()))
     c.put("/api/settings", headers=H, json={"firefly_url": "https://firefly.example.com", "firefly_token": token})
     return c, db, ff
 
@@ -53,7 +53,7 @@ def test_connection_test_and_a_clear_message_when_the_token_is_refused():
     c.put("/api/settings", headers=H, json={"firefly_token": "expired-token"})
     r = c.post("/api/firefly/test", headers=H)
     assert r.status_code == 502 and "new Personal Access Token" in r.json()["detail"]
-    c2 = TestClient(goblin.create_app(db=DB(":memory:")))
+    c2 = TestClient(worker.create_app(db=DB(":memory:")))
     assert c2.post("/api/firefly/test", headers=H).status_code == 409
 
 
@@ -98,7 +98,7 @@ def test_changes_at_the_bank_update_and_removals_delete_and_a_posted_pending_one
     got = {t["external_id"]: t for g in ff.groups.values() for t in g["transactions"]}
     assert got["t2"]["amount"] == "155.25" and got["t2"]["description"] == "KROGER FUEL" and "t3" in got
     # the bank removes one (as sync.py does: mark Firefly's copy for deletion, then drop the row)
-    from goblinbank import sync
+    from plaidproxy import sync
     with db.tx() as cur:
         cur.execute("UPDATE ff_tx SET state='deleted' WHERE tx_id='t4' AND ff_id IS NOT NULL")
         cur.execute("DELETE FROM transactions WHERE id='t4'")
@@ -205,8 +205,8 @@ def test_linking_to_an_account_that_already_has_history_adopts_what_matches_and_
 
 def test_the_gateway_admin_sets_each_persons_firefly_connection_and_the_token_never_comes_back(tmp_path, monkeypatch):
     import httpx
-    from goblinbank import gateway
-    from goblinbank.security import sha256
+    from plaidproxy import gateway
+    from plaidproxy.security import sha256
     monkeypatch.setenv("GATEWAY_URL", "http://gateway")
     monkeypatch.setenv("GATEWAY_STATE", str(tmp_path / "s.json"))
     holder, ff = {}, FakeFirefly()
@@ -215,13 +215,13 @@ def test_the_gateway_admin_sets_each_persons_firefly_connection_and_the_token_ne
         r = holder["gw"].request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
         return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
     db = DB(":memory:")
-    g = TestClient(goblin.create_app(db=db, transport=httpx.MockTransport(to_gateway), firefly_transport=ff.transport()))
+    g = TestClient(worker.create_app(db=db, transport=httpx.MockTransport(to_gateway), firefly_transport=ff.transport()))
 
-    def to_goblin(req: httpx.Request):
+    def to_worker(req: httpx.Request):
         r = g.request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
         return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
-    cfg = {"goblins": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("t")}], "orb_keys": [], "admin_token_sha256": sha256("adm")}
-    gw = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_goblin)))
+    cfg = {"people": [{"name": "alice", "url": "http://alice", "internal_secret": "isec", "user_token_sha256": sha256("t")}], "orb_keys": [], "admin_token_sha256": sha256("adm")}
+    gw = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_worker)))
     holder["gw"] = gw
     A = {"Authorization": "Bearer adm"}
     assert gw.put("/admin/policy", headers=A, json={"default": {"firefly_token": "x" * 30}}).status_code == 422          # a token is one person's

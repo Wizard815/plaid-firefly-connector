@@ -64,13 +64,13 @@ the per-person app, which is now on the `full-ui` branch, along with goals, shar
 Self-hosted family finance. **One gateway, one private container per person.**
 
 ```
-Pondering Orb ──(read-only key)──► CoinGateway ──► goblin-alice ─► alice-rh-agent / rh-live
-                                        │──────► goblin-bob   ─► ...
+Pondering Orb ──(read-only key)──► CoinGateway ──► worker-alice ─► alice-rh-agent / rh-live
+                                        │──────► worker-bob   ─► ...
 ```
 
-* **CoinGateway** (`ROLE=gateway`): login + routing, Plaid webhook relay (item_id → goblin map only),
+* **CoinGateway** (`ROLE=gateway`): login + routing, Plaid webhook relay (item_id → worker map only),
   and `/api/v1/summary` for Pondering Orb. Stores no tokens, balances or transactions.
-* **Goblin** (`ROLE=goblin`): one person's data. Shares with the gateway/Orb only what that person ticks under Settings, Sharing (or `share:` in `goblins.yaml` as a starting value).
+* **Worker** (`ROLE=worker`): one person's data. Shares with the gateway/Orb only what that person ticks under Settings, Sharing (or `share:` in `people.yaml` as a starting value).
   Shareable: `net_worth`, `subscriptions`, `bills` (totals), `bill_list` (each bill for the next 30 days), `alerts` (counts),
   `alert_list` (each alert), `savings`, `robinhood_main`, `robinhood_agent`. The lists are separate opt-ins from the totals.
   Parses Robinhood activity CSVs dropped in `data/<name>/robinhood-csv/` itself, in-process (no account access, deduped) — not a separate container, since there's no credential to isolate.
@@ -81,7 +81,7 @@ Pondering Orb ──(read-only key)──► CoinGateway ──► goblin-alice 
 
 One image, many roles (`ROLE=`), so the repo stays small.
 
-## What each goblin does
+## What each worker does
 * **Plaid** (Huntington, Discover, Axos, Capital One, IRA): link in Settings, tokens encrypted at rest, transactions sync, holdings, recurring-bill detection, webhook signature checks, relink mode.
 * **Money movement**: search + filter (account, category, direction, amount range, dates, sort), totals for whatever you filtered, pagination, CSV export, per-payment categories with "remember for similar" rules and keyword auto-categorizing.
 * **Accounts**: drill into any account (history, 30-day in/out, its bills, its transactions), add accounts by hand (cash, anything Plaid can't reach), minimum-balance warnings.
@@ -94,7 +94,7 @@ One image, many roles (`ROLE=`), so the repo stays small.
 * **Agent**: saved multi-chat (rename, delete, context meter, automatic + manual compaction, per-chat tools switch and model switch), over your data with tools (accounts, transactions, bills, recurring detection, savings, projections, budgets, calendar, notes, exact calculator). Any OpenAI-compatible endpoint (Ollama, LM Studio, llama.cpp, OpenRouter...) or Anthropic; add as many as you like. Cloud models are blocked until you allow each one. It can write notes and add a subscription when you ask in chat (with Undo); it cannot move money. Models without tool calling get a data snapshot instead.
 * **Settings** (tabs): General (light/dark, accent colour, arrange mode), Alerts, Family links, Sharing with the Orb, Models, Categories, Calendar (CalDAV), Robinhood, Connect & import.
 * **Your layout**: every tab has "Arrange panels": drag panels anywhere on a 12-column grid, resize them, hide the ones you do not use.
-* **Family links**: link two goblins through the gateway (it only relays, stores nothing). Linking shares nothing by itself; each person then grants specific items (an account balance, a goal with a combined total and shared notes), revocable any time. Joint accounts count only your share. Plaid usage + cost guard: call counts, a monthly estimate at Plaid's pay-as-you-go list prices (Transactions $0.30, Recurring $0.15, Investments Holdings $0.18, per linked item per month), a budget warning, a daily call cap, and a switch to skip Plaid's paid recurring detection (the app finds repeating payments itself).
+* **Family links**: link two workers through the gateway (it only relays, stores nothing). Linking shares nothing by itself; each person then grants specific items (an account balance, a goal with a combined total and shared notes), revocable any time. Joint accounts count only your share. Plaid usage + cost guard: call counts, a monthly estimate at Plaid's pay-as-you-go list prices (Transactions $0.30, Recurring $0.15, Investments Holdings $0.18, per linked item per month), a budget warning, a daily call cap, and a switch to skip Plaid's paid recurring detection (the app finds repeating payments itself).
 * **Sharing**: the Pondering Orb sees only the totals you tick (never transactions). API tokens (named, scoped, revocable, rate limited, read-only) let Home Assistant or scripts read `GET /api/v1/me/{summary|ha|bills|alerts|savings|transactions}`; the UI generates the Home Assistant YAML.
 * **Fresh data**: automatic sync every 15 minutes (Settings, Connect & import; 0 turns it off). A token with the `refresh` scope can add `?refresh=1` to ask for a fresh sync on demand (at most once per 5 minutes); Home Assistant polls every 15 minutes and can call a `rest_command` for an immediate refresh.
 * **Projected spending**: Overview shows spending so far, a month-end projection built from your history (per category, with lumpy payments like rent handled separately) and both against your average monthly income. Shareable with the Orb as `spending`; the itemised `bill_list` and `alert_list` are separate opt-ins.
@@ -120,13 +120,13 @@ cd plaid-firefly-connector
 ./scripts/install.sh
 docker compose -f docker-compose.generated.yml up -d --build
 ```
-**There are no files to edit.** The script asks for your name and a **password you choose** (12 or more characters; a short phrase of a few words works well), builds the image, makes a separate encryption key and secrets for each person, creates the Docker network it needs (`goblin-bank`, or set `NETWORK=`), and prints the **admin password**. Check with `docker compose -f docker-compose.generated.yml ps`: everything should say "healthy".
+**There are no files to edit.** The script asks for your name and a **password you choose** (12 or more characters; a short phrase of a few words works well), builds the image, makes a separate encryption key and secrets for each person, creates the Docker network it needs (`plaid-proxy`, or set `NETWORK=`), and prints the **admin password**. Check with `docker compose -f docker-compose.generated.yml ps`: everything should say "healthy".
 
 How sign-in works:
-* **People choose their own password.** It is kept only as a salted scrypt hash (never as plain text, and the script never writes it to a file). Press Enter at the prompt instead and a random login token is generated and printed **once**; that token is the password then. Change a password later under Settings, General, or `./scripts/install.sh --set-password NAME`. You can also put `password:` on a person in `goblins.yaml` (12+ characters, validated), see `goblins.example.yaml`; the plaintext stays only in that file.
+* **People choose their own password.** It is kept only as a salted scrypt hash (never as plain text, and the script never writes it to a file). Press Enter at the prompt instead and a random login token is generated and printed **once**; that token is the password then. Change a password later under Settings, General, or `./scripts/install.sh --set-password NAME`. You can also put `password:` on a person in `people.yaml` (12+ characters, validated), see `people.example.yaml`; the plaintext stays only in that file.
 * **The admin password is random hex**, saved in `.secrets/admin.password` (owner-only) and printed every time you run `./scripts/install.sh`; the gateway only keeps its hash. Lose it? `cat .secrets/admin.password`.
 * **Guessing is slowed down**: after 5 wrong tries for a name (or for the admin) further tries are refused for a while, doubling up to 15 minutes. A weak password is still weak, so make it long.
-* Unattended installs: `NONINTERACTIVE=1 NAME=alice GOBLIN_PASSWORD_ALICE='a long phrase here' ./scripts/install.sh`.
+* Unattended installs: `NONINTERACTIVE=1 NAME=alice PROXY_PASSWORD_ALICE='a long phrase here' ./scripts/install.sh`.
 
 ### 3. Set everything up in the app
 1. **Admin page** at `http://127.0.0.1:6421/admin` (the admin password): add the other people, enter your **Plaid keys** once for everyone (Client ID and secret from dashboard.plaid.com, Developers, Keys, and Sandbox or Production), set the **public address** for webhooks, and set the budget and limits. Give each new person a password (or let it make a random token, shown once) and the one command to start their container is shown there.
@@ -141,7 +141,7 @@ How sign-in works:
 4. Link one bank first and check the numbers, then add the rest. The cost panel in the same tab shows what Plaid will bill.
 
 ### Pondering Orb
-1. On the gateway's admin page, under **Pondering Orb**, press **Make a key**. It is shown once; only its hash is kept. (`orb_key: true` in `goblins.yaml` still works if you prefer a file.)
+1. On the gateway's admin page, under **Pondering Orb**, press **Make a key**. It is shown once; only its hash is kept. (`orb_key: true` in `people.yaml` still works if you prefer a file.)
 2. Each person chooses what the Orb may see under Settings, **Sharing** (totals like net worth, bills, savings; the itemised lists are separate opt-ins; never transactions).
 3. In Pondering Orb, set `GOBLIN_ORB_KEY` to that key and point its plaid-firefly-connector widget at the gateway: `http://gateway:8000` if the Orb runs in the same Docker network, otherwise this server's address (the one from step 4 below, or `http://<server>:6421` on your network). The Orb calls `GET /api/v1/summary` with `Authorization: Bearer <key>`. Revoke the key on the admin page any time.
 Nothing about this changed with the new setup: the key, the endpoint and the shape of the summary are the same.
@@ -151,9 +151,9 @@ Settings, **Calendar**: enter your CalDAV calendar address, user and password (s
 
 ### One address for everyone
 There is **one gateway and one address** (`http://127.0.0.1:6421`, or your Tailscale / domain address). Everybody uses that same address, and so does the admin:
-* `/` is the sign-in page. Each person types their own name and password; the gateway then sends everything they do only to their own goblin container (`/g/<name>/...` behind the scenes). Alice and Bob never get different ports or links, and they never reach each other's containers.
+* `/` is the sign-in page. Each person types their own name and password; the gateway then sends everything they do only to their own worker container (`/g/<name>/...` behind the scenes). Alice and Bob never get different ports or links, and they never reach each other's containers.
 * `/admin` on the same address is the admin page, with its own password (the random hex one in `.secrets/admin.password`).
-* The goblin containers have no ports open to you at all. Only the gateway is published (port 6421, this machine only); the goblins sit behind it on the Docker network and trust only the gateway's secret.
+* The worker containers have no ports open to you at all. Only the gateway is published (port 6421, this machine only); the workers sit behind it on the Docker network and trust only the gateway's secret.
 
 ### Which Plaid site is which
 * **dashboard.plaid.com** is the developer dashboard: your Client ID, secrets, allowed redirect URIs, API version and usage. This is what Plaid Firefly Connector is set up with.
@@ -163,11 +163,11 @@ There is **one gateway and one address** (`http://127.0.0.1:6421`, or your Tails
 ### Webhooks (Plaid tells the app when there is news)
 Without webhooks the app has to ask each bank on a schedule. With them, Plaid calls the gateway the moment new transactions, holdings or recurring payments exist, the app pulls only that bank, and banks on Automatic are only polled weekly as a safety net. Webhooks are free; the bill is the same, the data is fresher and there are fewer calls.
 1. Make one address reachable by Plaid over HTTPS: a domain with Caddy, a Cloudflare Tunnel or Tailscale Funnel. To expose only the webhook and nothing else, use `examples/Caddyfile.webhooks-only`.
-2. On the gateway's `/admin` page, Plaid limits, type it into **Public address** and Save. That is the only setting: every goblin then sends `https://your-address/webhooks/plaid` with each new link, tells banks that are already linked (one free call each, once), and uses `https://your-address/` as the OAuth return address unless you set `PLAID_REDIRECT_URI` yourself.
+2. On the gateway's `/admin` page, Plaid limits, type it into **Public address** and Save. That is the only setting: every worker then sends `https://your-address/webhooks/plaid` with each new link, tells banks that are already linked (one free call each, once), and uses `https://your-address/` as the OAuth return address unless you set `PLAID_REDIRECT_URI` yourself.
 3. Each bank shows a **live updates** badge once its first webhook has arrived, and the admin table shows how many banks per person have gone live. Webhooks are checked with Plaid's signature; an unsigned call is refused.
 4. **Test it in the Sandbox:** with a sandbox bank linked and the public address set, Settings, Connect & import has a **Send a test webhook** button. Plaid then sends a real signed webhook to your address and the app tells you whether it arrived and verified. Plaid wants an answer within 10 seconds and retries for a day, so the app answers at once and does the pull in the background; webhooks that fail verification get a 401, which Plaid does not retry.
 5. If a bank's login breaks (Plaid says so by webhook), the app raises an alert to relink it; the other banks keep updating.
-The gateway remembers which bank belongs to which goblin in memory only, so each goblin re-announces its banks every few minutes and after any restart.
+The gateway remembers which bank belongs to which worker in memory only, so each worker re-announces its banks every few minutes and after any restart.
 
 ### Plaid free-plan link limit
 Plaid's free Trial plan limits how many real (Production) banks you can ever link, and per [Plaid's billing docs](https://plaid.com/docs/account/billing/) **removing one does not give the slot back**: every Production Item ever created counts. The docs say 10 for the Trial plan; check what your dashboard shows for your own account. So: use **Relink** (not Unlink then Link) when a bank's login needs repairing, because Relink reuses the same connection; practise in the Sandbox, which has no such limit; and link a bank once you are sure you want it.
@@ -177,15 +177,15 @@ Plaid bills per linked bank login per month, not per call: about $0.45 each at l
 * **Every bank has its own schedule** (Settings, Connect & import, under each linked bank): every 15 minutes, 3 hours, daily, weekly, every 2 weeks, monthly, or only when you press Sync. **Automatic** picks by what the bank holds: daily for a checking account or card, weekly for a savings-only bank, monthly for an investment-only one. Pressing **Sync now**, a Plaid webhook and a first link always pull straight away. A Plaid webhook (see "Plaid webhooks" above) tells the app the moment new data exists, so it never has to poll.
 * **Recurring detection is per bank too** ($0.15 per bank per month, the one switch that saves money). Automatic turns it on only for banks with a checking account or a card, and asks at most weekly. Balances now come with the transactions call, so a pull that has news is one call. Typical five-bank setup: about **7 calls a day** on schedules alone, about **4.5** with webhooks (the old 3-hour polling was 86).
 * **A hard monthly budget, default $5 per person.** The app refuses to link another bank that would push the estimated bill over it (it even refuses to open the sign-in window), and it will not make any per-use call (balance, refresh) that would break it. Default daily call cap: 300.
-* **The gateway admin sets the limits.** On the gateway's `/admin` page, "Plaid limits" sets the budget, the daily call cap, how often a bank is asked and whether to use Plaid's paid recurring detection, for everyone, with optional per-person overrides. Each goblin picks them up within minutes and shows them read-only; a person cannot raise them from inside the app. The table beside it shows, per person, banks, estimated cost and calls today (counts only). Plaid bills you the combined total of everyone.
-* There is **one gateway for the whole server** and one goblin container per person; the goblins all report to the same gateway.
+* **The gateway admin sets the limits.** On the gateway's `/admin` page, "Plaid limits" sets the budget, the daily call cap, how often a bank is asked and whether to use Plaid's paid recurring detection, for everyone, with optional per-person overrides. Each worker picks them up within minutes and shows them read-only; a person cannot raise them from inside the app. The table beside it shows, per person, banks, estimated cost and calls today (counts only). Plaid bills you the combined total of everyone.
+* There is **one gateway for the whole server** and one worker container per person; the workers all report to the same gateway.
 * **Turn off Plaid's recurring detection** (Settings, Connect & import): saves $0.15 per item per month. The app finds repeating payments itself.
 * **Link only the accounts that change a lot.** A savings account or IRA that you look at once a month does not need a live feed: add it by hand, or drop its CSV in `data/<name>/imports/` (on a hand-added account, open it and use **Import a CSV from your bank**: it finds the date, description and amount, or Debit/Credit, columns by name, picks up a running Balance column, and never double counts an overlapping download; Cash App, PayPal and Venmo files have their own importer).
 * **Every person who links the same bank is billed again**, including a joint account linked by two people.
 * Banks generally do not email scheduled CSV reports: Huntington, Discover, Capital One and Axos offer manual downloads (CSV or QFX) and PDF statements, plus balance and transaction alerts. There is no setting that mails a recurring CSV that I could confirm, so a monthly manual download for the quiet accounts is the realistic no-Plaid route.
 
 ### 4. Reach it from your phone and other devices
-The gateway listens only on `127.0.0.1:6421` on purpose, so from another device `http://<server-ip>:6421` is refused until you allow it. Change the port with `port:` and who can connect with `listen:` in `goblins.yaml` (`listen: 0.0.0.0`, or your LAN address, opens it to your home network over plain http; fine on a trusted network, since your password then crosses it unencrypted). After a change, run `./scripts/install.sh` and `docker compose -f docker-compose.generated.yml up -d`. Pick one:
+The gateway listens only on `127.0.0.1:6421` on purpose, so from another device `http://<server-ip>:6421` is refused until you allow it. Change the port with `port:` and who can connect with `listen:` in `people.yaml` (`listen: 0.0.0.0`, or your LAN address, opens it to your home network over plain http; fine on a trusted network, since your password then crosses it unencrypted). After a change, run `./scripts/install.sh` and `docker compose -f docker-compose.generated.yml up -d`. Pick one:
 * **Tailscale (simplest, recommended):** install it on the server and your devices, then `tailscale serve --bg 6421` gives you an `https://your-machine.your-tailnet.ts.net` address that only your devices can open.
 * **Your own domain with automatic HTTPS:** edit `examples/Caddyfile` (your domain), point the domain at the server, open ports 80 and 443, then
   `docker compose -f docker-compose.generated.yml -f examples/docker-compose.caddy.yml up -d`.
@@ -208,7 +208,7 @@ docker compose -f docker-compose.generated.yml down        # stop (data stays in
 ### 7. Where things live
 | Path | What | Back up? |
 | --- | --- | --- |
-| `goblins.yaml` | who is on this server | yes |
+| `people.yaml` | who is on this server | yes |
 | `.secrets/` | encryption keys, secrets, the admin password (`admin.password`), password hashes | **yes, private** |
 | `data/<name>/db/` | one person's database | yes |
 | `data/<name>/imports/` | drop CSVs here (Cash App, PayPal, Venmo) | optional |
@@ -220,7 +220,7 @@ docker compose -f docker-compose.generated.yml down        # stop (data stays in
 * **Gateway "Permission denied: /config/gateway.yaml"** or "cannot write state": the containers run as user 10001. `sudo chown 10001:10001 gateway.yaml && sudo chown -R 10001:10001 gateway-state data`.
 * **Forgot a password:** `./scripts/install.sh --set-password bob` asks for a new one (nothing else changes); `./scripts/install.sh --reset-token bob` instead makes a new random token. Then `docker compose -f docker-compose.generated.yml restart gateway`.
 * **"Plaid is not configured":** enter the keys in Settings, Connect & import, Plaid keys (or on the admin page), then press Test the keys.
-* **"Can't establish a connection" from another device:** by default the app only listens on the server itself. Add `listen: 0.0.0.0` (or the server's LAN address) to `goblins.yaml`, run `./scripts/install.sh`, then `docker compose -f docker-compose.generated.yml up -d`. Also check the server's firewall allows the port. **Logs:** `docker compose -f docker-compose.generated.yml logs -f gateway goblin-<name>`. They say whether things are running and connected, never anything personal: started (and whether Plaid is configured), a goblin going down or coming back, a heartbeat every 10 minutes with counts (requests, errors, failed sign-ins, goblins up), sync rounds as counts with Plaid error codes, webhooks received or refused, a sign-in lockout. Requests, names of banks, amounts, tokens, passwords, search terms and addresses are never logged. `docker compose ... ps` shows each container as "healthy" when its health check passes.
+* **"Can't establish a connection" from another device:** by default the app only listens on the server itself. Add `listen: 0.0.0.0` (or the server's LAN address) to `people.yaml`, run `./scripts/install.sh`, then `docker compose -f docker-compose.generated.yml up -d`. Also check the server's firewall allows the port. **Logs:** `docker compose -f docker-compose.generated.yml logs -f gateway worker-<name>`. They say whether things are running and connected, never anything personal: started (and whether Plaid is configured), a worker going down or coming back, a heartbeat every 10 minutes with counts (requests, errors, failed sign-ins, workers up), sync rounds as counts with Plaid error codes, webhooks received or refused, a sign-in lockout. Requests, names of banks, amounts, tokens, passwords, search terms and addresses are never logged. `docker compose ... ps` shows each container as "healthy" when its health check passes.
 
 ### 9. Safety checklist before real bank data
 * HTTPS in front of it, or Tailscale only (step 4).
@@ -230,7 +230,7 @@ docker compose -f docker-compose.generated.yml down        # stop (data stays in
 
 ## Run without the install script
 ```bash
-cp goblins.example.yaml goblins.yaml && python3 scripts/gen_compose.py     # needs python3 with pyyaml + cryptography
+cp people.example.yaml people.yaml && python3 scripts/gen_compose.py     # needs python3 with pyyaml + cryptography
 docker compose -f docker-compose.generated.yml up -d --build
 ```
 
@@ -238,7 +238,7 @@ docker compose -f docker-compose.generated.yml up -d --build
 ```bash
 python3 -m pytest                     # unit tests
 python3 scripts/synthetic_e2e.py      # real processes + a synthetic Plaid server (devtools/fake_plaid.py), 31 checks
-python3 scripts/dev_stack.py          # gateway + goblin with random data + a fake model server, to click around (token: login-alice)
+python3 scripts/dev_stack.py          # gateway + worker with random data + a fake model server, to click around (token: login-alice)
 ```
 The synthetic server follows Plaid's documented response shapes. It proves our services work together; it cannot prove real Plaid agrees. Get free sandbox keys from Plaid before trusting it with real banks.
 

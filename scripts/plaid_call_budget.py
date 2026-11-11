@@ -11,12 +11,12 @@ from cryptography.fernet import Fernet
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
-os.environ.update({"GOBLIN_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode()})
+os.environ.update({"PERSON_NAME": "alice", "INTERNAL_SECRET": "isec", "FIELD_KEY": Fernet.generate_key().decode()})
 from fastapi.testclient import TestClient  # noqa: E402
 
-from goblinbank import goblin, sync  # noqa: E402
-from goblinbank.db import DB  # noqa: E402
-from goblinbank.plaid import Plaid  # noqa: E402
+from plaidproxy import worker, sync  # noqa: E402
+from plaidproxy.db import DB  # noqa: E402
+from plaidproxy.plaid import Plaid  # noqa: E402
 
 H = {"X-Internal-Secret": "isec"}
 
@@ -31,7 +31,7 @@ def main():
     raw = Plaid()
     pulls = Plaid(usage=Count())
     db = DB(":memory:")
-    app = TestClient(goblin.create_app(db=db, today=date.today))
+    app = TestClient(worker.create_app(db=db, today=date.today))
     now = [1_900_000_000.0]
     sync.clock = lambda: now[0]
     for who, prod in (("Checking bank", "transactions"), ("Brokerage", "investments")):

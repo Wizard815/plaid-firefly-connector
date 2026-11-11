@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Safe backup while running: copies every goblin database with SQLite's own backup (consistent even mid-write),
-# then bundles it with the secrets and config into backups/goblin-bank-<date>.tar.gz (owner-only).
+# Safe backup while running: copies every worker database with SQLite's own backup (consistent even mid-write),
+# then bundles it with the secrets and config into backups/plaid-proxy-<date>.tar.gz (owner-only).
 # KEEP THE RESULT PRIVATE AND OFF THIS MACHINE: it contains the keys that decrypt your bank tokens.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -16,8 +16,8 @@ src.backup(dst); dst.close(); src.close()
 PY
 done
 cp -r .secrets "$work/" 2>/dev/null || true
-cp gateway.yaml goblins.yaml "$work/" 2>/dev/null || true
+cp gateway.yaml people.yaml "$work/" 2>/dev/null || true
 cp -r gateway-state "$work/" 2>/dev/null || true
-tar -czf "backups/goblin-bank-$stamp.tar.gz" -C "$work" .
-chmod 600 "backups/goblin-bank-$stamp.tar.gz"
-echo "Wrote backups/goblin-bank-$stamp.tar.gz"
+tar -czf "backups/plaid-proxy-$stamp.tar.gz" -C "$work" .
+chmod 600 "backups/plaid-proxy-$stamp.tar.gz"
+echo "Wrote backups/plaid-proxy-$stamp.tar.gz"

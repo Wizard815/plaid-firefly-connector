@@ -24,7 +24,7 @@ def vevent(s: dict) -> tuple[str, str]:
              f"RRULE:{rrule(s.get('every') or 1, s.get('unit') or 'month')}",
              f"SUMMARY:{_esc('$%.2f %s' % (s['amount'], s['name']))}",
              f"DESCRIPTION:{_esc((s.get('category') or '') + ' ' + (s.get('notes') or '')).strip()}",
-             "X-GOBLIN-AMOUNT:%.2f" % s["amount"], "TRANSP:TRANSPARENT", "END:VEVENT"]
+             "X-WORKER-AMOUNT:%.2f" % s["amount"], "TRANSP:TRANSPARENT", "END:VEVENT"]
     return uid, "\r\n".join(lines)
 
 
@@ -55,7 +55,7 @@ AMOUNT = re.compile(r"\$\s?(\d[\d,]*(?:\.\d{1,2})?)")
 
 
 def parse_ics(text: str) -> list[dict]:
-    """Minimal VEVENT reader: date, title, and a dollar amount from X-GOBLIN-AMOUNT or '$12.50' in the title."""
+    """Minimal VEVENT reader: date, title, and a dollar amount from X-WORKER-AMOUNT or '$12.50' in the title."""
     out = []
     for block in re.findall(r"BEGIN:VEVENT(.*?)END:VEVENT", text.replace("\r\n ", "").replace("\r", ""), re.S):
         f = {}
@@ -65,12 +65,12 @@ def parse_ics(text: str) -> list[dict]:
                 f.setdefault(k.split(";")[0].upper(), v.strip())
         m = re.match(r"(\d{4})(\d{2})(\d{2})", f.get("DTSTART", ""))
         title = f.get("SUMMARY", "").replace("\\,", ",").replace("\\;", ";")
-        amt = f.get("X-GOBLIN-AMOUNT")
+        amt = f.get("X-WORKER-AMOUNT")
         if amt is None and (mm := AMOUNT.search(title)):
             amt = mm.group(1).replace(",", "")
         if m:
             out.append({"date": f"{m[1]}-{m[2]}-{m[3]}", "title": title, "amount": float(amt) if amt else None, "uid": f.get("UID", ""),
-                        "goblin": f.get("UID", "").startswith("goblin-sub-"), "repeats": "RRULE" in f})
+                        "ours": f.get("UID", "").startswith("goblin-sub-"), "repeats": "RRULE" in f})
     return out
 
 

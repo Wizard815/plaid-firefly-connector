@@ -76,8 +76,8 @@ def parse(text: str, provider: str | None = None) -> tuple[str, list[dict]]:
 
 def store(db, provider: str, rows: list[dict]) -> int:
     acct = f"manual:{provider}"
-    from goblinbank.sync import money, now
-    from goblinbank import ledger
+    from plaidproxy.sync import money, now
+    from plaidproxy import ledger
     with db.tx() as c:
         c.execute("INSERT OR IGNORE INTO accounts(id,source,institution,name,kind,balance,updated) VALUES(?,?,?,?,?,?,?)",
                   (acct, "csv", provider.title(), f"{provider.title()} (CSV import)", "cash", None, now()))
@@ -138,8 +138,8 @@ def parse_bank(text: str, flip: bool = False) -> tuple[list[dict], float | None]
 
 
 def store_bank(db, account_id: str, rows: list[dict], balance: float | None = None) -> int:
-    from goblinbank import ledger
-    from goblinbank.sync import money, now, record_balance
+    from plaidproxy import ledger
+    from plaidproxy.sync import money, now, record_balance
     acct = db.one("SELECT * FROM accounts WHERE id=?", (account_id,))
     added = 0
     for r in rows:

@@ -2,8 +2,8 @@
 import random
 from datetime import date, timedelta
 
-from goblinbank import ledger, recur
-from goblinbank.db import DB
+from plaidproxy import ledger, recur
+from plaidproxy.db import DB
 
 MERCHANTS = ["Kroger", "Shell Oil", "Chipotle", "Target", "Amazon", "Starbucks", "Costco", "Home Depot", "Uber", "Walgreens", "Best Buy", "Panera",
              "Lowes", "Wendys", "Steam Games", "Old Navy", "CVS", "Sheetz", "Dominos", "Trader Joes", "Marathon Gas", "Zara", "Aldi", "Five Guys"]

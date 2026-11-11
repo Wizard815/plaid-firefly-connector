@@ -8,7 +8,7 @@ __pycache__
 data
 gateway-state
 gateway.yaml
-goblins.yaml
+people.yaml
 docker-compose.generated.yml
 docker-compose.*.yml
 tests

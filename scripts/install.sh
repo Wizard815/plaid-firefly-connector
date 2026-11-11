@@ -26,35 +26,35 @@ if [ "${ARGS[0]:-}" = "--set-password" ]; then
   [ -n "${ARGS[1]:-}" ] || { echo "usage: ./scripts/install.sh --set-password NAME"; exit 1; }
   NONINTERACTIVE=0 ask_password "${ARGS[1]}"
   [ -n "$PASSWORD" ] || { echo "No password entered; nothing changed."; exit 1; }
-  export GOBLIN_NEW_PASSWORD="$PASSWORD"
+  export PROXY_NEW_PASSWORD="$PASSWORD"
 fi
 
-if [ ! -f goblins.yaml ]; then
+if [ ! -f people.yaml ]; then
   # Nothing to edit: one person to start with (you are asked for a name and a password). Add more people, and enter your Plaid keys, in the app afterwards.
   NAME_=${NAME:-}
   if [ -z "$NAME_" ] && [ -t 0 ] && [ "${NONINTERACTIVE:-}" != 1 ]; then read -rp "Your name for signing in (lowercase letters, digits, hyphens) [me]: " NAME_; fi
   NAME_=${NAME_:-me}
-  NETWORK_=${NETWORK:-goblin-bank}
+  NETWORK_=${NETWORK:-plaid-proxy}
   docker network inspect "$NETWORK_" >/dev/null 2>&1 || docker network create "$NETWORK_" >/dev/null
-  printf 'goblins:\n  - name: %s\n    share: []\nnetwork: %s\norb_key: false\n' "$NAME_" "$NETWORK_" > goblins.yaml
-  echo "Created goblins.yaml with one person: $NAME_ (add more people later on the gateway's /admin page)."
+  printf 'people:\n  - name: %s\n    share: []\nnetwork: %s\norb_key: false\n' "$NAME_" "$NETWORK_" > people.yaml
+  echo "Created people.yaml with one person: $NAME_ (add more people later on the gateway's /admin page)."
   ask_password "$NAME_"
-  if [ -n "$PASSWORD" ]; then export "GOBLIN_PASSWORD_$(printf '%s' "$NAME_" | tr 'a-z-' 'A-Z_')=$PASSWORD"; fi
+  if [ -n "$PASSWORD" ]; then export "PROXY_PASSWORD_$(printf '%s' "$NAME_" | tr 'a-z-' 'A-Z_')=$PASSWORD"; fi
 fi
 unset PASSWORD p1 p2 2>/dev/null || true
 
 echo "Building the image (first time takes a few minutes)..."
-[ "${SKIP_BUILD:-}" = 1 ] || docker build -q -t goblin-bank .
+[ "${SKIP_BUILD:-}" = 1 ] || docker build -q -t plaid-proxy .
 
 echo "Generating secrets and the compose file..."
-docker run --rm -u 0 -v "$PWD":/work -w /work -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" $(env | sed -n 's/^\(GOBLIN_[A-Z0-9_]*PASSWORD[A-Z0-9_]*\)=.*/-e \1/p' | tr '\n' ' ') --entrypoint sh goblin-bank -c '
+docker run --rm -u 0 -v "$PWD":/work -w /work -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" $(env | sed -n 's/^\(PROXY_[A-Z0-9_]*PASSWORD[A-Z0-9_]*\)=.*/-e \1/p' | tr '\n' ' ') --entrypoint sh plaid-proxy -c '
   python scripts/gen_compose.py "$@" &&
   chown -R "$HOST_UID:$HOST_GID" .secrets docker-compose.generated.yml &&
   chmod 600 .secrets/*' sh ${ARGS[@]+"${ARGS[@]}"}
 
-PORT=$(sed -n 's/^port: *\([0-9]*\).*/\1/p' goblins.yaml | head -1); PORT=${PORT:-6421}
-LISTEN=$(sed -n 's/^listen: *\([0-9.:a-fA-F]*\).*/\1/p' goblins.yaml | head -1); LISTEN=${LISTEN:-127.0.0.1}
-[ "$LISTEN" = 127.0.0.1 ] && WHERE="on this machine only (to open it from other devices on your network, add 'listen: 0.0.0.0' to goblins.yaml and run this script again)" || WHERE="on $LISTEN"
+PORT=$(sed -n 's/^port: *\([0-9]*\).*/\1/p' people.yaml | head -1); PORT=${PORT:-6421}
+LISTEN=$(sed -n 's/^listen: *\([0-9.:a-fA-F]*\).*/\1/p' people.yaml | head -1); LISTEN=${LISTEN:-127.0.0.1}
+[ "$LISTEN" = 127.0.0.1 ] && WHERE="on this machine only (to open it from other devices on your network, add 'listen: 0.0.0.0' to people.yaml and run this script again)" || WHERE="on $LISTEN"
 cat <<MSG
 
 Done. Any random login token printed above is shown ONCE, so save it now. People who chose a password sign in with it (only a salted hash is stored).

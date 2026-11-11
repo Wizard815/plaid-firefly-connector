@@ -1,4 +1,4 @@
-"""A Goblin: one person's private bank service. Holds that person's data only.
+"""A Worker: one person's private bank service. Holds that person's data only.
 
 Every route except /health requires the internal secret (the gateway adds it after
 authenticating the person), so nothing here is reachable without going through CoinGateway.
@@ -15,13 +15,13 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from goblinbank.oplog import log
-from goblinbank import firefly, share as jointshare, plaidcost, plaidplan, api_money, external, notify, crypto, feed, importers, ledger, settings as cfg, sync
-from goblinbank.connectors.base import now_iso
-from goblinbank.connectors.rh_csv import CsvConnector
-from goblinbank.db import DB
-from goblinbank.plaid import Plaid, PlaidError, PlaidLimit
-from goblinbank.security import require_internal
+from plaidproxy.oplog import log
+from plaidproxy import firefly, share as jointshare, plaidcost, plaidplan, api_money, external, notify, crypto, feed, importers, ledger, settings as cfg, sync
+from plaidproxy.connectors.base import now_iso
+from plaidproxy.connectors.rh_csv import CsvConnector
+from plaidproxy.db import DB
+from plaidproxy.plaid import Plaid, PlaidError, PlaidLimit
+from plaidproxy.security import require_internal
 
 
 
@@ -38,7 +38,7 @@ def _equity(bal) -> float | None:
 
 
 def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: DB | None = None, today=None, llm_transport=None, autosync: bool = False, inline_webhooks: bool = False, ops_log: bool = False, firefly_transport=None, autosync_tick: float | None = None, notify_transport=None) -> FastAPI:
-    name = os.environ.get("GOBLIN_NAME", "goblin")
+    name = os.environ.get("PERSON_NAME", "worker")
     secret = os.environ.get("INTERNAL_SECRET", "")
     connector_secret = os.environ.get("CONNECTOR_SECRET", secret)
     urls = {"agent": os.environ.get("RH_AGENT_URL", ""), "live": os.environ.get("RH_LIVE_URL", "")}
@@ -60,14 +60,14 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                 pass
 
     def register_items(force: bool = False):
-        """Tell the gateway which bank belongs to this goblin, so a webhook finds its way here (the gateway keeps this in memory only, so say it again after any restart)."""
+        """Tell the gateway which bank belongs to this worker, so a webhook finds its way here (the gateway keeps this in memory only, so say it again after any restart)."""
         if not gateway_url or (not force and time.time() - policy_state.get("reg", 0) < 600):
             return
         policy_state["reg"] = time.time()
         reached = True
         for r in store.all("SELECT item_id FROM plaid_items"):
             try:
-                client.post(f"{gateway_url}/internal/items", json={"item_id": r["item_id"]}, headers={"X-Internal-Secret": secret, "X-Goblin": name})
+                client.post(f"{gateway_url}/internal/items", json={"item_id": r["item_id"]}, headers={"X-Internal-Secret": secret, "X-Person": name})
             except httpx.HTTPError:
                 reached = False
                 break
@@ -76,13 +76,13 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             (log.info if reached else log.warning)("the gateway is %s", "reachable again" if reached else "not reachable from here")
 
     def apply_policy(force: bool = False):
-        """Fetch the limits the gateway admin set for this goblin and keep them in settings, where everything else already reads them.
+        """Fetch the limits the gateway admin set for this worker and keep them in settings, where everything else already reads them.
         If the gateway cannot be reached the last ones stay in force."""
         if not gateway_url or (not force and time.time() - policy_state["at"] < 300):
             return
         policy_state["at"] = time.time()
         try:
-            r = client.get(f"{gateway_url}/internal/policy", headers={"X-Goblin": name, "X-Internal-Secret": secret})
+            r = client.get(f"{gateway_url}/internal/policy", headers={"X-Person": name, "X-Internal-Secret": secret})
             if r.status_code != 200:
                 return
             pol = r.json()
@@ -180,7 +180,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     import_dir = os.environ.get("IMPORT_DIR", "/data/imports")
     csv_dir = os.environ.get("RH_CSV_DIR", "/data/robinhood-csv")
     csv_connector = CsvConnector(csv_dir)
-    app = FastAPI(title=f"goblin:{name}")
+    app = FastAPI(title=f"worker:{name}")
 
     def share() -> set[str]:
         return set(cfg.get_list(store, "share"))
@@ -238,7 +238,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
 
     @app.get("/health")
     def health():
-        return {"ok": True, "goblin": name}
+        return {"ok": True, "worker": name}
 
     @app.get("/robinhood/main")
     def rh_main(request: Request):
@@ -444,10 +444,10 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             with store.tx() as c:
                 c.execute("INSERT OR REPLACE INTO plaid_items(item_id,institution,token_enc,cursor) VALUES(?,?,?,NULL)",
                           (r["item_id"], body.institution, crypto.encrypt(r["access_token"])))
-            if gateway_url:      # tell the gateway the item_id -> goblin map (never the token)
+            if gateway_url:      # tell the gateway the item_id -> worker map (never the token)
                 try:
                     client.post(f"{gateway_url}/internal/items", json={"item_id": r["item_id"]},
-                                headers={"X-Internal-Secret": secret, "X-Goblin": name})
+                                headers={"X-Internal-Secret": secret, "X-Person": name})
                 except httpx.HTTPError:
                     pass
             return {"item_id": r["item_id"], "sync": sync.sync_item(store, plaid, r["item_id"], force=True)}
@@ -496,7 +496,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         """Hand one message for another person's container to the gateway, which relays it and keeps nothing."""
         if not gateway_url:
             return False
-        r = client.post(f"{gateway_url}/internal/share/send", json={"to": peer, "type": kind, "payload": payload}, headers={"X-Goblin": name, "X-Internal-Secret": secret}, timeout=30)
+        r = client.post(f"{gateway_url}/internal/share/send", json={"to": peer, "type": kind, "payload": payload}, headers={"X-Person": name, "X-Internal-Secret": secret}, timeout=30)
         return r.status_code == 200 and bool(r.json().get("delivered"))
 
     def do_sync(force: bool = False) -> dict:
@@ -858,7 +858,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         return {"revoked": tid}
 
     def external_hash(tok):
-        from goblinbank.security import sha256
+        from plaidproxy.security import sha256
         return sha256(tok)
 
     @app.get("/external/{resource:path}")
@@ -932,6 +932,6 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             n_items = store.one("SELECT COUNT(*) n FROM plaid_items")["n"]
         except Exception:
             n_items = 0
-        log.info("goblin started: database ok, Plaid %s (%s), %d banks linked, background sync %s, gateway %s",
+        log.info("worker started: database ok, Plaid %s (%s), %d banks linked, background sync %s, gateway %s",
                  "configured" if plaid.configured else "NOT configured", "production" if "production" in plaid.base else "sandbox", n_items, "on" if autosync else "off", "set" if gateway_url else "not set")
     return app
