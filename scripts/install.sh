@@ -47,10 +47,17 @@ echo "Building the image (first time takes a few minutes)..."
 [ "${SKIP_BUILD:-}" = 1 ] || docker build -q -t plaid-proxy .
 
 echo "Generating secrets and the compose file..."
-docker run --rm -u 0 -v "$PWD":/work -w /work -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" $(env | sed -n 's/^\(PROXY_[A-Z0-9_]*PASSWORD[A-Z0-9_]*\)=.*/-e \1/p' | tr '\n' ' ') --entrypoint sh plaid-proxy -c '
+# Where live data goes (data_dir: in people.yaml, or PLAID_PROXY_DATA_DIR): default this folder. An outside folder is mounted at the same path.
+DATA=${PLAID_PROXY_DATA_DIR:-$(sed -n 's/^data_dir: *["'"'"']*\([^"'"'"' #]*\).*/\1/p' people.yaml | head -1)}
+DATA_MOUNT=(); SECRETS=.secrets
+if [ -n "$DATA" ]; then
+  case "$DATA" in /*) ;; *) DATA="$PWD/$DATA" ;; esac
+  mkdir -p "$DATA"; DATA_MOUNT=(-v "$DATA":"$DATA" -e PLAID_PROXY_DATA_DIR="$DATA"); SECRETS="$DATA/.secrets"
+fi
+docker run --rm -u 0 -v "$PWD":/work -w /work "${DATA_MOUNT[@]}" -e SECRETS="$SECRETS" -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" $(env | sed -n 's/^\(PROXY_[A-Z0-9_]*PASSWORD[A-Z0-9_]*\)=.*/-e \1/p' | tr '\n' ' ') --entrypoint sh plaid-proxy -c '
   python scripts/gen_compose.py "$@" &&
-  chown -R "$HOST_UID:$HOST_GID" .secrets docker-compose.generated.yml &&
-  chmod 600 .secrets/*' sh ${ARGS[@]+"${ARGS[@]}"}
+  chown -R "$HOST_UID:$HOST_GID" "$SECRETS" docker-compose.generated.yml &&
+  chmod 700 "$SECRETS" && chmod 600 "$SECRETS"/*' sh ${ARGS[@]+"${ARGS[@]}"}
 
 PORT=$(sed -n 's/^port: *\([0-9]*\).*/\1/p' people.yaml | head -1); PORT=${PORT:-6421}
 LISTEN=$(sed -n 's/^listen: *\([0-9.:a-fA-F]*\).*/\1/p' people.yaml | head -1); LISTEN=${LISTEN:-127.0.0.1}
@@ -58,7 +65,7 @@ LISTEN=$(sed -n 's/^listen: *\([0-9.:a-fA-F]*\).*/\1/p' people.yaml | head -1); 
 cat <<MSG
 
 Done. Any random login token printed above is shown ONCE, so save it now. People who chose a password sign in with it (only a salted hash is stored).
-The admin password is a random hex string saved in .secrets/admin.password and shown every time you run this script.
+The admin password is a random hex string saved in $SECRETS/admin.password and shown every time you run this script.
 
 Start everything:
   docker compose -f docker-compose.generated.yml up -d

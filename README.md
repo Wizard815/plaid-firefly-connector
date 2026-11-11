@@ -5,6 +5,9 @@ transactions you approve into Firefly III. Firefly III is where you look at
 your money; plaid-firefly-connector only has an **admin page** (`/admin`). The old
 per-person app lives on the `full-ui` branch.
 
+**Coming from Goblin Bank?** See [Moving from Goblin Bank](#moving-from-goblin-bank): one command moves everything
+(people, passwords, tokens, Plaid links, Firefly III links, data) into a fresh folder, and you can delete the old one afterwards.
+
 ## How it works
 
 1. **Admin** adds a person, enters the Plaid keys, sets API cost limits.
@@ -209,10 +212,18 @@ docker compose -f docker-compose.generated.yml down        # stop (data stays in
 | Path | What | Back up? |
 | --- | --- | --- |
 | `people.yaml` | who is on this server | yes |
-| `.secrets/` | encryption keys, secrets, the admin password (`admin.password`), password hashes | **yes, private** |
-| `data/<name>/db/` | one person's database | yes |
+| `.secrets/` | encryption keys, secrets, the admin password (`admin.password`), password hashes. `<name>.env` is the generator's own record; `<name>.worker.env` and `<name>.connector.env` are what the containers load (no password hashes in them) | **yes, private** |
+| `data/<name>/db/` | one person's database (`proxy.db`) | yes |
 | `data/<name>/imports/` | drop CSVs here (Cash App, PayPal, Venmo) | optional |
 | `gateway.yaml`, `gateway-state/` | the gateway's list of people (hashes only) | yes |
+
+**Keep live data outside this folder:** add `data_dir: /mnt/user/appdata/plaid-proxy-data` to `people.yaml` (or set
+`PLAID_PROXY_DATA_DIR`), then run `./scripts/install.sh`. `.secrets/`, `data/`, `gateway-state/` and `gateway.yaml` then live there, the
+generated compose file points at them, and regenerating never moves them back. No spaces in that path.
+
+**Values with a `$` in the files you fill in by hand** (`.secrets/plaid.env`, `<name>.integrations.env`, `<name>.rh-live.env`): Docker Compose
+reads `$word` as a variable and cuts the value short. Write each `$` as `$$`, or put the whole value in single quotes (`RH_PASSWORD='pa$s'`).
+`install.sh` warns when it sees a lone `$` there. Files the generator writes are escaped for you.
 
 ### 8. Troubleshooting
 * **No accounts after linking Plaid?** Run `./scripts/doctor.sh`. It checks, without printing any secret, that the Client ID and the secret are both set, which environment (Sandbox or Production) the app is using, whether Plaid accepts the keys, and which banks are linked, and it reminds you of the usual causes (linking in my.plaid.com instead of in the app, production not approved yet).
@@ -227,6 +238,68 @@ docker compose -f docker-compose.generated.yml down        # stop (data stays in
 * `.secrets/` readable only by you, and backed up off the machine.
 * Use local models only for the agent unless you have deliberately allowed a cloud one (Settings, Models).
 * Keep the Plaid daily call cap on (Settings, Connect & import).
+
+## Moving from Goblin Bank
+
+plaid-firefly-connector is what Goblin Bank became: names changed (`goblins.yaml` is now `people.yaml`, containers are `worker-<name>`, and so on;
+the full list is below), so an old folder cannot simply be pulled forward. Instead, clone this repository into a **new folder** and let one script
+move everything across. Your old folder is only read (it is mounted read-only), so you can always go back until you delete it.
+
+```bash
+cd /mnt/user/appdata                      # wherever your old goblin-bank folder is
+git clone https://github.com/Wizard815/plaid-firefly-connector.git plaid-proxy
+cd plaid-proxy
+./scripts/migrate_from_goblin_bank.sh /mnt/user/appdata/goblin-bank
+```
+
+What it does, in order:
+1. Builds the image, then **checks** the old install without changing anything: for each person it finds the database, the login, and the
+   encryption key the container really ran with, and proves that key opens every saved Plaid link. Data folders you moved by hand are found
+   from the old compose file. People added on the admin page (with their own `docker-compose.<name>.yml`) are found too.
+2. Stops the old containers (their files are not touched).
+3. Copies: secrets and keys, `goblins.yaml` as `people.yaml` (your comments kept, the same address and port), each database (renamed to
+   `proxy.db`, nothing in it changed), Robinhood files and imports, and the gateway's saved state (passwords changed in the app, Plaid keys,
+   Firefly III tokens, limits, Orb keys).
+4. Writes the new compose file, then **verifies** that every login, internal secret, encryption key, the admin password and the Orb key are
+   exactly what they were.
+5. Starts plaid-proxy and waits until every person's container answers.
+
+If any step after the old containers were stopped fails, it removes the half-made copy and starts the old containers again by itself.
+
+Afterwards everything signs in as before: the same names, passwords and login tokens, the same admin password, the same Home Assistant tokens
+(`gb_...`) and Pondering Orb key, and every bank stays linked. When you are happy:
+
+```bash
+./scripts/migrate_from_goblin_bank.sh --remove-old
+```
+That makes a private backup of the old folder next to the new one (`goblin-bank-final-backup-<date>.tar.gz`), removes the old images, and
+deletes the old folder. Delete the backup too once you no longer want a way back.
+
+Add `--data-dir /mnt/user/appdata/plaid-proxy-data` to the first command to keep the live data outside the new folder (see "Where things live").
+
+### What was renamed (for anyone who set things by hand)
+
+| Before (Goblin Bank) | Now |
+| --- | --- |
+| `goblins.yaml`, key `goblins:` | `people.yaml`, key `people:` (`gateway.yaml` too) |
+| `goblins.example.yaml` | `people.example.yaml` |
+| Python package `goblinbank`, module `goblin.py` | `plaidproxy`, `worker.py` |
+| `ROLE=goblin` | `ROLE=worker` |
+| `GOBLIN_NAME` | `PERSON_NAME` |
+| `GOBLIN_DB` (default `/data/goblin.db`) | `WORKER_DB` (default `/data/proxy.db`) |
+| `GOBLIN_AUTOSYNC` | `WORKER_AUTOSYNC` |
+| `GOBLIN_NEW_PASSWORD`, `GOBLIN_PASSWORD_<NAME>` (install script) | `PROXY_NEW_PASSWORD`, `PROXY_PASSWORD_<NAME>` |
+| services / hosts `goblin-<name>` | `worker-<name>` |
+| image `goblin-bank`, compose project = folder name | image `plaid-proxy`, compose project `plaid-proxy` |
+| header `X-Goblin` (between containers) | `X-Person` |
+| `.secrets/<name>.env` loaded into the container | `.secrets/<name>.worker.env` (no password hashes; `$` escaped) |
+| `CONNECTOR_SECRET` and the Robinhood connectors' `INTERNAL_SECRET` written in the compose file | `.secrets/<name>.worker.env` and `.secrets/<name>.connector.env` |
+| new | `data_dir:` in `people.yaml` / `PLAID_PROXY_DATA_DIR` |
+
+**Kept on purpose**, because they are stored elsewhere or read by other apps: the `goblin-bank` tag and internal reference on transactions
+already in Firefly III (so nothing old looks new), the IDs of calendar events (`goblin-sub-...`), the `gb_` prefix of API tokens, the
+`goblins`/`goblin` keys in `/api/v1/summary` (Pondering Orb reads them), and Pondering Orb's own `GOBLIN_ORB_KEY` setting. Your Docker
+network name (`network:` in the yaml) is also kept, since Firefly III may be on it.
 
 ## Run without the install script
 ```bash

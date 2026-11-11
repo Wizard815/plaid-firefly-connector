@@ -35,16 +35,18 @@ async function call(path, method = "GET", body) {
 }
 
 const b64 = () => { const a = crypto.getRandomValues(new Uint8Array(32)); return btoa(String.fromCharCode(...a)).replace(/\+/g, "-").replace(/\//g, "_"); };   // a Fernet key; made here, so the gateway never sees it
-const composeFor = (n, secret) => `services:
+const envFor = (secret) => `INTERNAL_SECRET=${secret}
+CONNECTOR_SECRET=${b64()}
+FIELD_KEY=${b64()}
+`;
+const composeFor = (n) => `services:
   worker-${n}:
     build: .
     environment:
       ROLE: worker
       PERSON_NAME: ${n}
-      INTERNAL_SECRET: ${secret}
-      FIELD_KEY: ${b64()}
       GATEWAY_URL: http://gateway:8000
-    env_file: [.secrets/plaid.env]
+    env_file: [.secrets/${n}.worker.env, .secrets/plaid.env]
     volumes: ["./data/${n}/db:/data"]
     user: "10001"
     networks: [edge, egress]
@@ -59,10 +61,11 @@ function renderPeople(rows) {
     e.preventDefault();
     try {
       const r = await call("/admin/people", "POST", { name: $("#pn").value.trim(), password: $("#pp").value });
-      const file = composeFor(r.name, r.internal_secret);
+      const file = composeFor(r.name), env = envFor(r.internal_secret);
       res.replaceChildren(el("p", {}, el("b", {}, r.name + " is registered.")), r.password_set ? el("p", { class: "small" }, "They sign in with the password you just set (only a salted hash of it is kept). They can change it under Settings, General.") : [el("p", { class: "small" }, "Give them this login token. It is shown once and is not stored: "), el("pre", { style: "white-space:pre-wrap;word-break:break-all;margin:0" }, r.login_token)],
-        el("p", { class: "small" }, "Their own container still has to be started once (this page cannot start Docker). Save this as docker-compose." + r.name + ".yml next to your other compose file:"), el("pre", { style: "overflow:auto;background:var(--bg);padding:10px;border-radius:8px;font-size:.8rem" }, file),
-        el("p", { class: "small" }, "Then run:"), el("pre", { style: "overflow:auto;background:var(--bg);padding:10px;border-radius:8px;font-size:.8rem" }, `mkdir -p data/${r.name}/db && sudo chown -R 10001:10001 data/${r.name}\ndocker compose -f docker-compose.generated.yml -f docker-compose.${r.name}.yml up -d --build`),
+        el("p", { class: "small" }, "Their own container still has to be started once (this page cannot start Docker). First save their keys as .secrets/" + r.name + ".worker.env (keep it private):"), el("pre", { style: "overflow:auto;background:var(--bg);padding:10px;border-radius:8px;font-size:.8rem" }, env),
+        el("p", { class: "small" }, "Then save this as docker-compose." + r.name + ".yml next to your other compose file (it holds no secrets):"), el("pre", { style: "overflow:auto;background:var(--bg);padding:10px;border-radius:8px;font-size:.8rem" }, file),
+        el("p", { class: "small" }, "Then run:"), el("pre", { style: "overflow:auto;background:var(--bg);padding:10px;border-radius:8px;font-size:.8rem" }, `chmod 600 .secrets/${r.name}.worker.env\nmkdir -p data/${r.name}/db && sudo chown -R 10001:10001 data/${r.name} && chmod 700 data/${r.name}\ndocker compose -f docker-compose.generated.yml -f docker-compose.${r.name}.yml up -d --build`),
         el("p", { class: "small muted" }, "The encryption key in that file was made in your browser, so the gateway never sees it. Back the file up: losing it means re-linking their banks. Once the container is up they sign in at the normal address with their name and token."));
       $("#pn").value = ""; $("#pp").value = ""; show();
     } catch (err) { note.textContent = err.message; note.className = "small err"; }

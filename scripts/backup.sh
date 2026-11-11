@@ -4,8 +4,12 @@
 # KEEP THE RESULT PRIVATE AND OFF THIS MACHINE: it contains the keys that decrypt your bank tokens.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+OUT="$PWD/backups"
+DATA=${PLAID_PROXY_DATA_DIR:-$(sed -n 's/^data_dir: *["'"'"']*\([^"'"'"' #]*\).*/\1/p' people.yaml 2>/dev/null | head -1)}
+cp people.yaml "${TMPDIR:-/tmp}/.pp-people.$$" 2>/dev/null || true
+[ -n "$DATA" ] && cd "$DATA"          # the live data (data/, .secrets/, gateway-state/, gateway.yaml) lives there
 stamp=$(date +%Y%m%d-%H%M%S); work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
-mkdir -p backups "$work/data"; umask 077
+mkdir -p "$OUT" "$work/data"; umask 077
 for db in data/*/db/*.db; do
   [ -e "$db" ] || continue
   dest="$work/$db"; mkdir -p "$(dirname "$dest")"
@@ -16,8 +20,9 @@ src.backup(dst); dst.close(); src.close()
 PY
 done
 cp -r .secrets "$work/" 2>/dev/null || true
-cp gateway.yaml people.yaml "$work/" 2>/dev/null || true
+cp gateway.yaml "$work/" 2>/dev/null || true
+mv "${TMPDIR:-/tmp}/.pp-people.$$" "$work/people.yaml" 2>/dev/null || true
 cp -r gateway-state "$work/" 2>/dev/null || true
-tar -czf "backups/plaid-proxy-$stamp.tar.gz" -C "$work" .
-chmod 600 "backups/plaid-proxy-$stamp.tar.gz"
-echo "Wrote backups/plaid-proxy-$stamp.tar.gz"
+tar -czf "$OUT/plaid-proxy-$stamp.tar.gz" -C "$work" .
+chmod 600 "$OUT/plaid-proxy-$stamp.tar.gz"
+echo "Wrote $OUT/plaid-proxy-$stamp.tar.gz"

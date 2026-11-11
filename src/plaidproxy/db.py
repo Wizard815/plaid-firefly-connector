@@ -81,6 +81,11 @@ class DB:
         if path != ":memory:":
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         self.conn = sqlite3.connect(path, check_same_thread=False)
+        if path != ":memory:":
+            try:
+                os.chmod(path, 0o600)            # bank data and encrypted Plaid tokens: owner-only, whatever the container's umask
+            except OSError:
+                pass
         self.conn.row_factory = sqlite3.Row
         self.lock = threading.RLock()
         with self.tx() as c:

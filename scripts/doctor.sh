@@ -5,12 +5,13 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 PORT=${PORT:-6421}; COMPOSE=${COMPOSE:-docker-compose.generated.yml}; BASE="http://127.0.0.1:$PORT"
+SEC=.secrets; DATA=${PLAID_PROXY_DATA_DIR:-$(sed -n 's/^data_dir: *["'"'"']*\([^"'"'"' #]*\).*/\1/p' people.yaml 2>/dev/null | head -1)}; [ -n "$DATA" ] && SEC="$DATA/.secrets"
 ok() { printf '  [ok]  %s\n' "$*"; }; bad() { printf '  [!!]  %s\n' "$*"; PROBLEMS=$((PROBLEMS + 1)); }; note() { printf '        %s\n' "$*"; }
 PROBLEMS=0
 
 echo "1. The deployment"
 [ -f "$COMPOSE" ] && ok "compose file: $COMPOSE" || bad "no $COMPOSE here. Run this from the plaid-firefly-connector folder, after ./scripts/install.sh"
-[ -d .secrets ] && ok ".secrets/ folder found" || bad "no .secrets/ folder (install.sh creates it)"
+[ -d "$SEC" ] && ok "$SEC/ folder found" || bad "no $SEC/ folder (install.sh creates it)"
 if command -v docker >/dev/null && [ -f "$COMPOSE" ]; then
   docker compose -f "$COMPOSE" ps --format '  {{.Service}}: {{.Status}}' 2>/dev/null | sed 's/^/        /' || true
   docker compose -f "$COMPOSE" ps --format '{{.Status}}' 2>/dev/null | grep -qi "unhealthy\|restarting\|exited" && bad "a container is not healthy: docker compose -f $COMPOSE logs <service>"
@@ -18,8 +19,8 @@ fi
 curl -fsS -m 5 "$BASE/health" >/dev/null 2>&1 && ok "the app answers at $BASE" || { bad "nothing answers at $BASE (wrong port, or the containers are down)"; }
 
 echo; echo "2. Plaid keys in the optional file .secrets/plaid.env (keys saved in the app are checked in step 4)"
-if [ -f .secrets/plaid.env ]; then
-  getv() { sed -n "s/^$1=//p" .secrets/plaid.env | head -1; }
+if [ -f "$SEC/plaid.env" ]; then
+  getv() { sed -n "s/^$1=//p" "$SEC/plaid.env" | head -1; }
   cid=$(getv PLAID_CLIENT_ID); sec=$(getv PLAID_SECRET); env_=$(getv PLAID_ENV)
   [ -n "$cid" ] && ok "PLAID_CLIENT_ID: set" || note "PLAID_CLIENT_ID: not set here"
   [ -n "$sec" ] && ok "PLAID_SECRET: set" || note "PLAID_SECRET: not set here"
