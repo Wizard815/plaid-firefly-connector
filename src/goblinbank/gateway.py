@@ -92,8 +92,13 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             raise HTTPException(409, "this gateway has no writable state folder; add people with goblins.yaml instead")
         state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"people": list(added.values()), "policy": policy, "orb": orb_added, "creds": creds}))
-        tmp.chmod(0o600)
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)        # owner-only from the first byte: it holds the Plaid secret and Firefly III tokens
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps({"people": list(added.values()), "policy": policy, "orb": orb_added, "creds": creds}))
         tmp.replace(state_path)
     items: dict[str, str] = {}
     client = httpx.Client(timeout=20, transport=transport)
@@ -207,11 +212,27 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     def health():
         return {"ok": True}
 
+    # The admin's decisions: which bank accounts go to which Firefly III account, joint-account shares, and where a person's data is sent.
+    # A person's own login may look at these but not change them (the admin page reaches them through /admin/p/...).
+    ADMIN_ONLY = [("PUT", r"api/firefly/accounts/[^/]+"), ("POST", r"api/firefly/accounts/[^/]+/rebalance"), ("PUT", r"api/shares/[^/]+")]
+
     @app.api_route("/g/{name}/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
     async def proxy(name: str, path: str, request: Request):
         """A signed-in person reaches only their own goblin."""
         g = user_goblin(request, name)
         body = await request.body()
+        p = path.strip("/")
+        if p.startswith(("internal/", "external/")) or p in ("internal", "external") or ".." in p.split("/"):
+            raise HTTPException(404, "not found")                  # the gateway's own channel to the goblin, never a person's
+        if any(request.method == m and re.fullmatch(rx, p) for m, rx in ADMIN_ONLY):
+            raise HTTPException(403, "only the admin can change this (the admin page)")
+        if request.method in ("PUT", "POST") and p == "api/settings":
+            try:
+                keys = set((json.loads(body or b"{}") or {}).keys())
+            except (ValueError, AttributeError):
+                raise HTTPException(422, "expected an object")
+            if any(k.startswith("firefly_") for k in keys):
+                raise HTTPException(403, "where your data is sent in Firefly III is set by the admin")
         # Blocking call goes to a worker thread: the goblin may call back into this gateway
         # (item registration) while we wait, and a blocked event loop would deadlock.
         r = await run_in_threadpool(client.request, request.method, f"{g['url']}/{path}", params=dict(request.query_params), content=body,

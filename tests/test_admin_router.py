@@ -209,3 +209,34 @@ def test_a_joint_account_is_shared_with_a_second_person_who_must_approve_it_for_
             break
         _t.sleep(0.1)
     assert dbb.one("SELECT mode FROM ff_accounts WHERE account_id='shared:alice:plaid-chk'")["mode"] == "skip"
+
+
+def test_a_person_cannot_do_what_only_the_admin_may(tmp_path, monkeypatch):
+    """Approving a bank account for Firefly III, and sharing a joint account, are the admin's decisions: a person's own login cannot do them."""
+    gw, db, ff, _, _ = world(tmp_path, monkeypatch)
+    bank(db)
+    P = {"Authorization": "Bearer t"}                                       # alice's own login token
+    assert gw.get("/g/alice/api/firefly/accounts", headers=P).status_code == 200            # she can look
+    assert gw.put("/g/alice/api/firefly/accounts/plaid-chk", headers=P, json={"mode": "create"}).status_code == 403
+    assert gw.put("/g/alice/api/shares/plaid-chk", headers=P, json={"peer": "bob"}).status_code == 403
+    assert gw.put("/g/alice/api/settings", headers=P, json={"firefly_url": "https://evil.example.com"}).status_code == 403
+    assert db.one("SELECT mode FROM ff_accounts WHERE account_id='plaid-chk'")["mode"] == "pending"
+    assert gw.put("/admin/p/alice/api/firefly/accounts/plaid-chk", headers=A, json={"mode": "create"}).status_code == 200      # the admin still can
+
+
+@pytest.mark.parametrize("path", ["api/firefly/accounts/plaid-chk/", "api//firefly/accounts/plaid-chk", "api/firefly/./accounts/plaid-chk", "api/firefly/x/../accounts/plaid-chk",
+                                  "api/firefly/accounts/plaid-chk%2F", "./api/firefly/accounts/plaid-chk", "api/firefly/accounts/plaid%2Dchk"])
+def test_odd_spellings_do_not_get_round_the_admin_rule(tmp_path, monkeypatch, path):
+    gw, db, ff, _, _ = world(tmp_path, monkeypatch)
+    bank(db)
+    gw.get("/admin/p/alice/api/firefly/accounts", headers=A)                    # every account gets its 'pending' row
+    gw.put("/g/alice/" + path, headers={"Authorization": "Bearer t"}, json={"mode": "create"})
+    assert db.one("SELECT mode FROM ff_accounts WHERE account_id='plaid-chk'")["mode"] == "pending"
+
+
+def test_a_person_cannot_reach_the_goblins_internal_endpoints(tmp_path, monkeypatch):
+    gw, db, ff, _, _ = world(tmp_path, monkeypatch)
+    P = {"Authorization": "Bearer t"}
+    r = gw.post("/g/alice/internal/share/inbox", headers=P, json={"type": "share-data", "sender": "bob", "payload": {"account": {"id": "x", "name": "Fake"}, "transactions": []}})
+    assert r.status_code == 404 and not db.one("SELECT 1 FROM accounts WHERE id LIKE 'shared:%'")
+    assert gw.get("/g/alice/internal/policy", headers=P).status_code == 404
