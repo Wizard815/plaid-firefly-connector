@@ -22,17 +22,40 @@ per-person app lives on the `full-ui` branch.
 
 ## Joint accounts
 
-A bank account two people share is linked once, by one of them, who then **asks** to share it; the other **accepts** or
-declines. Asking sends only the account's name, bank and last digits; nothing else moves until the other person accepts.
-When they accept they choose how it goes into their Firefly III: a new account, or one they already have. From then on
-the account and its transactions go to them as "Shared by <name>". Either of them can stop at any time (the owner with
-Stop, the other with Leave), and their side stops getting anything. Ask and answer through the person's own API
-(`GET /api/joint`, `POST /api/joint/<account>/ask`, `POST /api/joint/from/<owner>/<account>/accept|decline|leave`,
-`DELETE /api/joint/<account>`) or from Coinpile (Settings, Banks, Joint accounts).
+People share a bank account between themselves; the admin is not needed. The person who linked the account **asks**, the other
+person **accepts** or declines. The gateway only relays the messages between the two workers and keeps nothing.
 
-The admin can still share directly (Admin, Manage that person, **Joint with**); such a share is not sent to the other
-person's Firefly III until the admin approves it for them (create, link or skip), the same as any account. Do not share into two people who use the *same* Firefly III: it
-would show the account twice. Just link it once there.
+1. **Ask.** The owner picks the account and the person (`POST /api/joint/<account>/ask` with `{"peer": "<name>"}`, or Coinpile:
+   Settings, Banks, Joint accounts). Only the account's name, bank, kind and last digits are sent. Nothing else moves yet.
+2. **Answer.** The other person sees it under Incoming (`GET /api/joint`) and answers
+   (`POST /api/joint/from/<owner>/<account>/accept|decline`). Accepting means choosing how it goes into *their own* Firefly III:
+   * `{"mode": "create"}`: a new asset account, "Shared by <owner>".
+   * `{"mode": "link", "ff_id": <id>}`: an asset account they already have. It must exist in their Firefly III and must not already
+     receive another account (their own or another share).
+   * `{"mode": "skip"}`: accepted but not put into Firefly III.
+3. **Shared.** From then on the account's balance and transactions go to them after each sync, safely repeatable (no duplicates, edits
+   and deletions follow the bank). Only the owner's copy talks to the bank; the other side never sees anything else of the owner's.
+4. **Stop.** Either side can stop at any time: the owner with Stop (`DELETE /api/joint/<account>`), the other with Leave
+   (`POST /api/joint/from/<owner>/<account>/leave`). Nothing more is sent. The account stays in the receiver's Firefly III with the
+   history it already had (Firefly III is never emptied by the connector); they can delete it there.
+
+What happens at the edges:
+
+* **Asking again** after a stop, decline, leave or cancel is a new question. The other side is always told about the stop first, even
+  when the new question follows straight away, and a new acceptance applies the new choice.
+* **Changing your mind** before your answer is delivered: only the latest answer is sent.
+* **The account goes away** (unlinked from Plaid, or closed at the bank): the share ends and the other side is told.
+* **A person is removed** from the server: shares with them end on everyone's side. A removed person's name is never given to someone
+  new, so nobody can inherit their shares.
+* **Too many questions:** one person can have at most 20 questions waiting in someone's inbox.
+* **Two people on the same Firefly III:** don't share into it; it would show the account twice. Link it once there.
+
+The admin can still set a share directly (Admin, Manage that person, **Joint with**). The admin never sees the account's data, only
+counts. A share the admin set waits for the admin's approval on the receiver's side (create, link or skip), like a bank the receiver
+linked themselves, and the receiver can Leave it like any other. An account cannot be shared with its own owner.
+
+To count only your part of a joint account and settle up who put in what, tie the two copies together in Coinpile (Settings, Sharing,
+Joint accounts); see Coinpile's README.
 
 Goals and subscriptions are not part of this app any more (they live on the
 `full-ui` branch). Use Firefly III's own piggy banks and bills.
