@@ -341,6 +341,73 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         threading.Thread(target=lambda: jointshare.run(store, share_send), daemon=True).start()
         return {"ok": True}
 
+    # ---- joint accounts, asked and answered by the people themselves (the admin's PUT above stays as an override)
+    class AskIn(BaseModel):
+        peer: str
+
+    class AnswerIn(BaseModel):
+        mode: str | None = None              # accept: create (a new account in my Firefly III) or link (one I have already)
+        ff_id: int | None = None
+
+    def share_people() -> list[str]:
+        try:
+            r = client.get(f"{gateway_url}/internal/people", headers={"X-Person": name, "X-Internal-Secret": secret}, timeout=10)
+            return [p for p in r.json().get("people", []) if p != name] if r.status_code == 200 else []
+        except (httpx.HTTPError, ValueError):
+            return []
+
+    def share_kick():
+        threading.Thread(target=lambda: jointshare.run(store, share_send), daemon=True).start()
+
+    @app.get("/api/joint")
+    def joint_overview(request: Request):
+        """My accounts I share or asked to share, and the accounts others asked to share with me."""
+        auth(request)
+        o = jointshare.overview(store)
+        labels = {a["id"]: firefly.account_label(a) for a in store.all("SELECT * FROM accounts")}
+        for m in o["mine"]:
+            m["label"] = labels.get(m["account_id"], m["account_id"])
+        return {**o, "people": share_people(), "my_accounts": [{"id": a["id"], "label": labels[a["id"]]} for a in store.all("SELECT * FROM accounts WHERE source != 'shared' ORDER BY institution, name")]}
+
+    @app.post("/api/joint/{account_id}/ask")
+    def joint_ask(request: Request, account_id: str, b: AskIn):
+        """Ask another person to share one of my bank accounts with them. Only its name, bank and last digits go until they accept."""
+        auth(request)
+        peer = b.peer.strip().lower()
+        if peer == name or peer not in share_people():
+            raise HTTPException(422, "choose another person on this server")
+        try:
+            jointshare.request_share(store, account_id, peer)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        share_kick()
+        return {"asked": peer}
+
+    @app.delete("/api/joint/{account_id}")
+    def joint_stop(request: Request, account_id: str):
+        """Stop sharing (or cancel the question): the other person's copy stops getting anything."""
+        auth(request)
+        if not store.one("SELECT 1 FROM shares WHERE account_id=?", (account_id,)):
+            raise HTTPException(404, "not shared")
+        jointshare.set_share(store, account_id, None)
+        share_kick()
+        return {"stopped": account_id}
+
+    @app.post("/api/joint/from/{sender}/{account_id}/{answer}")
+    def joint_answer(request: Request, sender: str, account_id: str, answer: str, b: AnswerIn | None = None):
+        """Answer a share someone asked: accept (create or link in my Firefly III), decline, or leave one I accepted."""
+        auth(request)
+        if answer not in ("accept", "decline", "leave"):
+            raise HTTPException(404, "not found")
+        try:
+            jointshare.answer(store, sender, account_id, answer, (b.mode if b else None), (b.ff_id if b else None))
+        except KeyError:
+            raise HTTPException(404, "no such request")
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        share_kick()
+        return {answer: account_id}
+
     @app.post("/internal/share/inbox")
     def share_inbox(request: Request, m: ShareInbox):
         """From the gateway only: it stamps `sender` after checking who really sent it."""

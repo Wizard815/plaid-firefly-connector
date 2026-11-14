@@ -290,13 +290,22 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         require_internal(request, g["internal_secret"])
         body = await request.json()
         to = workers.get(body.get("to", ""))
-        if not to or to["name"] == g["name"] or not isinstance(body.get("payload", {}), dict) or body.get("type") not in ("share-data", "share-revoke"):
+        if not to or to["name"] == g["name"] or not isinstance(body.get("payload", {}), dict) or body.get("type") not in ("share-data", "share-revoke", "share-request", "share-accept", "share-decline", "share-leave"):
             return {"delivered": False}
         try:
             r = await run_in_threadpool(client.post, f"{to['url']}/internal/share/inbox", json={"type": body["type"], "payload": body["payload"], "sender": g["name"]}, headers=worker_headers(to), timeout=60)
         except httpx.HTTPError:
             return {"delivered": False}
         return {"delivered": r.status_code == 200}
+
+    @app.get("/internal/people")
+    def internal_people(request: Request):
+        """For a person's container: the names of the other people on this server, so a joint account is asked of someone who exists. Names only."""
+        g = workers.get(request.headers.get("x-person", ""))
+        if not g:
+            raise HTTPException(401, "unauthorized")
+        require_internal(request, g["internal_secret"])
+        return {"people": sorted(workers)}
 
     POLICY_KEYS = {"plaid_budget_month": float, "plaid_daily_cap": int, "plaid_min_minutes": int, "plaid_use_recurring": str, "public_url": str, "plaid_client_id": str, "plaid_secret": str, "plaid_env": str, "plaid_redirect_url": str, "firefly_url": str, "firefly_token": str, "firefly_apply_rules": str, "firefly_send_categories": str, "firefly_include_pending": str}
 

@@ -22,12 +22,16 @@ per-person app lives on the `full-ui` branch.
 
 ## Joint accounts
 
-A bank account two people share is linked once, by one of them. In Admin, Manage
-that person, and in the account table set **Joint with** to the other person. The
-other person gets the account and its transactions as "Shared by <name>". It is
-**not** sent to their Firefly III until the admin approves it for them (create,
-link or skip), the same as any account. Stopping the share tells their side to
-stop sending. Do not share into two people who use the *same* Firefly III: it
+A bank account two people share is linked once, by one of them, who then **asks** to share it; the other **accepts** or
+declines. Asking sends only the account's name, bank and last digits; nothing else moves until the other person accepts.
+When they accept they choose how it goes into their Firefly III: a new account, or one they already have. From then on
+the account and its transactions go to them as "Shared by <name>". Either of them can stop at any time (the owner with
+Stop, the other with Leave), and their side stops getting anything. Ask and answer through the person's own API
+(`GET /api/joint`, `POST /api/joint/<account>/ask`, `POST /api/joint/from/<owner>/<account>/accept|decline|leave`,
+`DELETE /api/joint/<account>`) or from Coinpile (Settings, Banks, Joint accounts).
+
+The admin can still share directly (Admin, Manage that person, **Joint with**); such a share is not sent to the other
+person's Firefly III until the admin approves it for them (create, link or skip), the same as any account. Do not share into two people who use the *same* Firefly III: it
 would show the account twice. Just link it once there.
 
 Goals and subscriptions are not part of this app any more (they live on the
