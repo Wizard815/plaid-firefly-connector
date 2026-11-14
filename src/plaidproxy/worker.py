@@ -334,6 +334,8 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     def share_set(request: Request, account_id: str, b: ShareIn):
         """Share one of this person's bank accounts with one other person (a joint account), or stop with an empty name. Set by the admin."""
         auth(request)
+        if b.peer.strip().lower() == name:
+            raise HTTPException(422, "an account cannot be shared with its own owner")
         try:
             jointshare.set_share(store, account_id, b.peer.strip().lower() or None)
         except ValueError as e:
@@ -399,6 +401,16 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         auth(request)
         if answer not in ("accept", "decline", "leave"):
             raise HTTPException(404, "not found")
+        if answer == "accept" and b and b.mode == "link":         # it must be one of my own Firefly III asset accounts
+            c = firefly.conf(store)
+            if not c["enabled"]:
+                raise HTTPException(409, "set up Firefly III first")
+            try:
+                mine_ff = {int(x["id"]) for x in firefly.Firefly(c["url"], c["token"], firefly_transport).accounts("asset")}
+            except Exception:
+                raise HTTPException(502, "could not read your Firefly III accounts to check the one chosen")
+            if not b.ff_id or int(b.ff_id) not in mine_ff:
+                raise HTTPException(422, "that is not one of your Firefly III asset accounts")
         try:
             jointshare.answer(store, sender, account_id, answer, (b.mode if b else None), (b.ff_id if b else None))
         except KeyError:
@@ -413,8 +425,11 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         """From the gateway only: it stamps `sender` after checking who really sent it."""
         auth(request)
         r = jointshare.receive(store, m.sender, m.type, m.payload)
-        if r.get("ok") and firefly.conf(store)["enabled"]:
-            threading.Thread(target=lambda: firefly.run(store, firefly_transport), daemon=True).start()
+        if r.get("ok") and m.type == "share-data" and firefly.conf(store)["enabled"]:
+            def push():
+                with sync_lock:                                 # never alongside a sync's own push (that could make an account twice)
+                    firefly.run(store, firefly_transport)
+            threading.Thread(target=push, daemon=True).start()
         return r
 
     @app.get("/api/firefly/accounts")
@@ -564,6 +579,8 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         if not gateway_url:
             return False
         r = client.post(f"{gateway_url}/internal/share/send", json={"to": peer, "type": kind, "payload": payload}, headers={"X-Person": name, "X-Internal-Secret": secret}, timeout=30)
+        if r.status_code == 200 and r.json().get("gone"):
+            return "gone"                                   # that person was removed from this server
         return r.status_code == 200 and bool(r.json().get("delivered"))
 
     def do_sync(force: bool = False) -> dict:

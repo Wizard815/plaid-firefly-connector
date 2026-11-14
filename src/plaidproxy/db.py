@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS transactions(
 CREATE TABLE IF NOT EXISTS shares(account_id TEXT PRIMARY KEY, peer TEXT NOT NULL);                    -- a joint account: whom it is also sent to
 CREATE TABLE IF NOT EXISTS share_sent(account_id TEXT NOT NULL, peer TEXT NOT NULL, tx_id TEXT NOT NULL, sig TEXT, PRIMARY KEY(account_id, peer, tx_id));
 CREATE TABLE IF NOT EXISTS share_in(sender TEXT NOT NULL, account_id TEXT NOT NULL, name TEXT, institution TEXT, mask TEXT, kind TEXT, state TEXT NOT NULL DEFAULT 'asked', mode TEXT, ff_id INTEGER, received TEXT, PRIMARY KEY(sender, account_id));   -- joint accounts others asked to share with me
-CREATE TABLE IF NOT EXISTS share_out(peer TEXT NOT NULL, kind TEXT NOT NULL, account_id TEXT NOT NULL, PRIMARY KEY(peer, kind, account_id));   -- my answers waiting to be delivered
+CREATE TABLE IF NOT EXISTS share_answer(peer TEXT NOT NULL, account_id TEXT NOT NULL, kind TEXT NOT NULL, PRIMARY KEY(peer, account_id));   -- my latest answer per shared account, until delivered
 CREATE TABLE IF NOT EXISTS share_revoke(account_id TEXT NOT NULL, peer TEXT NOT NULL, PRIMARY KEY(account_id, peer));
 CREATE INDEX IF NOT EXISTS tx_date ON transactions(date DESC);
 CREATE TABLE IF NOT EXISTS subscriptions(
@@ -65,7 +65,7 @@ CREATE INDEX IF NOT EXISTS ev_ts ON events(ts DESC);
 
 
 COLUMNS = {  # added after the first release: (table, column) -> DDL fragment
-    ("shares", "state"): "TEXT DEFAULT 'active'", ("shares", "asked"): "INTEGER DEFAULT 0",
+    ("shares", "state"): "TEXT DEFAULT 'active'", ("shares", "asked"): "INTEGER DEFAULT 0", ("share_in", "applied"): "INTEGER DEFAULT 0",
     ("subscriptions", "every"): "INTEGER DEFAULT 1", ("subscriptions", "unit"): "TEXT DEFAULT 'month'",
     ("subscriptions", "account_id"): "TEXT", ("subscriptions", "payment_method"): "TEXT DEFAULT ''",
     ("subscriptions", "payer"): "TEXT DEFAULT 'me'", ("subscriptions", "payer_name"): "TEXT DEFAULT ''",

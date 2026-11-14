@@ -316,3 +316,113 @@ def test_people_ask_and_answer_joint_accounts_themselves(tmp_path, monkeypatch):
     assert until(lambda: not gw.get("/g/bob/api/joint", headers=PB).json()["incoming"])
     # the admin's direct share is still the admin's alone
     assert gw.put("/g/alice/api/shares/plaid-chk", headers=PA, json={"peer": "bob"}).status_code == 403
+
+
+def raw(app, method, path, headers, body):
+    """Send a request with its path exactly as written: test clients (httpx) drop "." segments themselves, so they could not show the hole."""
+    import asyncio, json as _j
+    data = _j.dumps(body).encode()
+    scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": method, "scheme": "http", "path": path, "raw_path": path.encode(),
+             "query_string": b"", "headers": [(k.lower().encode(), v.encode()) for k, v in {**headers, "content-type": "application/json", "content-length": str(len(data))}.items()],
+             "client": ("127.0.0.1", 1), "server": ("gateway", 80)}
+    out, sent = {}, {"done": False}
+
+    async def receive():
+        if sent["done"]:
+            return {"type": "http.disconnect"}
+        sent["done"] = True
+        return {"type": "http.request", "body": data, "more_body": False}
+
+    async def send(m):
+        if m["type"] == "http.response.start":
+            out["status"] = m["status"]
+    asyncio.run(app(scope, receive, send))
+    return out["status"]
+
+
+@pytest.mark.parametrize("path", ["./api/shares/plaid-chk", "api/./shares/plaid-chk", "./internal/share/inbox", "api/firefly/accounts/./plaid-chk",
+                                  "./api/settings", "api//shares/plaid-chk", "api/shares/plaid-chk/."])
+def test_dot_segments_cannot_step_round_the_checks(tmp_path, monkeypatch, path):
+    gw, db, ff, _, _ = world(tmp_path, monkeypatch)
+    bank(db)
+    P = {"Authorization": "Bearer t"}
+    for m, body in (("PUT", {"peer": "bob"}), ("POST", {"type": "share-accept", "payload": {"account_id": "plaid-chk"}, "sender": "bob"}), ("PUT", {"firefly_url": "https://evil.example"}),
+                    ("PUT", {"mode": "create"})):
+        code = raw(gw.app, m, f"/g/alice/{path}", P, body)
+        assert code in (403, 404, 405), (m, path, code)
+    assert not db.all("SELECT * FROM shares") and (db.one("SELECT mode FROM ff_accounts WHERE account_id='plaid-chk'") or {}).get("mode") in (None, "pending")
+    assert not db.all("SELECT * FROM share_in")
+    assert raw(gw.app, "PUT", f"/admin/p/alice/{path}", A, {"peer": "bob"}) in (403, 404)
+
+
+def test_joint_edge_cases_cancel_reask_leave_reaccept_stop_then_ask(tmp_path, monkeypatch):
+    gw, (ga, dba, ffa), (gb, dbb, ffb) = two_people(tmp_path, monkeypatch)
+    PA, PB = {"Authorization": "Bearer talice"}, {"Authorization": "Bearer tbob"}
+    inc = lambda: gw.get("/g/bob/api/joint", headers=PB).json()["incoming"]                                       # noqa: E731
+    mine = lambda: gw.get("/g/alice/api/joint", headers=PA).json()["mine"]                                         # noqa: E731
+    mode = lambda: (dbb.one("SELECT mode FROM ff_accounts WHERE account_id='shared:alice:plaid-chk'") or {}).get("mode")   # noqa: E731
+    # ask, cancel, ask again: bob's acceptance still reaches his Firefly III (no stale "skip" left by the cancel)
+    gw.post("/g/alice/api/joint/plaid-chk/ask", headers=PA, json={"peer": "bob"})
+    assert until(lambda: inc())
+    gw.delete("/g/alice/api/joint/plaid-chk", headers=PA)
+    assert until(lambda: not inc()) and not dbb.one("SELECT COUNT(*) n FROM ff_accounts")["n"]            # no orphan mapping for an account bob never had
+    gw.post("/g/alice/api/joint/plaid-chk/ask", headers=PA, json={"peer": "bob"})
+    assert until(lambda: inc())
+    assert gw.post("/g/bob/api/joint/from/alice/plaid-chk/accept", headers=PB, json={"mode": "create"}).status_code == 200
+    assert until(lambda: mine() and mine()[0]["state"] == "active")
+    ga.post("/sync", headers=GH)
+    assert until(lambda: mode() == "create" and len(ffb.accounts) == 1)
+    # leave, then accept a new question: the new choice applies (no stale "skip")
+    gw.post("/g/bob/api/joint/from/alice/plaid-chk/leave", headers=PB)
+    assert until(lambda: not mine()) and mode() == "skip"
+    gw.post("/g/alice/api/joint/plaid-chk/ask", headers=PA, json={"peer": "bob"})
+    assert until(lambda: inc() and inc()[0]["state"] == "asked")
+    gw.post("/g/bob/api/joint/from/alice/plaid-chk/accept", headers=PB, json={"mode": "create"})
+    assert until(lambda: mode() == "create")
+    # stop and ask again straight away: bob is told about the stop first, so the new question is a new question he can answer
+    assert until(lambda: mine() and mine()[0]["state"] == "active")
+    gw.delete("/g/alice/api/joint/plaid-chk", headers=PA)
+    gw.post("/g/alice/api/joint/plaid-chk/ask", headers=PA, json={"peer": "bob"})
+    assert until(lambda: inc() and inc()[0]["state"] == "asked")
+    assert gw.post("/g/bob/api/joint/from/alice/plaid-chk/decline", headers=PB).status_code == 200
+    assert until(lambda: not mine())
+    # an account deleted after sharing is withdrawn from the other side
+    gw.post("/g/alice/api/joint/plaid-chk/ask", headers=PA, json={"peer": "bob"})
+    assert until(lambda: inc())
+    gw.post("/g/bob/api/joint/from/alice/plaid-chk/accept", headers=PB, json={"mode": "create"})
+    assert until(lambda: mine() and mine()[0]["state"] == "active")
+    dba.conn.execute("DELETE FROM accounts WHERE id='plaid-chk'"); dba.conn.commit()
+    ga.post("/sync", headers=GH)
+    assert until(lambda: not inc() and mode() == "skip") and not dba.all("SELECT * FROM shares")
+
+
+def test_link_must_be_a_free_firefly_account_and_answers_go_latest_first(tmp_path):
+    from plaidproxy import share
+    db = DB(":memory:")
+    db.conn.execute("INSERT INTO accounts(id,source,institution,name,kind) VALUES('plaid-own','plaid','Huntington','Checking','cash')")
+    db.conn.execute("INSERT INTO ff_accounts(account_id, mode, ff_id) VALUES('plaid-own','link',7)"); db.conn.commit()
+    assert share.receive(db, "alice", "share-request", {"account_id": "x", "name": "Joint"})["ok"]
+    with pytest.raises(ValueError, match="already receives Huntington - Checking"):
+        share.answer(db, "alice", "x", "accept", "link", 7)
+    share.answer(db, "alice", "x", "accept", "link", 8)
+    share.answer(db, "alice", "x", "leave")                                  # changed my mind before it was delivered
+    assert [(r["kind"]) for r in db.all("SELECT * FROM share_answer")] == ["share-leave"], "only the latest answer goes"
+    # one person cannot fill everyone's inbox; a removed person is dropped from my side
+    for i in range(25):
+        share.receive(db, "spammer", "share-request", {"account_id": f"a{i}", "name": "x"})
+    assert db.one("SELECT COUNT(*) n FROM share_in WHERE sender='spammer'")["n"] == 20
+    assert share.receive(db, "carol", "share-request", {"account_id": "c1", "name": "x"})["ok"]
+    db.conn.execute("INSERT INTO shares(account_id, peer, state) VALUES('plaid-own','spammer','active')"); db.conn.commit()
+    share.run(db, lambda peer, kind, payload: "gone" if peer == "spammer" else True)
+    assert not db.all("SELECT * FROM shares WHERE peer='spammer'") and not db.all("SELECT * FROM share_in WHERE sender='spammer'")
+
+
+def test_a_removed_name_is_never_given_to_someone_new(tmp_path, monkeypatch):
+    monkeypatch.setenv("GATEWAY_STATE", str(tmp_path / "s.json"))
+    gw = TestClient(gateway.create_app({"people": [], "orb_keys": [], "admin_token_sha256": sha256("adm")}))
+    assert gw.post("/admin/people", headers=A, json={"name": "bob"}).status_code == 200
+    assert gw.delete("/admin/people/bob", headers=A).status_code == 200
+    assert gw.post("/admin/people", headers=A, json={"name": "bob"}).status_code == 409
+    gw2 = TestClient(gateway.create_app({"people": [], "orb_keys": [], "admin_token_sha256": sha256("adm")}))      # remembered across a restart
+    assert gw2.post("/admin/people", headers=A, json={"name": "bob"}).status_code == 409
+    assert gw2.post("/admin/people", headers=A, json={"name": "bobby"}).status_code == 200
