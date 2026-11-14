@@ -240,3 +240,79 @@ def test_a_person_cannot_reach_the_workers_internal_endpoints(tmp_path, monkeypa
     r = gw.post("/g/alice/internal/share/inbox", headers=P, json={"type": "share-data", "sender": "bob", "payload": {"account": {"id": "x", "name": "Fake"}, "transactions": []}})
     assert r.status_code == 404 and not db.one("SELECT 1 FROM accounts WHERE id LIKE 'shared:%'")
     assert gw.get("/g/alice/internal/policy", headers=P).status_code == 404
+
+
+def two_people(tmp_path, monkeypatch):
+    monkeypatch.setenv("GATEWAY_URL", "http://gateway")
+    monkeypatch.setenv("GATEWAY_STATE", str(tmp_path / "s.json"))
+    holder = {}
+
+    def to_gateway(req: httpx.Request):
+        r = holder["gw"].request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
+        return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
+
+    def person(name):
+        monkeypatch.setenv("PERSON_NAME", name)
+        ff, db = FakeFirefly(), DB(":memory:")
+        g = TestClient(worker.create_app(db=db, firefly_transport=ff.transport(), transport=httpx.MockTransport(to_gateway)))
+        g.put("/api/settings", headers={"X-Internal-Secret": "isec"}, json={"firefly_url": f"https://{name}.example.com", "firefly_token": "good-token"})
+        return g, db, ff
+    (ga, dba, ffa), (gb, dbb, ffb) = person("alice"), person("bob")
+    bank(dba)
+    apps = {"alice": ga, "bob": gb}
+
+    def to_worker(req: httpx.Request):
+        r = apps[req.url.host].request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
+        return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
+    cfg = {"people": [{"name": n, "url": f"http://{n}", "internal_secret": "isec", "user_token_sha256": sha256("t" + n)} for n in apps], "orb_keys": [], "admin_token_sha256": sha256("adm")}
+    holder["gw"] = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(to_worker)))
+    return holder["gw"], (ga, dba, ffa), (gb, dbb, ffb)
+
+
+def until(cond, n=60):
+    import time as _t
+    for _ in range(n):
+        if cond():
+            return True
+        _t.sleep(0.05)
+    return False
+
+
+def test_people_ask_and_answer_joint_accounts_themselves(tmp_path, monkeypatch):
+    gw, (ga, dba, ffa), (gb, dbb, ffb) = two_people(tmp_path, monkeypatch)
+    PA, PB = {"Authorization": "Bearer talice"}, {"Authorization": "Bearer tbob"}          # each person's own login
+    o = gw.get("/g/alice/api/joint", headers=PA).json()
+    assert o["people"] == ["bob"] and "plaid-chk" in {a["id"] for a in o["my_accounts"]}
+    assert gw.post("/g/alice/api/joint/plaid-chk/ask", headers=PA, json={"peer": "mallory"}).status_code == 422
+    assert gw.post("/g/alice/api/joint/plaid-chk/ask", headers=PA, json={"peer": "alice"}).status_code == 422
+    # alice asks: bob is asked, and only the account's name goes
+    assert gw.post("/g/alice/api/joint/plaid-chk/ask", headers=PA, json={"peer": "bob"}).status_code == 200
+    assert until(lambda: gw.get("/g/bob/api/joint", headers=PB).json()["incoming"])
+    inc = gw.get("/g/bob/api/joint", headers=PB).json()["incoming"][0]
+    assert inc["sender"] == "alice" and inc["account_id"] == "plaid-chk" and inc["state"] == "asked" and inc["mask"]
+    assert not dbb.one("SELECT COUNT(*) n FROM transactions")["n"] and gw.get("/g/alice/api/joint", headers=PA).json()["mine"][0]["state"] == "requested"
+    # bob accepts, choosing a new account in his Firefly III: the data comes and goes there without anyone else approving it
+    assert gw.post("/g/bob/api/joint/from/alice/plaid-chk/accept", headers=PB, json={"mode": "link"}).status_code == 422      # link needs which account
+    assert gw.post("/g/bob/api/joint/from/alice/plaid-chk/accept", headers=PB, json={"mode": "create"}).status_code == 200
+    assert until(lambda: gw.get("/g/alice/api/joint", headers=PA).json()["mine"][0]["state"] == "active")
+    ga.post("/sync", headers=GH)
+    assert until(lambda: dbb.one("SELECT COUNT(*) n FROM transactions")["n"] == 3)
+    assert dbb.one("SELECT mode FROM ff_accounts WHERE account_id='shared:alice:plaid-chk'")["mode"] == "create"
+    gb.post("/api/firefly/sync", headers=GH)                                              # it also goes on its own as soon as it arrives
+    assert until(lambda: len(ffb.accounts) == 1 and len(ffb.groups) == 2)
+    assert gw.post("/g/bob/api/joint/from/alice/plaid-chk/accept", headers=PB, json={"mode": "create"}).status_code == 422   # already answered
+    # bob leaves: alice stops sending, bob's Firefly III gets nothing more
+    assert gw.post("/g/bob/api/joint/from/alice/plaid-chk/leave", headers=PB).status_code == 200
+    assert until(lambda: not gw.get("/g/alice/api/joint", headers=PA).json()["mine"])
+    assert dbb.one("SELECT mode FROM ff_accounts WHERE account_id='shared:alice:plaid-chk'")["mode"] == "skip"
+    # alice asks again and bob says no: nothing moves
+    gw.post("/g/alice/api/joint/plaid-chk/ask", headers=PA, json={"peer": "bob"})
+    assert until(lambda: gw.get("/g/bob/api/joint", headers=PB).json()["incoming"])
+    assert gw.post("/g/bob/api/joint/from/alice/plaid-chk/decline", headers=PB).status_code == 200
+    assert until(lambda: not gw.get("/g/alice/api/joint", headers=PA).json()["mine"])
+    # and alice can stop (or cancel) her own share herself
+    gw.post("/g/alice/api/joint/plaid-chk/ask", headers=PA, json={"peer": "bob"})
+    assert gw.delete("/g/alice/api/joint/plaid-chk", headers=PA).status_code == 200
+    assert until(lambda: not gw.get("/g/bob/api/joint", headers=PB).json()["incoming"])
+    # the admin's direct share is still the admin's alone
+    assert gw.put("/g/alice/api/shares/plaid-chk", headers=PA, json={"peer": "bob"}).status_code == 403
