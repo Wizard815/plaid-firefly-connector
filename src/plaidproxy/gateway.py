@@ -57,6 +57,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     orb_keys = list(cfg.get("orb_keys", []))                    # from gateway.yaml; keys made on the admin page are added to this same list (they are remembered in the state file)
     orb_added: list[dict] = []
     creds: dict[str, str] = {}                                  # passwords people set or changed in the app (scrypt hashes); they take over from gateway.yaml
+    removed: set[str] = set()                                  # names of people removed on the admin page: never given to someone new
     invites: dict[str, dict] = {}                               # temporary link codes the admin hands to a person (hash -> who, until when); memory only
     link_sessions: dict[str, tuple[str, float]] = {}           # what a code turns into: a token that can only link that person's banks, until the code runs out
     invite_throttle = Throttle()
@@ -77,6 +78,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         try:
             saved = json.loads(state_path.read_text())
             creds.update(saved.get("creds") or {})
+            removed.update(saved.get("removed") or [])
             for k in saved.get("orb", []):
                 orb_added.append(k)
                 orb_keys.append({"sha256": k["sha256"], "scopes": ["summary:read"]})
@@ -98,7 +100,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             pass
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)        # owner-only from the first byte: it holds the Plaid secret and Firefly III tokens
         with os.fdopen(fd, "w") as f:
-            f.write(json.dumps({"people": list(added.values()), "policy": policy, "orb": orb_added, "creds": creds}))
+            f.write(json.dumps({"people": list(added.values()), "policy": policy, "orb": orb_added, "creds": creds, "removed": sorted(removed)}))
         tmp.replace(state_path)
     items: dict[str, str] = {}
     client = httpx.Client(timeout=20, transport=transport)
@@ -216,13 +218,22 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     # A person's own login may look at these but not change them (the admin page reaches them through /admin/p/...).
     ADMIN_ONLY = [("PUT", r"api/firefly/accounts/[^/]+"), ("POST", r"api/firefly/accounts/[^/]+/rebalance"), ("PUT", r"api/shares/[^/]+")]
 
+    def clean_path(path: str) -> str:
+        """The one spelling of a path that is both checked and forwarded. httpx would drop "." and ".." segments when it builds the URL,
+        so a check made on the raw text could be stepped round ("./internal/..."); such paths are refused instead of normalised."""
+        p = path.strip("/")
+        segs = p.split("/")
+        if not p or any(s in ("", ".", "..") or "\\" in s or any(ord(ch) < 32 for ch in s) for s in segs):
+            raise HTTPException(404, "not found")
+        return p
+
     @app.api_route("/g/{name}/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
     async def proxy(name: str, path: str, request: Request):
         """A signed-in person reaches only their own worker."""
         g = user_worker(request, name)
         body = await request.body()
-        p = path.strip("/")
-        if p.startswith(("internal/", "external/")) or p in ("internal", "external") or ".." in p.split("/"):
+        p = clean_path(path)
+        if p.startswith(("internal/", "external/")) or p in ("internal", "external"):
             raise HTTPException(404, "not found")                  # the gateway's own channel to the worker, never a person's
         if any(request.method == m and re.fullmatch(rx, p) for m, rx in ADMIN_ONLY):
             raise HTTPException(403, "only the admin can change this (the admin page)")
@@ -235,7 +246,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
                 raise HTTPException(403, "where your data is sent in Firefly III is set by the admin")
         # Blocking call goes to a worker thread: the worker may call back into this gateway
         # (item registration) while we wait, and a blocked event loop would deadlock.
-        r = await run_in_threadpool(client.request, request.method, f"{g['url']}/{path}", params=dict(request.query_params), content=body,
+        r = await run_in_threadpool(client.request, request.method, f"{g['url']}/{p}", params=dict(request.query_params), content=body,
                                     headers={**worker_headers(g), "Content-Type": request.headers.get("content-type", "application/octet-stream")})
         return Response(r.content, r.status_code, media_type=r.headers.get("content-type"))
 
@@ -290,7 +301,11 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         require_internal(request, g["internal_secret"])
         body = await request.json()
         to = workers.get(body.get("to", ""))
-        if not to or to["name"] == g["name"] or not isinstance(body.get("payload", {}), dict) or body.get("type") not in ("share-data", "share-revoke", "share-request", "share-accept", "share-decline", "share-leave"):
+        if body.get("type") not in ("share-data", "share-revoke", "share-request", "share-accept", "share-decline", "share-leave") or not isinstance(body.get("payload", {}), dict):
+            return {"delivered": False}
+        if not to:
+            return {"delivered": False, "gone": True}              # not on this server (removed): the sender drops its shares with them
+        if to["name"] == g["name"]:
             return {"delivered": False}
         try:
             r = await run_in_threadpool(client.post, f"{to['url']}/internal/share/inbox", json={"type": body["type"], "payload": body["payload"], "sender": g["name"]}, headers=worker_headers(to), timeout=60)
@@ -569,6 +584,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         g = workers.get(name)
         if not g:
             raise HTTPException(404, "no such person")
+        path = clean_path(path)
         if not any(request.method == m and re.fullmatch(p, path) for m, p in ADMIN_CALLS):
             raise HTTPException(403, "the admin page cannot make that call")
         body = await request.body()
@@ -669,6 +685,8 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             raise HTTPException(422, "a name is lowercase letters, digits and hyphens, starting with a letter")
         if name in workers:
             raise HTTPException(409, "that name is taken")
+        if name in removed:
+            raise HTTPException(409, "that name belonged to someone who was removed; pick another, so nothing they shared reaches a new person")
         password = str(body.get("password", "") or "")
         token, internal = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         entry = {"name": name, "url": f"http://worker-{name}:8000", "internal_secret": internal}
@@ -695,6 +713,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         if name not in added:
             raise HTTPException(404, "only people added on this page can be removed here")
         del workers[name], added[name]
+        removed.add(name)                          # never handed to someone new: what was shared with the old one must not reach them
         save_state()
         return {"removed": name}
 
