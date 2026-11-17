@@ -173,8 +173,8 @@ def _role(a: dict) -> dict:
 
 
 def _signed(a: dict) -> float:
-    """What the account's balance is, as an asset: a card's owed amount is a negative balance."""
-    return -(a["balance"] or 0.0) if a["kind"] == "credit" else (a["balance"] or 0.0)
+    """What the account's balance is, as an asset: what is owed on a card or a loan is a negative balance."""
+    return -(a["balance"] or 0.0) if a["kind"] in ("credit", "loan") else (a["balance"] or 0.0)
 
 
 def opening_for(db, a: dict, include_pending: bool) -> tuple[float, str]:

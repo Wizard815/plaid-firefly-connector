@@ -4,6 +4,7 @@ Every route except /health requires the internal secret (the gateway adds it aft
 authenticating the person), so nothing here is reachable without going through CoinGateway.
 Amounts are signed: positive = money in, negative = money out.
 """
+import json
 import os
 import queue
 import threading
@@ -761,7 +762,10 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     async def settings_put(request: Request):
         """Partial update. Secret fields: omit = unchanged, "" = clear. Secrets are never returned."""
         auth(request)
-        body = await request.json()
+        try:
+            body = json.loads(await request.body() or b"{}")
+        except (ValueError, UnicodeDecodeError):
+            raise HTTPException(422, "expected an object")
         if not isinstance(body, dict):
             raise HTTPException(422, "expected an object")
         locked = [k for k in body if k in policy_state["keys"]]
