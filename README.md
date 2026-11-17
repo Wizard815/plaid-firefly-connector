@@ -156,6 +156,8 @@ How sign-in works:
 * **People choose their own password.** It is kept only as a salted scrypt hash (never as plain text, and the script never writes it to a file). Press Enter at the prompt instead and a random login token is generated and printed **once**; that token is the password then. Change a password later under Settings, General, or `./scripts/install.sh --set-password NAME`. You can also put `password:` on a person in `people.yaml` (12+ characters, validated), see `people.example.yaml`; the plaintext stays only in that file.
 * **The admin password is random hex**, saved in `.secrets/admin.password` (owner-only) and printed every time you run `./scripts/install.sh`; the gateway only keeps its hash. Lose it? `cat .secrets/admin.password`.
 * **Guessing is slowed down**: after 5 wrong tries for a name (or for the admin) further tries are refused for a while, doubling up to 15 minutes. A weak password is still weak, so make it long.
+* **A path is checked exactly as it is sent on**: every request the gateway passes to a person's container is checked and then sent percent-encoded, so `..`, an encoded `?` or `#`, or an empty segment cannot make the container see a different path than the one that was checked. An API token path (`/api/v1/me/...`) cannot leave the token area, and a request body that is not a JSON object is refused with a plain message.
+* **Cards and loans go to Firefly III as money owed** (a negative balance), so they reduce net worth there.
 * Unattended installs: `NONINTERACTIVE=1 NAME=alice PROXY_PASSWORD_ALICE='a long phrase here' ./scripts/install.sh`.
 
 ### 3. Set everything up in the app
