@@ -14,6 +14,7 @@ from pathlib import Path
 
 import httpx
 import yaml
+from urllib.parse import quote
 from fastapi.concurrency import run_in_threadpool
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
@@ -166,7 +167,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     @app.post("/login")
     async def login(request: Request):
         """Name + password in, a session token out (use it as the bearer token). Wrong attempts are slowed down per name."""
-        body = await request.json()
+        body = await obj(request)
         name, pw = str(body.get("name", "")).strip().lower(), str(body.get("password", ""))
         throttle.check("u:" + name)
         g = workers.get(name)
@@ -179,7 +180,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     @app.post("/account/password")
     async def change_password(request: Request):
         """Change your own password (the current one is required). Stored as a scrypt hash in the gateway's state folder."""
-        body = await request.json()
+        body = await obj(request)
         name, cur, new = str(body.get("name", "")).strip().lower(), str(body.get("current", "")), str(body.get("new", ""))
         throttle.check("u:" + name)
         g = workers.get(name)
@@ -227,6 +228,21 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             raise HTTPException(404, "not found")
         return p
 
+    def wire(p: str) -> str:
+        """A checked path as it is sent to a worker: every segment percent-encoded, so "?", "#" or "%" inside a segment stays part of
+        that segment instead of becoming a query string or another path. The worker then sees exactly the path that was checked."""
+        return "/".join(quote(seg, safe="") for seg in p.split("/"))
+
+    async def obj(request: Request) -> dict:
+        """The request's JSON object; anything else is a 422, not an error page."""
+        try:
+            b = json.loads(await request.body() or b"{}")
+        except (ValueError, UnicodeDecodeError):
+            raise HTTPException(422, "expected a JSON object")
+        if not isinstance(b, dict):
+            raise HTTPException(422, "expected a JSON object")
+        return b
+
     @app.api_route("/g/{name}/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
     async def proxy(name: str, path: str, request: Request):
         """A signed-in person reaches only their own worker."""
@@ -246,7 +262,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
                 raise HTTPException(403, "where your data is sent in Firefly III is set by the admin")
         # Blocking call goes to a worker thread: the worker may call back into this gateway
         # (item registration) while we wait, and a blocked event loop would deadlock.
-        r = await run_in_threadpool(client.request, request.method, f"{g['url']}/{p}", params=dict(request.query_params), content=body,
+        r = await run_in_threadpool(client.request, request.method, f"{g['url']}/{wire(p)}", params=dict(request.query_params), content=body,
                                     headers={**worker_headers(g), "Content-Type": request.headers.get("content-type", "application/octet-stream")})
         return Response(r.content, r.status_code, media_type=r.headers.get("content-type"))
 
@@ -276,6 +292,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         g = workers.get(parts[1]) if len(parts) == 3 and parts[0] == "gb" else None
         if not g:
             raise HTTPException(401, "invalid token")           # same answer for an unknown worker and a bad secret
+        resource = wire(clean_path(resource)) if resource.strip("/") else ""      # never out of the worker's /external/ area
         r = await run_in_threadpool(client.get, f"{g['url']}/external/{resource}", params=dict(request.query_params), headers={**worker_headers(g), "X-API-Token": tok})
         return Response(r.content, r.status_code, media_type=r.headers.get("content-type"))
 
@@ -285,7 +302,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         if not g:
             raise HTTPException(401, "unauthorized")
         require_internal(request, g["internal_secret"])
-        item_id = (await request.json()).get("item_id")
+        item_id = (await obj(request)).get("item_id")
         if not item_id:
             raise HTTPException(422, "item_id required")
         items[item_id] = g["name"]
@@ -299,7 +316,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         if not g:
             raise HTTPException(401, "unauthorized")
         require_internal(request, g["internal_secret"])
-        body = await request.json()
+        body = await obj(request)
         to = workers.get(body.get("to", ""))
         if body.get("type") not in ("share-data", "share-revoke", "share-request", "share-accept", "share-decline", "share-leave") or not isinstance(body.get("payload", {}), dict):
             return {"delivered": False}
@@ -448,7 +465,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     async def admin_put_policy(request: Request):
         """Set the Plaid limits: one default for everyone plus optional per-person overrides. Empty budget = no limit."""
         admin(request)
-        body = await request.json()
+        body = await obj(request)
         new = {"default": clean_policy(body.get("default", {})), "people": {n: clean_policy(v) for n, v in (body.get("people") or {}).items() if n in workers and v}}
         if "people" not in body:                                                    # a call that only sets the defaults leaves per-person settings alone, and the other way round
             new["people"] = {n: dict(o) for n, o in policy["people"].items()}
@@ -477,7 +494,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         admin(request)
         if name not in workers:
             raise HTTPException(404, "no such person")
-        b = await request.json()
+        b = await obj(request)
         url, token = str(b.get("url", "")).strip(), str(b.get("token", "")).strip()
         entry = dict(policy["people"].get(name, {}))
         if url:
@@ -530,7 +547,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     async def admin_orb_create(request: Request):
         """Make a read-only key for Pondering Orb. Shown once; only its hash is kept. The Orb sees only what each person ticked under Settings, Sharing."""
         admin(request)
-        name = str((await request.json()).get("name", "") or "Pondering Orb").strip()[:60]
+        name = str((await obj(request)).get("name", "") or "Pondering Orb").strip()[:60]
         key = "orb_" + secrets.token_urlsafe(32)
         entry = {"id": sha256(key)[:10], "name": name, "created": time.strftime("%Y-%m-%d"), "sha256": sha256(key)}
         orb_added.append(entry)
@@ -589,7 +606,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             raise HTTPException(403, "the admin page cannot make that call")
         body = await request.body()
         try:
-            r = await run_in_threadpool(client.request, request.method, f"{g['url']}/{path}", params=dict(request.query_params), content=body, timeout=60,
+            r = await run_in_threadpool(client.request, request.method, f"{g['url']}/{wire(path)}", params=dict(request.query_params), content=body, timeout=60,
                                         headers={**worker_headers(g), "Content-Type": request.headers.get("content-type", "application/json")})
         except httpx.HTTPError:
             raise HTTPException(502, f"{name}'s container is not answering")
@@ -605,7 +622,10 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         admin(request)
         if name not in workers:
             raise HTTPException(404, "no such person")
-        minutes = int(((await request.json()) or {}).get("minutes", 60))
+        try:
+            minutes = int((await obj(request)).get("minutes", 60))
+        except (TypeError, ValueError):
+            raise HTTPException(422, "between 5 minutes and 7 days")
         if not 5 <= minutes <= 7 * 24 * 60:
             raise HTTPException(422, "between 5 minutes and 7 days")
         code = secrets.token_urlsafe(9)
@@ -635,7 +655,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     async def link_session(request: Request):
         """Swap a temporary code for a session that can link banks for one person, and nothing else."""
         invite_throttle.check("invite")
-        code = str((await request.json()).get("code", "")).strip()
+        code = str((await obj(request)).get("code", "")).strip()
         inv = invites.get(sha256(code))
         if not inv or inv["expires"] < time.time():
             invite_throttle.fail("invite")
@@ -654,12 +674,13 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         if not s or s[1] < time.time():
             raise HTTPException(401, "your link code has run out; ask for a new one")
         name = s[0]
+        path = clean_path(path)
         if name not in workers or not any(request.method == m and re.fullmatch(p, path) for m, p in LINK_CALLS):
             raise HTTPException(403, "not available here")
         g = workers[name]
         body = await request.body()
         try:
-            r = await run_in_threadpool(client.request, request.method, f"{g['url']}/{path}", params=dict(request.query_params), content=body, timeout=60,
+            r = await run_in_threadpool(client.request, request.method, f"{g['url']}/{wire(path)}", params=dict(request.query_params), content=body, timeout=60,
                                         headers={**worker_headers(g), "Content-Type": request.headers.get("content-type", "application/json")})
         except httpx.HTTPError:
             raise HTTPException(502, "your container is not answering")
@@ -679,7 +700,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     async def admin_add_person(request: Request):
         """Register a new person without touching any yaml. Returns their login token and internal secret once; only the token's hash is kept."""
         admin(request)
-        body = await request.json()
+        body = await obj(request)
         name = str(body.get("name", "")).strip().lower()
         if not re.fullmatch(r"[a-z][a-z0-9-]{0,30}", name):
             raise HTTPException(422, "a name is lowercase letters, digits and hyphens, starting with a letter")

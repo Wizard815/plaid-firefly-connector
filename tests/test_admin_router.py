@@ -426,3 +426,46 @@ def test_a_removed_name_is_never_given_to_someone_new(tmp_path, monkeypatch):
     gw2 = TestClient(gateway.create_app({"people": [], "orb_keys": [], "admin_token_sha256": sha256("adm")}))      # remembered across a restart
     assert gw2.post("/admin/people", headers=A, json={"name": "bob"}).status_code == 409
     assert gw2.post("/admin/people", headers=A, json={"name": "bobby"}).status_code == 200
+
+
+@pytest.mark.parametrize("path", ["api/shares/plaid-chk?/x", "api/firefly/accounts/plaid-chk?/x", "api/settings?z=1", "api/shares/plaid-chk#/x", "api/settings%3Fz=1"])
+def test_a_question_mark_in_the_path_cannot_hide_the_real_route(tmp_path, monkeypatch, path):
+    """An encoded "?" arrives decoded inside the path. Forwarded as written it would start a query string, so the worker would get a
+    shorter path than the one that was checked."""
+    gw, db, ff, _, _ = world(tmp_path, monkeypatch)
+    bank(db)
+    P = {"Authorization": "Bearer t"}
+    for body in ({"peer": "bob"}, {"mode": "create"}, {"firefly_url": "http://169.254.169.254/latest", "firefly_enabled": "on"}):
+        assert raw(gw.app, "PUT", f"/g/alice/{path}", P, body) in (403, 404, 405), (path, body)
+    assert not db.all("SELECT * FROM shares") and (db.one("SELECT mode FROM ff_accounts WHERE account_id='plaid-chk'") or {}).get("mode") in (None, "pending")
+    assert "169.254" not in str(gw.get("/g/alice/api/settings", headers=P).json())
+
+
+@pytest.mark.parametrize("path", ["../api/transactions", "../api/accounts", "../summary", "../internal/connector-config/rh-agent", "x/../../api/settings", "./../api/accounts",
+                                  "..%2fapi/accounts", "api?/../x"])
+def test_an_api_token_path_cannot_leave_the_external_area(tmp_path, monkeypatch, path):
+    """/api/v1/me/... is for a person's own API tokens, which their worker checks. A path stepping out of /external/ would skip that check."""
+    gw, db, ff, _, _ = world(tmp_path, monkeypatch)
+    bank(db)
+    for tok in ("gb_alice_anything", "gb_alice_"):
+        assert raw(gw.app, "GET", f"/api/v1/me/{path}", {"Authorization": "Bearer " + tok}, {}) in (401, 403, 404), path
+    assert raw(gw.app, "GET", "/api/v1/me/transactions", {"Authorization": "Bearer gb_alice_anything"}, {}) == 401      # the real route still asks for a real token
+
+
+def test_a_body_that_is_not_json_is_refused_not_an_error_page(tmp_path, monkeypatch):
+    gw, db, ff, _, _ = world(tmp_path, monkeypatch)
+    J = {"Content-Type": "application/json"}
+    for body in (b"not json", b"[1,2]", b"\xff\xfe", b'"text"'):
+        assert gw.post("/login", content=body, headers=J).status_code == 422
+        assert gw.post("/account/password", content=body, headers=J).status_code == 422
+        assert gw.post("/link/session", content=body, headers=J).status_code == 422
+        assert gw.post("/admin/people", content=body, headers={**A, **J}).status_code == 422
+        assert gw.put("/admin/people/alice/firefly", content=body, headers={**A, **J}).status_code == 422
+        assert gw.put("/g/alice/api/settings", content=body, headers={"Authorization": "Bearer t", **J}).status_code == 422
+    assert gw.post("/admin/people/alice/invite", headers=A, json={"minutes": "soon"}).status_code == 422
+
+
+def test_a_loan_goes_to_firefly_as_money_owed():
+    from plaidproxy import firefly
+    assert firefly._signed({"kind": "loan", "balance": 12000.0}) == -12000.0
+    assert firefly._signed({"kind": "credit", "balance": 300.0}) == -300.0 and firefly._signed({"kind": "cash", "balance": 50.0}) == 50.0
