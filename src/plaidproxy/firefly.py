@@ -454,7 +454,8 @@ def _retire_wallet_accounts(db, ff: Firefly) -> None:
         left = db.one("SELECT COUNT(*) n FROM ff_tx f JOIN transactions t ON t.id=f.tx_id WHERE t.account_id=? AND f.ff_id IS NOT NULL", (aid,))["n"]
         if left:
             continue
-        ff.call("PUT", f"/accounts/{m['ff_id']}", {"opening_balance": "0", "opening_balance_date": date.today().isoformat(), "include_net_worth": False,
+        # An empty opening balance removes it (Firefly III ignores "0" and keeps the old one, which here only offset the rows now gone).
+        ff.call("PUT", f"/accounts/{m['ff_id']}", {"opening_balance": "", "opening_balance_date": None, "include_net_worth": False,
                                                    "notes": f"Monitor only: {_wallet_label(a)} passes money through, so its purchases are shown on the card or bank that paid."})
         _state_set(db, key, date.today().isoformat())
 
