@@ -85,3 +85,38 @@ def test_admin_can_pull_one_bank_and_read_the_log_and_sync_answers_counts_only()
     s = gw.post("/admin/p/alice/sync", headers=A, json={}).json()
     assert "43210" not in str(s) and s["plaid"][0]["added"] == 2 and s["firefly"]["created"] == 2
     assert ("POST", "/api/plaid/items/item-1/pull") in seen
+
+
+def test_a_person_sees_balance_differs_and_may_match_it_but_not_change_mappings_or_release():
+    seen = []
+
+    def w(req: httpx.Request):
+        seen.append((req.method, req.url.path))
+        return httpx.Response(200, json={"ok": True})
+    cfg = {"people": [{"name": "alice", "url": "http://alice", "internal_secret": "s", "user_token_sha256": sha256("t")}], "orb_keys": []}
+    gw = TestClient(gateway.create_app(cfg, transport=httpx.MockTransport(w)))
+    U = {"Authorization": "Bearer t"}
+    assert gw.post("/g/alice/api/firefly/accounts/plaid-chk/rebalance", headers=U, json={}).status_code == 200
+    assert gw.post("/g/alice/api/plaid/items/item-1/pull", headers=U, json={}).status_code == 200
+    assert gw.put("/g/alice/api/firefly/accounts/plaid-chk", headers=U, json={"mode": "create"}).status_code == 403
+    assert gw.post("/g/alice/api/firefly/accounts/plaid-chk/release", headers=U, json={}).status_code == 403
+
+
+def test_the_worker_says_which_accounts_differ_with_cards_and_loans_as_owed():
+    from fake_firefly import FakeFirefly
+    ff = FakeFirefly()
+    db = DB(":memory:")
+    c = TestClient(worker.create_app(db=db, firefly_transport=ff.transport()))
+    c.put("/api/settings", headers=H, json={"firefly_url": "https://firefly.example.com", "firefly_token": "good-token"})
+    for aid, kind, bal in (("chk", "cash", 100.0), ("crd", "credit", 40.0)):
+        db.conn.execute("INSERT INTO accounts(id,source,institution,name,kind,balance,mask,currency) VALUES(?,?,?,?,?,?,?,?)", (aid, "plaid", "Bank", aid, kind, bal, "1", "USD"))
+    db.conn.commit()
+    for aid in ("chk", "crd"):
+        c.put(f"/api/firefly/accounts/{aid}", headers=H, json={"mode": "create"})
+    c.post("/api/firefly/sync", headers=H)
+    view = {a["id"]: a for a in c.get("/api/firefly/accounts", headers=H).json()["accounts"]}
+    assert view["chk"]["drift"] is False and view["crd"]["drift"] is False             # the card is -40 in Firefly III: that matches
+    db.conn.execute("UPDATE accounts SET balance=90 WHERE id='chk'"); db.conn.commit()
+    assert {a["id"]: a for a in c.get("/api/firefly/accounts", headers=H).json()["accounts"]}["chk"]["drift"] is True
+    assert c.post("/api/firefly/accounts/chk/rebalance", headers=H).json()["changed"] is True
+    assert {a["id"]: a for a in c.get("/api/firefly/accounts", headers=H).json()["accounts"]}["chk"]["drift"] is False
