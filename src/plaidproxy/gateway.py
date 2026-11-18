@@ -578,7 +578,8 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
                    ("POST", r"plaid/test"), ("POST", r"plaid/test-webhook"), ("POST", r"sync"), ("GET", r"api/firefly/status"), ("POST", r"api/firefly/(test|sync|retry)"), ("GET", r"api/firefly/accounts"),
                    ("PUT", r"api/firefly/accounts/[^/]+"), ("PUT", r"api/shares/[^/]+"), ("POST", r"api/firefly/accounts/[^/]+/rebalance"),
                    ("GET", r"api/firefly/accounts/[^/]+/monitor-preview"),
-                   ("POST", r"api/plaid/items/[^/]+/pull"), ("GET", r"api/plaid/log"), ("POST", r"api/firefly/accounts/[^/]+/release")]
+                   ("POST", r"api/plaid/items/[^/]+/pull"), ("GET", r"api/plaid/log"), ("POST", r"api/firefly/accounts/[^/]+/release"),
+                   ("GET", r"api/plaid/items/[^/]+/institution-status")]
 
     def scrub(path: str, data):
         if path == "sync" and isinstance(data, dict):                 # counts per bank only: the answer also holds Robinhood values

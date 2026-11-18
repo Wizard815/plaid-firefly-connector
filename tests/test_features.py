@@ -49,6 +49,17 @@ def plaid_mock(calls=None):
             return httpx.Response(200, json={"outflow_streams": [
                 {"stream_id": "s1", "merchant_name": "Netflix", "description": "NETFLIX", "frequency": "MONTHLY", "is_active": True,
                  "last_amount": {"amount": 15.99}, "predicted_next_date": "2026-12-01", "last_date": "2026-11-01"}]})
+        if p == "/item/get":
+            return httpx.Response(200, json={"item": {"item_id": "item-1", "institution_id": "ins_21"}})
+        if p == "/institutions/get_by_id":
+            return httpx.Response(200, json={"institution": {"institution_id": "ins_21", "name": "Huntington", "status": {
+                "transactions_updates": {"status": "DEGRADED", "breakdown": {"success": 0.07}},
+                "item_logins": {"status": "HEALTHY", "breakdown": {"success": 0.99}},
+                "health_incidents": [
+                    {"title": "Financial Data Access Issue", "start_date": "2026-11-15T11:00:00Z", "end_date": None,
+                     "incident_updates": [{"description": "re-auth required", "status": "SCHEDULED"}]},
+                    {"title": "Financial Data Access Issue", "start_date": "2026-09-06T04:15:00Z", "end_date": "2026-09-06T05:15:00Z",
+                     "incident_updates": [{"description": "resolved", "status": "RESOLVED"}]}]}}})
         return httpx.Response(404, json={"error_code": "NOPE", "error_message": p})
     return httpx.MockTransport(h)
 
@@ -336,6 +347,24 @@ def test_plaid_item_removal_deletes_data():
     assert c.delete("/api/plaid/items/item-1", headers=H).json()["accounts"] == 2
     assert c.get("/api/accounts", headers=H).json() == [] and c.get("/api/transactions?limit=500", headers=H).json()["items"] == []
     assert c.delete("/api/plaid/items/item-1", headers=H).status_code == 404
+
+
+def test_institution_status_shows_an_open_bank_side_incident():
+    """Plaid's own health for a bank, even when nothing we do has errored: the open incident shows up, the resolved one does not."""
+    db = DB(":memory:")
+    calls = []
+    c = TestClient(mk(db=db, plaid_transport=plaid_mock(calls)))
+    c.post("/plaid/exchange", headers=H, json={"public_token": "p", "institution": "Huntington"})
+    assert db.one("SELECT institution_id FROM plaid_items WHERE item_id='item-1'")["institution_id"] is None     # not fetched until asked
+    r = c.get("/api/plaid/items/item-1/institution-status", headers=H).json()
+    assert r["institution_id"] == "ins_21"
+    assert r["products"] == {"transactions_updates": "DEGRADED", "item_logins": "HEALTHY"}
+    assert len(r["open_incidents"]) == 1 and r["open_incidents"][0]["description"] == "re-auth required"
+    assert db.one("SELECT institution_id FROM plaid_items WHERE item_id='item-1'")["institution_id"] == "ins_21"
+    n_item_get = sum(1 for p, _ in calls if p == "/item/get")
+    c.get("/api/plaid/items/item-1/institution-status", headers=H)
+    assert sum(1 for p, _ in calls if p == "/item/get") == n_item_get      # cached: a second check does not need /item/get again
+    assert c.get("/api/plaid/items/does-not-exist/institution-status", headers=H).status_code == 404
 
 
 def test_plaid_usage_counts_cap_and_cost(monkeypatch):

@@ -87,11 +87,25 @@ class Plaid:
     def accounts(self, access_token: str) -> dict:
         return self.post("/accounts/get", {"access_token": access_token})
 
+    def item(self, access_token: str) -> dict:
+        return self.post("/item/get", {"access_token": access_token})
+
+    def institution_status(self, institution_id: str) -> dict:
+        """Plaid's own live health for a bank: per-product status (HEALTHY/DEGRADED/DOWN) and any open incident, e.g. a bank-side
+        outage like Huntington's November 2026 re-auth issue. Free: not a billed call."""
+        return self.post("/institutions/get_by_id", {"institution_id": institution_id, "country_codes": ["US"], "options": {"include_status": True}})["institution"]
+
     def sync(self, access_token: str, cursor: str | None):
         body = {"access_token": access_token, "count": 500}
         if cursor:
             body["cursor"] = cursor
         return self.post("/transactions/sync", body)
+
+    def refresh(self, access_token: str) -> dict:
+        """Ask Plaid to go check the institution for new data now, instead of waiting for its own background refresh
+        (which can run as little as 1-4x/day, or stall on an institution for days). Async: this call only acknowledges
+        the request: sync() picks up whatever it finds on this or a later round."""
+        return self.post("/transactions/refresh", {"access_token": access_token})
 
     def recurring(self, access_token: str, account_ids: list[str]) -> dict:
         return self.post("/transactions/recurring/get", {"access_token": access_token, "account_ids": account_ids})

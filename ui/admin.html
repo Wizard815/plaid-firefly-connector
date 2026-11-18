@@ -16,15 +16,16 @@ input,button{font:inherit;color:inherit;background:var(--bg);border:1px solid va
 <main>
   <h1>Plaid Firefly Connector admin</h1>
   <p class="muted small">General health and call counts, only when you ask. Nothing here shows what anyone asked for or any of their data, and the gateway keeps no log of requests: no addresses, search terms, tokens or bodies.</p>
-  <form class="panel row" id="login"><input id="tok" type="password" placeholder="Admin password" autocomplete="current-password" required style="flex:1;min-width:200px"><button class="primary" type="submit">Check now</button><button type="button" id="reset">Clear counts</button><span id="msg" class="small muted"></span></form>
+  <form class="panel row" id="login"><input id="tok" type="password" placeholder="Admin password" autocomplete="current-password" required style="flex:1;min-width:200px"><button class="primary" type="submit">Check now</button><span id="msg" class="small muted"></span></form>
   <div class="panel" id="out" hidden></div>
+  <button type="button" id="reset" hidden>Clear counts</button>
   <div class="panel" id="people" hidden></div>
   <div class="panel" id="person" hidden></div>
   <div class="panel" id="plaid" hidden></div>
   <div class="panel" id="orb" hidden></div>
 </main>
 <script>
-const $ = (s) => document.querySelector(s), out = $("#out"), msg = $("#msg");
+const $ = (s) => document.querySelector(s), out = $("#out"), msg = $("#msg"), resetBtn = $("#reset");
 const el = (t, a = {}, ...k) => { const e = document.createElement(t); for (const [x, v] of Object.entries(a)) e.setAttribute(x, v); k.flat().forEach((c) => { if (c === null || c === undefined || c === false) return; e.append(c?.nodeType ? c : document.createTextNode(String(c))); }); return e; };
 const get = (o, k, f) => (o && o[k] ? o[k][f] : 0);
 async function call(path, method = "GET", body) {
@@ -181,11 +182,18 @@ async function renderPerson() {
     const f = el("button", { type: "button", title: "Ask the bank for fresh data (Plaid bills this per call) and read the whole history again. Nothing is doubled." }, "Full update"); f.addEventListener("click", () => { if (!confirm(`Full update of ${it.institution}? Plaid bills a refresh per call. The bank's newest data can take a few minutes to arrive after it.`)) return; run(() => P("api/plaid/items/" + encodeURIComponent(it.item_id) + "/pull?full=true", "POST", {}), (r) => `${it.institution} (full): ` + pullMsg(r), `Full update of ${it.institution}…`); });
     const last = lastOf(it.item_id);
     const un = el("button", { type: "button" }, "Unlink"); un.addEventListener("click", () => { if (!confirm(`Unlink ${it.institution}? On a Plaid free plan the link slot is NOT given back. To repair a login use Relink.`)) return; run(() => P("api/plaid/items/" + encodeURIComponent(it.item_id), "DELETE"), "Unlinked. What is already in Firefly III stays there."); });
+    const chk = el("button", { type: "button", title: "Ask Plaid for this bank's own live health, free to check: shows a bank-side outage even when nothing here has errored" }, "Check Plaid status");
+    chk.addEventListener("click", () => run(() => P("api/plaid/items/" + encodeURIComponent(it.item_id) + "/institution-status"), (r) => {
+      const bad = Object.entries(r.products).filter(([, v]) => v !== "HEALTHY");
+      const open = r.open_incidents || [];
+      return `${it.institution}: ` + (bad.length ? bad.map(([k, v]) => `${k} ${v}`).join(", ") : "all healthy") +
+        (open.length ? `. Open: ${open.map((i) => i.title + " (since " + (i.start_date || "").slice(0, 10) + ")").join("; ")}` : "");
+    }, `Checking Plaid's status for ${it.institution}…`));
     return el("tr", {}, el("td", {}, el("b", {}, it.institution || "Bank"), it.status ? el("span", { class: "pill down", style: "margin-left:8px", title: it.status_detail || "" }, it.status === "error" ? "sign in again" : it.status) : null, it.webhook_live ? el("span", { class: "pill up", style: "margin-left:8px" }, "live updates") : null,
         el("div", { class: "small muted" }, (it.accounts || []).map((a) => `${a.nickname || a.name}${a.mask ? " ••" + a.mask : ""}`).join(", ")),
         el("div", { class: "small" }, "Last pull: ", ago(it.last_sync), last ? [" · ", el("span", { class: last.ok ? "ok" : "err" }, `${last.what}: ${last.ok ? "OK" : "failed"}, ${last.detail}`)] : null),
         it.status_detail && !(last && last.detail === it.status_detail) ? el("div", { class: "small err" }, it.status_detail) : null),
-      el("td", {}, sel(SCH, it.schedule || "auto", (v) => upd({ schedule: v }))), el("td", {}, sel([["auto", "Recurring: automatic"], ["on", "Recurring: on"], ["off", "Recurring: off"]], it.recurring || "auto", (v) => upd({ recurring: v }))), el("td", { class: "n" }, el("div", { class: "row", style: "justify-content:flex-end" }, q, f, rel, un))); })))
+      el("td", {}, sel(SCH, it.schedule || "auto", (v) => upd({ schedule: v }))), el("td", {}, sel([["auto", "Recurring: automatic"], ["on", "Recurring: on"], ["off", "Recurring: off"]], it.recurring || "auto", (v) => upd({ recurring: v }))), el("td", { class: "n" }, el("div", { class: "row", style: "justify-content:flex-end" }, q, f, chk, rel, un))); })))
     : el("p", { class: "small muted" }, plaid.configured ? "No bank linked yet. Press Link a bank and sign in to the bank in the window that opens." : "Enter the Plaid keys below first.");
   const fmap = (fa.accounts || []).length ? el("table", {}, el("thead", {}, el("tr", {}, ["Bank account", "In Firefly III", "Joint with", ""].map((h) => el("th", {}, h)))), el("tbody", {}, fa.accounts.map((a) => {
     const twins = (a.looks_like || []).map((t) => ((fa.accounts || []).find((x) => x.id === t) || {}).label || t);
@@ -246,8 +254,8 @@ async function show() {
           el("td", { class: "n" }, ["app", "api_token", "webhook"].reduce((a, k) => a + calls(g, k, "client_errors") + calls(g, k, "server_errors"), 0)))))),
       el("p", { class: "small muted" }, `Pondering Orb summary calls: ${d.orb.calls || 0}. All calls: ${d.total.calls} (${d.total.client_errors} refused or invalid, ${d.total.server_errors} server errors), since the gateway last started or was cleared ${Math.round(d.since_seconds / 60)} minutes ago.`),
       el("p", { class: "small muted" }, d.note));
-    sessionStorage.setItem("gb_admin", $("#tok").value.trim()); out.hidden = false; renderPeople(rows); renderPlaid(rows).catch(() => {}); renderOrb().catch(() => {}); msg.textContent = "Updated " + new Date().toLocaleTimeString();
-  } catch (e) { msg.textContent = e.message; msg.className = "small err"; out.hidden = true; }
+    sessionStorage.setItem("gb_admin", $("#tok").value.trim()); out.hidden = false; resetBtn.hidden = false; renderPeople(rows); renderPlaid(rows).catch(() => {}); renderOrb().catch(() => {}); msg.textContent = "Updated " + new Date().toLocaleTimeString();
+  } catch (e) { msg.textContent = e.message; msg.className = "small err"; out.hidden = true; resetBtn.hidden = true; }
 }
 $("#login").addEventListener("submit", (e) => { e.preventDefault(); show(); });
 (async () => {                                              // after a bank that signs you in on its own site sends you back here: reopen Plaid Link and finish

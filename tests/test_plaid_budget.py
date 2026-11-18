@@ -92,7 +92,7 @@ def test_the_default_budget_is_five_dollars_and_blocks_a_bank_that_would_exceed_
     c.put("/api/settings", headers=H, json={"plaid_budget_month": "6"})
     assert link(c, "B12").status_code == 200
     c.put("/api/settings", headers=H, json={"plaid_budget_month": ""})   # empty = no limit
-    assert link(c, "B13").status_code == 200
+    assert link(c, "B9").status_code == 200
 
 
 def gateway_with_policy(tmp_path, monkeypatch, worker_app):

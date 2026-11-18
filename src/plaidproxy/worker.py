@@ -946,7 +946,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             try:
                 if full:
                     try:
-                        plaid.post("/transactions/refresh", {"access_token": crypto.decrypt(row["token_enc"])})
+                        plaid.refresh(crypto.decrypt(row["token_enc"]))
                     except PlaidLimit:
                         raise
                     except PlaidError as e:                        # not every bank or plan has refresh: the full read still runs
@@ -989,6 +989,33 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             c.execute("DELETE FROM accounts WHERE item_id=?", (item_id,))
             c.execute("DELETE FROM plaid_items WHERE item_id=?", (item_id,))
         return {"removed": item_id, "accounts": len(ids)}
+
+    @app.get("/api/plaid/items/{item_id}/institution-status")
+    def plaid_institution_status(request: Request, item_id: str):
+        """Plaid's own live health for this bank, free to ask. Shows why a bank might be stuck even though it looks linked:
+        a bank-side outage (like Huntington's November 2026 re-auth issue) shows here as a DEGRADED/DOWN product and an open incident,
+        long before (or even without) it ever surfacing as a sync error."""
+        auth(request)
+        row = store.one("SELECT * FROM plaid_items WHERE item_id=?", (item_id,))
+        if not row:
+            raise HTTPException(404, "not found")
+        inst_id = row.get("institution_id")
+        if not inst_id:
+            try:
+                inst_id = plaid.item(crypto.decrypt(row["token_enc"]))["item"]["institution_id"]
+            except (PlaidError, KeyError):
+                raise HTTPException(502, "Plaid did not say which institution this bank is")
+            with store.tx() as c:
+                c.execute("UPDATE plaid_items SET institution_id=? WHERE item_id=?", (inst_id, item_id))
+        try:
+            status = plaid.institution_status(inst_id)["status"]
+        except PlaidError as e:
+            raise HTTPException(502, str(e))
+        products = {k: v for k, v in status.items() if k != "health_incidents" and isinstance(v, dict) and "status" in v}
+        open_incidents = [{"title": i.get("title"), "start_date": i.get("start_date"),
+                            "description": (i.get("incident_updates") or [{}])[0].get("description")}
+                           for i in status.get("health_incidents", []) if i.get("end_date") is None]
+        return {"institution_id": inst_id, "products": {k: v["status"] for k, v in products.items()}, "open_incidents": open_incidents}
 
     # ---------------- API tokens: read-only access for Home Assistant, the Orb, scripts ----------------
     class TokenIn(BaseModel):

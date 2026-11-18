@@ -203,6 +203,28 @@ def test_linking_to_an_account_that_already_has_history_adopts_what_matches_and_
     assert ids.count("t2") == 1 and "manual-1" in ids and "t1" in ids                                                           # t2 not doubled, your own entry untouched, the new one added
 
 
+def test_relinking_a_removed_item_adopts_by_date_amount_and_description_not_just_the_old_plaid_id():
+    """The bank's own id for a transaction is not stable across a remove-and-relink (Plaid reissues it). The transaction already
+    in Firefly III for that same real charge must still be found and not duplicated."""
+    c, db, ff = rig()
+    bank(db)
+    approve(c, {"plaid-chk": "create", "plaid-crd": "skip", "plaid-sav": "skip", "plaid-ira": "skip"})
+    mine = ff.add_account("My real checking", opening="0")
+    # already in Firefly III under an old Plaid id that no longer exists anywhere locally (the item was removed and relinked)
+    ff.groups[900] = {"transactions": [{"type": "withdrawal", "date": d(8), "amount": "150.00", "description": "KROGER #66", "source_id": mine, "destination_name": "KROGER", "external_id": "old-item-t2"}]}
+    c.put("/api/firefly/accounts/plaid-chk", headers=H, json={"mode": "link", "ff_id": mine})
+    r = c.post("/api/firefly/sync", headers=H).json()
+    assert r["errors"] == 0
+    ids = ff.external_ids()
+    assert ids.count("old-item-t2") == 1 and "t2" not in ids and len(ff.groups) == 2                                           # t2's content adopted onto the old group, nothing new made for it; t1 still goes in fresh
+    assert db.one("SELECT ff_id, state FROM ff_tx WHERE tx_id='t2'") == {"ff_id": 900, "state": "ok"}
+    before = len(ff.groups)
+    with db.tx() as cur:
+        cur.execute("UPDATE ff_accounts SET adopted=0 WHERE account_id='plaid-chk'")                                           # running it again (or state lost) must not re-duplicate it either
+    r = c.post("/api/firefly/sync", headers=H).json()
+    assert r["created"] == 0 and len(ff.groups) == before
+
+
 def test_the_gateway_admin_sets_each_persons_firefly_connection_and_the_token_never_comes_back(tmp_path, monkeypatch):
     import httpx
     from plaidproxy import gateway

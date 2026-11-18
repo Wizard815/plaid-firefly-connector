@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: plaidproxy
+Version: 0.1.0
+Summary: plaid-firefly-connector: CoinGateway + per-person Worker containers + read-only connectors
+Requires-Python: >=3.11
+License-File: LICENSE
+Requires-Dist: fastapi>=0.110
+Requires-Dist: httpx>=0.27
+Requires-Dist: uvicorn>=0.29
+Requires-Dist: pyyaml>=6
+Requires-Dist: cryptography>=42
+Provides-Extra: live
+Requires-Dist: robin_stocks; extra == "live"
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Dynamic: license-file
