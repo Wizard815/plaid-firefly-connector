@@ -19,21 +19,30 @@ PLAID_MAP = {  # detailed first, then primary
     "INCOME": "Income", "LOAN_DISBURSEMENTS": "Transfer", "TRANSFER_IN": "Transfer", "TRANSFER_OUT": "Transfer", "LOAN_PAYMENTS": "Bills", "FOOD_AND_DRINK": "Food",
     "ENTERTAINMENT": "Fun", "TRANSPORTATION": "Transport", "MEDICAL": "Health", "PERSONAL_CARE": "Health", "RENT_AND_UTILITIES": "Bills",
     "HOME_IMPROVEMENT": "Housing", "TRAVEL": "Travel", "GENERAL_MERCHANDISE": "Shopping", "GENERAL_SERVICES": "Misc",
-    "BANK_FEES": "Misc", "GOVERNMENT_AND_NON_PROFIT": "Misc", "OTHER": "Misc",
+    "GENERAL_SERVICES_AUTOMOTIVE": "Car", "TRANSPORTATION_PARKING": "Car", "GENERAL_SERVICES_EDUCATION": "Education", "GENERAL_SERVICES_INSURANCE": "Bills",
+    "GENERAL_SERVICES_POSTAGE_AND_SHIPPING": "Shopping", "LOAN_PAYMENTS_BNPL": "Bills",
+    "BANK_FEES": "Fees", "GOVERNMENT_AND_NON_PROFIT": "Misc", "OTHER": "Misc",
 }
+VAGUE = {"Misc"}            # a bank category this vague loses to a payee keyword (Plaid files Anthropic and Kickstarter under "other general services")
+WEAK_CODES = {"GENERAL_SERVICES_POSTAGE_AND_SHIPPING"}      # codes Plaid hands out loosely (a truck stop as "postage"): a payee keyword wins, else the code still counts
 
 
 KEYWORDS = {  # last-resort guesses for payees with no bank category (CSV imports, manual entries). Your own rules always win.
     "Groceries": ("kroger", "aldi", "trader joe", "costco", "walmart", "safeway", "publix", "whole foods", "wholefds", "heb ", "meijer", "grocery"),
-    "Gas": ("shell", "marathon", "sheetz", "exxon", "chevron", "bp ", "speedway", "wawa", "valero", "citgo", "gasoline", "fuel"),
+    "Gas": ("shell", "marathon", "sheetz", "exxon", "chevron", "bp ", "speedway", "wawa", "valero", "citgo", "gasoline", "fuel", "truck stop", "pilot travel", "flying j", "love's travel", "circle k", "casey's"),
     "Food": ("starbucks", "chipotle", "domino", "pizza", "panera", "wendy", "five guys", "mcdonald", "burger", "taco", "subway", "coffee", "diner", "restaurant", "doordash", "grubhub", "cafe"),
     "Clothes": ("zara", "old navy", "h&m", "nike", "gap ", "uniqlo", "nordstrom", "tj maxx", "marshalls", "ross "),
-    "Games": ("steam", "xbox", "playstation", "nintendo", "epic games", "blizzard"),
+    "Games": ("steam", "valve corp", "xbox", "playstation", "nintendo", "epic games", "blizzard", "humble bundle", "itch.io", "gog.com", "riot games", "ea.com"),
+    "Tech": ("anthropic", "openrouter", "openai", "chatgpt", "github", "digitalocean", "cloudflare", "hetzner", "vultr", "linode", "namecheap", "porkbun", "backblaze", "runpod", "vast.ai"),
+    "Education": ("boot.dev", "udemy", "coursera", "skillshare", "brilliant.org", "tuition"),
+    "Car": ("automotive", "auto parts", "autozone", "o'reilly", "advance auto", "napa ", "jiffy lube", "valvoline", "tire", "car wash", "bmv", "dmv"),
+    "Fees": ("interest charge", "transaction fee", "late fee", "overdraft", "service charge", "annual fee"),
+    "Fun": ("kickstarter", "ticketmaster", "eventbrite", "cinema", "theater", "theatre", "bowling"),
     "Subscriptions": ("netflix", "spotify", "hulu", "disney", "hbo", "apple.com/bill", "icloud", "youtube premium", "patreon"),
     "Transport": ("uber", "lyft", "metro", "transit", "parking", "toll"),
     "Health": ("cvs", "walgreens", "pharmacy", "dental", "clinic", "hospital", "optical"),
     "Housing": ("home depot", "lowes", "lowe's", "ikea", "rent "),
-    "Shopping": ("amazon", "amzn", "target", "best buy", "etsy", "ebay"),
+    "Shopping": ("amazon", "amzn", "target", "best buy", "etsy", "ebay", "aliexpress", "temu", "dbrand", "newegg", "micro center"),
     "Bills": ("water", "electric", "utility", "insurance", "comcast", "verizon", "at&t", "t-mobile"),
     "Income": ("payroll", "salary", "direct dep", "refund", "interest paid", "dividend"),
 }
@@ -47,20 +56,25 @@ def categorize(db, name: str, amount: float, plaid_cat: str | None = None, accou
     # Money arriving on a card or loan is a payment toward the debt, not income and not new money: the other side of a transfer.
     if account_kind in ("credit", "loan") and amount > 0 and plaid_cat and plaid_cat.startswith(("LOAN_PAYMENTS", "TRANSFER")):
         return "Transfer"
-    if plaid_cat:
-        for key in (plaid_cat, plaid_cat.split("_")[0]):
-            if key in PLAID_MAP:
-                return PLAID_MAP[key]
-        # detailed codes look like FOOD_AND_DRINK_COFFEE: walk back to the primary
-        parts = plaid_cat.split("_")
-        for n in range(len(parts) - 1, 0, -1):
-            if "_".join(parts[:n]) in PLAID_MAP:
-                return PLAID_MAP["_".join(parts[:n])]
+    from_bank = _plaid_category(plaid_cat) if plaid_cat else None
+    if from_bank and from_bank not in VAGUE and plaid_cat not in WEAK_CODES:
+        return from_bank
     low = f" {low} "
     for cat, words in KEYWORDS.items():
         if any(w in low for w in words) and (cat == "Income") == (amount > 0 or cat == "Income" and "refund" in low):
             return cat
-    return "Income" if amount > 0 else "Misc"
+    return from_bank or ("Income" if amount > 0 else "Misc")
+
+
+def _plaid_category(plaid_cat: str) -> str | None:
+    """Plaid's detailed code first (FOOD_AND_DRINK_COFFEE), then walking back to the primary (FOOD_AND_DRINK)."""
+    if plaid_cat in PLAID_MAP:
+        return PLAID_MAP[plaid_cat]
+    parts = plaid_cat.split("_")
+    for n in range(len(parts) - 1, 0, -1):
+        if "_".join(parts[:n]) in PLAID_MAP:
+            return PLAID_MAP["_".join(parts[:n])]
+    return None
 
 
 def set_category(db, tx_id: str, category: str, make_rule: bool = False) -> dict:
@@ -82,8 +96,8 @@ def set_category(db, tx_id: str, category: str, make_rule: bool = False) -> dict
 def recategorize(db) -> int:
     """Re-run rules over every transaction the user has not set by hand."""
     n = 0
-    for t in db.all("SELECT id, name, amount, plaid_category, category FROM transactions WHERE category_locked=0"):
-        new = categorize(db, t["name"], t["amount"], t["plaid_category"])
+    for t in db.all("SELECT t.id, t.name, t.amount, t.plaid_category, t.category, a.kind FROM transactions t LEFT JOIN accounts a ON a.id=t.account_id WHERE t.category_locked=0"):
+        new = categorize(db, t["name"], t["amount"], t["plaid_category"], t["kind"])
         if new != t["category"]:
             with db.tx() as c:
                 c.execute("UPDATE transactions SET category=? WHERE id=?", (new, t["id"]))
