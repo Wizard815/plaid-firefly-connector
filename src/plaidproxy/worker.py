@@ -435,6 +435,13 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             threading.Thread(target=push, daemon=True).start()
         return r
 
+    def drift(a: dict, theirs) -> bool:
+        """Firefly III's balance is not the bank's (cards and loans are negative there). False when the account is not in Firefly III."""
+        try:
+            return theirs is not None and abs(float(theirs) - firefly._signed(a)) > 0.005
+        except (TypeError, ValueError):
+            return False
+
     @app.get("/api/firefly/accounts")
     def ff_accounts(request: Request):
         """Each bank account and what happens to it in Firefly III, plus the asset accounts already there to link to."""
@@ -452,7 +459,8 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                 error = str(e)
         by = {x["id"]: x for x in theirs}
         sh = jointshare.shared_with(store)
-        return {"accounts": [{**a, "shared_with": sh.get(a["id"]), "label": firefly.account_label(a), "looks_like": twins.get(a["id"], []), "ff_name": (by.get(a["ff_id"]) or {}).get("name"), "ff_balance": (by.get(a["ff_id"]) or {}).get("balance")} for a in mine], "firefly_accounts": theirs, "error": error}
+        return {"accounts": [{**a, "shared_with": sh.get(a["id"]), "label": firefly.account_label(a), "looks_like": twins.get(a["id"], []), "ff_name": (by.get(a["ff_id"]) or {}).get("name"), "ff_balance": (by.get(a["ff_id"]) or {}).get("balance"),
+                              "drift": drift(a, (by.get(a["ff_id"]) or {}).get("balance"))} for a in mine], "firefly_accounts": theirs, "error": error}
 
     @app.post("/api/firefly/accounts/{account_id}/release")
     def ff_release(request: Request, account_id: str):
