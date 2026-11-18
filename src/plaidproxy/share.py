@@ -216,6 +216,7 @@ def receive(db, sender: str, kind: str, payload: dict) -> dict:
     if kind == "share-revoke":
         with db.tx() as c:
             c.execute("DELETE FROM share_in WHERE sender=? AND account_id=?", (sender, aid_in))
+            c.execute("DELETE FROM share_answer WHERE peer=? AND account_id=?", (sender, aid_in))   # an answer still waiting was for the question just withdrawn
             _skip(c, aid)
         return {"ok": True}
     if kind != "share-data":
