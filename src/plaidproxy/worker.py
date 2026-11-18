@@ -311,7 +311,9 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         auth(request)
         apply_policy(force=True)                          # pick up what the admin just saved
         with sync_lock:
-            return firefly.run(store, firefly_transport)
+            res = firefly.run(store, firefly_transport)
+        note_firefly(res)
+        return res
 
     @app.post("/api/firefly/retry")
     def ff_retry(request: Request):
@@ -955,7 +957,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     def plaid_log(request: Request, item_id: str | None = None, limit: int = 40):
         """The last pulls and Firefly III sends: when, which bank, how it went (counts or the error code)."""
         auth(request)
-        rows = store.all("SELECT p.at, p.item_id, i.institution, p.what, p.ok, p.detail FROM pull_log p LEFT JOIN plaid_items i ON i.item_id=p.item_id"
+        rows = store.all("SELECT p.at, p.item_id, COALESCE(i.institution, p.bank) institution, p.what, p.ok, p.detail FROM pull_log p LEFT JOIN plaid_items i ON i.item_id=p.item_id"
                          + (" WHERE p.item_id=?" if item_id else "") + " ORDER BY p.id DESC LIMIT ?", ((item_id,) if item_id else ()) + (max(1, min(200, limit)),))
         return {"log": [{**r, "ok": bool(r["ok"])} for r in rows]}
 

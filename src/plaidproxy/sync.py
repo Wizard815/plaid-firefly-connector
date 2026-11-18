@@ -166,7 +166,8 @@ def mark_item(db, item_id: str, status: str | None, detail: str = "") -> None:
 def note(db, item_id: str | None, what: str, ok: bool, detail: str) -> None:
     """One line in the pull log (the last 300 are kept). Counts and error codes only: no amounts, payees or balances."""
     with db.tx() as c:
-        c.execute("INSERT INTO pull_log(at, item_id, what, ok, detail) VALUES(?,?,?,?,?)", (time.time(), item_id, what, int(ok), detail[:200]))
+        bank = (c.execute("SELECT institution FROM plaid_items WHERE item_id=?", (item_id,)).fetchone() or [None])[0] if item_id else None      # kept: the bank may be removed later
+        c.execute("INSERT INTO pull_log(at, item_id, what, ok, detail, bank) VALUES(?,?,?,?,?,?)", (time.time(), item_id, what, int(ok), detail[:200], bank))
         c.execute("DELETE FROM pull_log WHERE id <= (SELECT MAX(id) FROM pull_log) - 300")
 
 

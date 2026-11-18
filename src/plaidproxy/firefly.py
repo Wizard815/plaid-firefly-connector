@@ -544,7 +544,7 @@ def run(db, transport=None, budget_seconds: float = 40.0) -> dict:
 def status(db) -> dict:
     c = conf(db)
     ensure_mappings(db)
-    counts = {r["state"]: r["n"] for r in db.all("SELECT state, COUNT(*) n FROM ff_tx GROUP BY state")}
+    counts = {r["state"]: r["n"] for r in db.all("SELECT f.state, COUNT(*) n FROM ff_tx f JOIN transactions t ON t.id=f.tx_id GROUP BY f.state")}     # a removed bank's old rows don't count
     pending = db.one("SELECT COUNT(*) n FROM transactions t JOIN ff_accounts m ON m.account_id=t.account_id AND m.mode IN ('create','link') AND m.ff_id IS NOT NULL LEFT JOIN ff_tx f ON f.tx_id=t.id WHERE f.tx_id IS NULL" + ("" if c["include_pending"] else " AND t.pending=0"))["n"]
     s = _state(db)
     host = c["url"].split("//", 1)[-1].split("/")[0] if c["url"] else ""
