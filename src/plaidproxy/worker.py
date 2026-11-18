@@ -439,7 +439,8 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         auth(request)
         apply_policy(force=True)                          # pick up what the admin just saved
         firefly.ensure_mappings(store)
-        mine = store.all("SELECT a.id, a.institution, a.name, a.nickname, a.mask, a.kind, a.balance, a.category, m.mode, m.ff_id, m.created FROM accounts a JOIN ff_accounts m ON m.account_id=a.id ORDER BY a.institution, a.name")
+        mine = store.all("SELECT a.id, a.institution, a.name, a.nickname, a.mask, a.kind, a.balance, a.category, m.mode, m.ff_id, m.created, m.held, m.ff_seen FROM accounts a JOIN ff_accounts m ON m.account_id=a.id ORDER BY a.institution, a.name")
+        twins = firefly.duplicates(store)
         theirs, error = [], None
         c = firefly.conf(store)
         if c["url"] and c["token"]:
@@ -449,7 +450,17 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                 error = str(e)
         by = {x["id"]: x for x in theirs}
         sh = jointshare.shared_with(store)
-        return {"accounts": [{**a, "shared_with": sh.get(a["id"]), "label": firefly.account_label(a), "ff_name": (by.get(a["ff_id"]) or {}).get("name"), "ff_balance": (by.get(a["ff_id"]) or {}).get("balance")} for a in mine], "firefly_accounts": theirs, "error": error}
+        return {"accounts": [{**a, "shared_with": sh.get(a["id"]), "label": firefly.account_label(a), "looks_like": twins.get(a["id"], []), "ff_name": (by.get(a["ff_id"]) or {}).get("name"), "ff_balance": (by.get(a["ff_id"]) or {}).get("balance")} for a in mine], "firefly_accounts": theirs, "error": error}
+
+    @app.post("/api/firefly/accounts/{account_id}/release")
+    def ff_release(request: Request, account_id: str):
+        """Send a held batch after all: the admin looked at it and it is not a duplicate of what is already in Firefly III."""
+        auth(request)
+        try:
+            firefly.release(store, account_id)
+        except KeyError:
+            raise HTTPException(404, "nothing is held for that account")
+        return {"ok": True, "firefly": note_firefly(firefly.run(store, firefly_transport)) or True}
 
     @app.post("/api/firefly/accounts/{account_id}/rebalance")
     def ff_rebalance(request: Request, account_id: str):
@@ -469,12 +480,15 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     class FFMap(BaseModel):
         mode: str                             # pending | create | link | skip
         ff_id: int | None = None
+        confirm_duplicate: bool = False       # it looks like another account, and the admin says it is not
 
     @app.put("/api/firefly/accounts/{account_id}")
     def ff_map(request: Request, account_id: str, b: FFMap):
         auth(request)
         try:
-            firefly.set_mapping(store, account_id, b.mode, b.ff_id)
+            firefly.set_mapping(store, account_id, b.mode, b.ff_id, b.confirm_duplicate)
+        except firefly.LooksDuplicate as e:
+            raise HTTPException(409, str(e))
         except ValueError as e:
             raise HTTPException(422, str(e))
         except KeyError:
@@ -590,6 +604,8 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             return
         if res.get("error"):
             return sync.note(store, None, "firefly", False, str(res["error"]))
+        for h in res.get("held") or []:
+            sync.note(store, None, "firefly", False, f"held: {h['waiting']} new transactions for an account that already has {h['existing']} in Firefly III (a relink?). Nothing sent to it; check on the admin page")
         n = {k: res.get(k, 0) for k in ("accounts_created", "created", "updated", "deleted", "errors")}
         if any(n.values()):
             sync.note(store, None, "firefly", not n["errors"], f"{n['created']} sent, {n['updated']} updated, {n['deleted']} deleted, {n['accounts_created']} accounts made"
