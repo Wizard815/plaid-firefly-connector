@@ -495,6 +495,8 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         if name not in workers:
             raise HTTPException(404, "no such person")
         b = await obj(request)
+        if "url" not in b:
+            raise HTTPException(422, "send url (empty to disconnect)")       # an empty body must not disconnect anyone
         url, token = str(b.get("url", "")).strip(), str(b.get("token", "")).strip()
         entry = dict(policy["people"].get(name, {}))
         if url:
@@ -586,7 +588,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         if path == "api/firefly/accounts" and isinstance(data, dict):
             by = {f["id"]: f for f in data.get("firefly_accounts", [])}
             for a in data.get("accounts", []):
-                bank = (-1 if a.get("kind") == "credit" else 1) * (a.get("balance") or 0.0)
+                bank = (-1 if a.get("kind") in ("credit", "loan") else 1) * (a.get("balance") or 0.0)     # the same rule as firefly._signed
                 theirs = (by.get(a.get("ff_id")) or {}).get("balance")
                 a["drift"] = theirs is not None and abs(float(theirs) - bank) > 0.005
                 a.pop("balance", None)
