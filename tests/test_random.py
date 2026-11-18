@@ -313,7 +313,7 @@ def test_payments_received_by_cards_and_loans_are_transfers_not_money_in():
     assert cat("Mortgage payment", 900, "LOAN_PAYMENTS_MORTGAGE_PAYMENT", "loan") == "Transfer"        # the mirror image of the payment that left checking
     assert cat("Mortgage payment", -900, "LOAN_PAYMENTS_MORTGAGE_PAYMENT", "cash") == "Bills"           # leaving checking, it is a real bill
     assert cat("Card payment", -500, "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT", "cash") == "Transfer"        # paying a card is never spending twice
-    assert cat("Interest charge", -40, "BANK_FEES_INTEREST_CHARGE", "loan") == "Misc"                   # interest accruing is a cost
+    assert cat("Interest charge", -40, "BANK_FEES_INTEREST_CHARGE", "loan") == "Fees"                   # interest accruing is a cost (not a transfer)
     assert cat("Refund", 25, "GENERAL_MERCHANDISE_ONLINE_MARKETPLACES", "credit") == "Shopping"        # a refund stays a refund
     assert cat("Cash advance", 95, "LOAN_DISBURSEMENTS_CASH_ADVANCES", "cash") == "Transfer"           # borrowed money is not income
     assert cat("Paycheck", 2000, "INCOME_WAGES", "cash") == "Income"

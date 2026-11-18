@@ -576,7 +576,8 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     # is scrubbed: bank and account labels and counts, never a balance or a transaction.
     ADMIN_CALLS = [("GET", r"api/status"), ("GET", r"api/plaid/usage"), ("POST", r"plaid/link-token"), ("POST", r"plaid/exchange"), ("PUT", r"api/plaid/items/[^/]+"), ("DELETE", r"api/plaid/items/[^/]+"),
                    ("POST", r"plaid/test"), ("POST", r"plaid/test-webhook"), ("POST", r"sync"), ("GET", r"api/firefly/status"), ("POST", r"api/firefly/(test|sync|retry)"), ("GET", r"api/firefly/accounts"),
-                   ("PUT", r"api/firefly/accounts/[^/]+"), ("PUT", r"api/shares/[^/]+"), ("POST", r"api/firefly/accounts/[^/]+/rebalance")]
+                   ("PUT", r"api/firefly/accounts/[^/]+"), ("PUT", r"api/shares/[^/]+"), ("POST", r"api/firefly/accounts/[^/]+/rebalance"),
+                   ("GET", r"api/firefly/accounts/[^/]+/monitor-preview")]
 
     def scrub(path: str, data):
         if path == "api/status" and isinstance(data, dict):
@@ -595,6 +596,9 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
                 a.pop("ff_balance", None)
             for f in data.get("firefly_accounts", []):
                 f.pop("balance", None)
+        if path.endswith("/monitor-preview") and isinstance(data, dict):     # counts only: which charges and amounts stay with the person
+            return {"account": data.get("account"), "removed_from_firefly": data.get("removed_from_firefly", 0), "renamed": len(data.get("renamed") or []),
+                    "wallet_unmatched": len(data.get("wallet_unmatched") or []), "bank_unmatched": len(data.get("bank_unmatched") or [])}
         return data
 
     @app.api_route("/admin/p/{name}/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])

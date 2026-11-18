@@ -6,6 +6,7 @@ Idempotent: every Plaid transaction id is remembered together with the Firefly I
 """
 import hashlib
 import json
+import re
 import time
 from datetime import date, timedelta
 
@@ -130,9 +131,10 @@ def ensure_mappings(db) -> None:
 
 def set_mapping(db, account_id: str, mode: str, ff_id: int | None = None) -> None:
     """The admin's decision for one bank account. create: make it in Firefly III (once). link: use this Firefly III account that already exists (one Firefly III account
-    receives one bank account, never several). skip: send nothing. pending: back to waiting for a decision."""
-    if mode not in ("create", "link", "skip", "pending"):
-        raise ValueError("mode must be create, link, skip or pending")
+    receives one bank account, never several). skip: send nothing. pending: back to waiting for a decision. monitor: a middleman such as PayPal: its own rows
+    leave Firefly III (they counted every purchase twice) and name the bank or card charges that paid instead."""
+    if mode not in ("create", "link", "skip", "pending", "monitor"):
+        raise ValueError("mode must be create, link, skip, pending or monitor")
     if mode == "link" and not ff_id:
         raise ValueError("choose the Firefly III account to link to")
     if not db.one("SELECT 1 FROM accounts WHERE id=?", (account_id,)):
@@ -143,8 +145,19 @@ def set_mapping(db, account_id: str, mode: str, ff_id: int | None = None) -> Non
         other = db.one("SELECT a.institution, a.name FROM ff_accounts m JOIN accounts a ON a.id=m.account_id WHERE m.ff_id=? AND m.account_id!=? AND m.mode IN ('create','link')", (int(ff_id), account_id))
         if other:
             raise ValueError(f"that Firefly III account already receives {other['institution']} - {other['name']}; one Firefly III account takes one bank account")
+    if cur.get("mode") == "monitor" and mode != "monitor":              # back to a normal account: its rows go across again, and the bank charges lose the middleman's names
+        with db.tx() as c:
+            c.execute("DELETE FROM ff_state WHERE key=?", (f"retired:{account_id}",))
+            c.execute("UPDATE ff_accounts SET adopted=0 WHERE account_id=?", (account_id,))
     with db.tx() as c:
-        if mode == "pending":
+        if mode == "monitor":
+            # Its rows already in Firefly III go at the next push, and so does the other half of any transfer they were part of (that half is sent again on its own).
+            ids = [r["ff_id"] for r in c.execute("SELECT f.ff_id FROM ff_tx f JOIN transactions t ON t.id=f.tx_id WHERE t.account_id=? AND f.ff_id IS NOT NULL", (account_id,)).fetchall()]
+            for ff_tx_id in ids:
+                c.execute("UPDATE ff_tx SET state='deleted' WHERE ff_id=?", (ff_tx_id,))
+            c.execute("DELETE FROM ff_tx WHERE ff_id IS NULL AND tx_id IN (SELECT id FROM transactions WHERE account_id=?)", (account_id,))
+            c.execute("UPDATE ff_accounts SET mode='monitor' WHERE account_id=?", (account_id,))
+        elif mode == "pending":
             c.execute("UPDATE ff_accounts SET mode='pending' WHERE account_id=?", (account_id,))
         elif mode == "link":
             c.execute("UPDATE ff_accounts SET mode='link', ff_id=?, created=0, adopted=0 WHERE account_id=?", (int(ff_id), account_id))
@@ -239,22 +252,211 @@ def rebalance(db, ff: Firefly, account_id: str) -> dict:
 
 
 # ---------------------------------------------------------------- transactions
-def _sig(t: dict, send_cat: bool) -> str:
-    return hashlib.sha256(json.dumps([t["date"], round(t["amount"], 2), t["name"], t["category"] if send_cat else "", t["account_id"], t["pending"]]).encode()).hexdigest()[:16]
+def _sig(t: dict, send_cat: bool, enrich: dict | None = None) -> str:
+    base = [t["date"], round(t["amount"], 2), t["name"], t["category"] if send_cat else "", t["account_id"], t["pending"]]
+    if enrich:                                  # only then: a charge with no middleman keeps the signature it always had (nothing old looks changed)
+        base.append([enrich["name"], enrich["payee"], enrich["category"] if send_cat else "", enrich["note"]])
+    return hashlib.sha256(json.dumps(base).encode()).hexdigest()[:16]
 
 
-def payload_for(t: dict, ff_account: int, c: dict, currency: str) -> dict:
-    """One Plaid transaction as a Firefly III withdrawal or deposit. Amounts are positive there; the direction is the type."""
+def payload_for(t: dict, ff_account: int, c: dict, currency: str, enrich: dict | None = None) -> dict:
+    """One Plaid transaction as a Firefly III withdrawal or deposit. Amounts are positive there; the direction is the type.
+    enrich: what a middleman (PayPal) knows about this charge: the real seller and category."""
     out = t["amount"] < 0
-    leg = {"type": "withdrawal" if out else "deposit", "date": t["date"], "amount": f"{abs(t['amount']):.2f}", "description": (t["name"] or "(no description)")[:1000], "currency_code": currency,
+    name = (enrich or {}).get("name") or t["name"]
+    payee = (enrich or {}).get("payee") or t["name"]
+    leg = {"type": "withdrawal" if out else "deposit", "date": t["date"], "amount": f"{abs(t['amount']):.2f}", "description": (name or "(no description)")[:1000], "currency_code": currency,
            "external_id": t["id"], "internal_reference": MARK, "tags": [MARK]}
     if out:
-        leg.update({"source_id": ff_account, "destination_name": (t["name"] or "Unknown")[:255]})
+        leg.update({"source_id": ff_account, "destination_name": (payee or "Unknown")[:255]})
     else:
-        leg.update({"source_name": (t["name"] or "Unknown")[:255], "destination_id": ff_account})
-    if c["send_categories"] and t.get("category"):
-        leg["category_name"] = t["category"]
+        leg.update({"source_name": (payee or "Unknown")[:255], "destination_id": ff_account})
+    category = (enrich or {}).get("category") or t.get("category")
+    if c["send_categories"] and category:
+        leg["category_name"] = category
+    if enrich:
+        leg["notes"] = f"{enrich['note']} The bank shows: {t['name']}"[:1000]
+        leg["tags"] = [MARK, "via-" + re.sub(r"[^a-z0-9]+", "-", enrich["wallet"].lower()).strip("-")]
     return {"error_if_duplicate_hash": True, "apply_rules": c["apply_rules"], "fire_webhooks": True, "group_title": None, "transactions": [leg]}
+
+
+# ---------------------------------------------------------------- middleman accounts (PayPal, Venmo, Cash App)
+# A middleman only passes money through: seller <- PayPal <- your card. Set to "monitor", its own rows are never sent to Firefly III (that counted every
+# purchase twice and left PayPal deep in the red). They are used to name the bank or card charge that really paid: "PAYPAL PURCHASE 261021" becomes
+# "Valve Corporation" in Games. The bank's charge can land a day before or several days after the middleman's row, and either can sync first: matching
+# runs on every push over what is still unmatched, and a charge sent before its partner arrived is renamed in place later.
+MATCH_BEFORE, MATCH_AFTER = 1, 5          # days the bank's row may land before / after the middleman's own row
+INSTALLMENT = re.compile(r"pay\s*in\s*4|pay\s*monthly|pay\s*later", re.I)
+
+
+def _wallet_label(a: dict) -> str:
+    return a.get("institution") or a["name"]
+
+
+def _wallet_pattern(a: dict) -> re.Pattern:
+    """How the middleman shows up on a bank statement: PAYPAL INST XFER, VENMO PAYMENT, CASH APP*JOHN."""
+    words = re.findall(r"[a-z0-9]+", _wallet_label(a).lower()) or ["paypal"]
+    return re.compile(r"\W*".join(map(re.escape, words)), re.I)
+
+
+def monitored(db) -> dict[str, dict]:
+    return {a["id"]: a for a in db.all("SELECT a.* FROM accounts a JOIN ff_accounts m ON m.account_id=a.id WHERE m.mode='monitor'")}
+
+
+def _days(a: str, b: str) -> int:
+    return (date.fromisoformat(a) - date.fromisoformat(b)).days
+
+
+def _installment_plans(wrows: list[dict]) -> dict[str, tuple[dict, int, int, str]]:
+    """Pay in 4 and Pay Monthly: each installment back to the purchase it pays for, so a charge reads "AliExpress - Pay in 4 (2 of 4)" in Shopping
+    instead of "PAYPAL INST XFER" in Bills. Pay in 4: the purchase was four times the installment, up to seven weeks earlier. Pay Monthly: 3 to 24
+    times it, within that many months."""
+    plans = {"in4": (4,), "monthly": (3, 6, 9, 12, 18, 24)}
+    def plan_of(w):
+        n = w["name"] or ""
+        if re.search(r"pay\s*in\s*4", n, re.I):
+            return "in4"
+        if re.search(r"pay\s*monthly", n, re.I):
+            return "monthly"
+        return None
+    inst = sorted((w for w in wrows if w["amount"] < 0 and plan_of(w)), key=lambda w: (w["date"], w["id"]))
+    buys = [w for w in wrows if w["amount"] < 0 and not INSTALLMENT.search(w["name"] or "") and w["category"] != "Transfer"]
+    link: dict[str, tuple[dict, int]] = {}
+    for i in inst:
+        fits = []
+        for n in plans[plan_of(i)]:
+            span = 49 if n == 4 else n * 31 + 15
+            fits += [(p, n) for p in buys if abs(abs(p["amount"]) - n * abs(i["amount"])) <= 0.01 * n + 0.04 and 0 <= _days(i["date"], p["date"]) <= span]
+        if fits:
+            link[i["id"]] = max(fits, key=lambda x: (x[0]["date"], x[0]["id"]))
+    out, seen = {}, {}
+    for i in inst:
+        if i["id"] in link:
+            p, n = link[i["id"]]
+            seen[p["id"]] = seen.get(p["id"], 0) + 1
+            out[i["id"]] = (p, min(seen[p["id"]], n), n, "Pay in 4" if plan_of(i) == "in4" else "Pay Monthly")
+    return out
+
+
+def _enrich(kind: str, w: dict, wallet: dict, wrows: list[dict], plans: dict) -> dict:
+    label = _wallet_label(wallet)
+    if kind == "payout":                       # money moved out of the middleman to your bank: say where it came from
+        src = [x for x in wrows if x["amount"] > 0 and abs(x["amount"] + w["amount"]) <= 0.005 and 0 <= _days(w["date"], x["date"]) <= MATCH_AFTER and x["category"] != "Transfer"]
+        if src:
+            s = max(src, key=lambda x: x["date"])
+            return {"name": f"{s['name']} (via {label})", "payee": s["name"], "category": s["category"] or "Income", "wallet": label, "note": f"Paid out from {label}: {s['name']} on {s['date']}."}
+        return {"name": f"From {label}", "payee": label, "category": "Transfer", "wallet": label, "note": f"Moved out of your {label} balance."}
+    if w["id"] in plans:
+        p, k, n, plan = plans[w["id"]]
+        return {"name": f"{p['name']} - {plan} ({k} of {n})", "payee": p["name"], "category": p["category"], "wallet": label,
+                "note": f"{label} {plan} installment {k} of {n} for {p['name']} ({abs(p['amount']):.2f} on {p['date']})."}
+    return {"name": w["name"] or label, "payee": w["name"] or label, "category": w["category"], "wallet": label, "note": f"Paid through {label} ({w['date']})."}
+
+
+def wallet_matches(db, rows: list[dict], monitors: dict[str, dict] | None = None, persist: bool = True) -> tuple[dict[str, dict], dict]:
+    """{bank or card transaction id: how to name it}, for rows on accounts that are sent to Firefly III. A match, once made, is kept.
+    With persist=False nothing is saved: what switching an account to monitor would do."""
+    monitors = monitored(db) if monitors is None else monitors
+    report = {"wallet_unmatched": [], "bank_unmatched": []}
+    if not monitors:
+        return {}, report
+    inc_pending = conf(db)["include_pending"]
+    ph = ",".join("?" * len(monitors))
+    wrows = [w for w in db.all(f"SELECT * FROM transactions WHERE account_id IN ({ph}) ORDER BY date, id", tuple(monitors)) if inc_pending or not w["pending"]]
+    wby = {w["id"]: w for w in wrows}
+    bank = [b for b in rows if b["account_id"] not in monitors]
+    bby = {b["id"]: b for b in bank}
+    saved = {r["bank_tx"]: r for r in db.all("SELECT * FROM wallet_match")}
+    if persist:                                                    # a row that is gone (removed at the bank) frees its partner
+        gone = [k for k, r in saved.items() if not db.one("SELECT 1 FROM transactions WHERE id=?", (k,)) or not db.one("SELECT 1 FROM transactions WHERE id=?", (r["wallet_tx"],))]
+        if gone:
+            with db.tx() as c:
+                c.executemany("DELETE FROM wallet_match WHERE bank_tx=?", [(k,) for k in gone])
+            for k in gone:
+                saved.pop(k)
+    pairs = {k: (r["wallet_tx"], r["kind"]) for k, r in saved.items() if k in bby and r["wallet_tx"] in wby}
+    taken_w = {r["wallet_tx"] for r in saved.values()}
+    taken_b = set(saved)
+    pats = {aid: _wallet_pattern(a) for aid, a in monitors.items()}
+    fresh = []
+    for w in wrows:
+        if w["id"] in taken_w or not w["amount"]:
+            continue
+        best = None
+        for b in bank:
+            if b["id"] in taken_b or abs(abs(b["amount"]) - abs(w["amount"])) > 0.005:
+                continue
+            gap = _days(b["date"], w["date"])
+            if not -MATCH_BEFORE <= gap <= MATCH_AFTER:
+                continue
+            if (b["amount"] < 0) == (w["amount"] < 0) and pats[w["account_id"]].search(b["name"] or ""):
+                kind = "same"                                      # the bank paid the middleman for this purchase (or got a refund through it)
+            elif w["amount"] < 0 < b["amount"] and (w["category"] == "Transfer" or (b["name"] or "").lower() == (w["name"] or "").lower() or pats[w["account_id"]].search(b["name"] or "")):
+                kind = "payout"                                    # the middleman sent money on to the bank
+            else:
+                continue
+            # Same amount on the same day twice: the bank's own wording breaks the tie (PayPal's "PURCHASE" is a direct buy, "INST XFER" usually an installment).
+            hint = int(bool(re.search(r"\bpurchase\b", b["name"] or "", re.I)) == bool(INSTALLMENT.search(w["name"] or "")))
+            key = (abs(gap), hint, b["date"], b["id"])
+            if best is None or key < best[0]:
+                best = (key, b, kind)
+        if best:
+            _, b, kind = best
+            taken_w.add(w["id"]); taken_b.add(b["id"])
+            pairs[b["id"]] = (w["id"], kind)
+            fresh.append((b["id"], w["id"], kind))
+    if persist and fresh:
+        with db.tx() as c:
+            c.executemany("INSERT OR IGNORE INTO wallet_match(bank_tx, wallet_tx, kind, made) VALUES(?,?,?,?)", [(b, w, k, date.today().isoformat()) for b, w, k in fresh])
+    plans = {}
+    for aid in monitors:
+        plans.update(_installment_plans([w for w in wrows if w["account_id"] == aid]))
+    out = {}
+    for bid, (wid, kind) in pairs.items():
+        w = wby[wid]
+        out[bid] = _enrich(kind, w, monitors[w["account_id"]], [x for x in wrows if x["account_id"] == w["account_id"]], plans)
+    matched_w = {wid for wid, _ in pairs.values()}
+    report["wallet_unmatched"] = [w for w in wrows if w["id"] not in matched_w]
+    report["bank_unmatched"] = [b for b in bank if b["id"] not in pairs and any(p.search(b["name"] or "") for p in pats.values())]
+    return out, report
+
+
+def monitor_preview(db, account_id: str) -> dict:
+    """What setting this account to monitor would do, changing nothing: which charges get which name, and what leaves Firefly III."""
+    a = db.one("SELECT * FROM accounts WHERE id=?", (account_id,))
+    if not a:
+        raise KeyError(account_id)
+    c = conf(db)
+    mons = {**monitored(db), account_id: a}
+    maps = [r["account_id"] for r in db.all("SELECT account_id FROM ff_accounts WHERE mode IN ('create','link') AND account_id!=?", (account_id,))]
+    rows = db.all(f"SELECT * FROM transactions WHERE account_id IN ({','.join('?' * len(maps))}) ORDER BY date, id", tuple(maps)) if maps else []
+    rows = [r for r in rows if c["include_pending"] or not r["pending"]]
+    enrich, rep = wallet_matches(db, rows, mons, persist=False)
+    accts = {x["id"]: x for x in db.all("SELECT * FROM accounts")}
+    mine = lambda r: r["account_id"] == account_id
+    in_ff = db.one("SELECT COUNT(*) n FROM ff_tx f JOIN transactions t ON t.id=f.tx_id WHERE t.account_id=? AND f.ff_id IS NOT NULL", (account_id,))["n"]
+    byid = {r["id"]: r for r in rows}
+    renamed = [{"date": byid[b]["date"], "account": account_label(accts[byid[b]["account_id"]]), "amount": byid[b]["amount"], "was": byid[b]["name"], "becomes": e["name"], "category": e["category"]}
+               for b, e in enrich.items() if e["wallet"] == _wallet_label(a)]
+    return {"account": account_label(a), "removed_from_firefly": in_ff, "renamed": sorted(renamed, key=lambda x: x["date"], reverse=True),
+            "double_counted": round(-sum(r["amount"] for r in renamed if r["amount"] < 0), 2),
+            "wallet_unmatched": [{"date": w["date"], "name": w["name"], "amount": w["amount"]} for w in rep["wallet_unmatched"] if mine(w)],
+            "bank_unmatched": [{"date": b["date"], "account": account_label(accts[b["account_id"]]), "name": b["name"], "amount": b["amount"]} for b in rep["bank_unmatched"] if _wallet_pattern(a).search(b["name"] or "")]}
+
+
+def _retire_wallet_accounts(db, ff: Firefly) -> None:
+    """A middleman account set to monitor keeps its Firefly III account, emptied: balance 0 and out of net worth (its money is counted where it really moved)."""
+    for aid, a in monitored(db).items():
+        m = db.one("SELECT ff_id FROM ff_accounts WHERE account_id=?", (aid,))
+        key = f"retired:{aid}"
+        if not m or not m["ff_id"] or _state(db).get(key):
+            continue
+        left = db.one("SELECT COUNT(*) n FROM ff_tx f JOIN transactions t ON t.id=f.tx_id WHERE t.account_id=? AND f.ff_id IS NOT NULL", (aid,))["n"]
+        if left:
+            continue
+        ff.call("PUT", f"/accounts/{m['ff_id']}", {"opening_balance": "0", "opening_balance_date": date.today().isoformat(), "include_net_worth": False,
+                                                   "notes": f"Monitor only: {_wallet_label(a)} passes money through, so its purchases are shown on the card or bank that paid."})
+        _state_set(db, key, date.today().isoformat())
 
 
 def _pairs(rows: list[dict]) -> dict[str, str]:
@@ -335,12 +537,13 @@ def push(db, ff: Firefly, limit: int | None = None) -> dict:
     if not c["include_pending"]:
         rows = [r for r in rows if not r["pending"]]
     known = {r["tx_id"]: r for r in db.all("SELECT * FROM ff_tx")}
-    for o_id, i_id in _pairs(rows).items():                      # a transfer already in Firefly III (adopted) covers its other half too
+    enrich, _ = wallet_matches(db, rows)                         # charges a middleman (PayPal) paid for: named after the real seller
+    for o_id, i_id in _pairs([r for r in rows if r["id"] not in enrich]).items():                      # a transfer already in Firefly III (adopted) covers its other half too
         if o_id in known and known[o_id]["state"] == "ok" and known[o_id]["ff_id"] and i_id not in known:
             with db.tx() as c2:
                 c2.execute("INSERT INTO ff_tx(tx_id,ff_id,sig,state) VALUES(?,?,NULL,'paired') ON CONFLICT(tx_id) DO NOTHING", (i_id, known[o_id]["ff_id"]))
             known[i_id] = {"tx_id": i_id, "ff_id": known[o_id]["ff_id"], "state": "paired", "sig": None, "attempts": 0}
-    pairs = _pairs([r for r in rows if r["id"] not in known])
+    pairs = _pairs([r for r in rows if r["id"] not in known and r["id"] not in enrich])
     paired_in = set(pairs.values())
     byid = {r["id"]: r for r in rows}
     for t in rows:
@@ -352,7 +555,8 @@ def push(db, ff: Firefly, limit: int | None = None) -> dict:
             continue
         if k and k["state"] == "error" and (k["attempts"] or 0) >= MAX_ATTEMPTS:
             continue
-        sig = _sig(t, c["send_categories"])
+        en = enrich.get(t["id"])
+        sig = _sig(t, c["send_categories"], en)
         cur = (accts[t["account_id"]].get("currency") or "USD")
         if t["id"] in paired_in:                                    # the inflow side of a transfer: the outflow carries both
             if not k:
@@ -362,8 +566,8 @@ def push(db, ff: Firefly, limit: int | None = None) -> dict:
         try:
             if k and k["state"] == "ok" and k["sig"] == sig:
                 continue
-            if k and k["state"] == "ok" and k["ff_id"]:             # changed at the bank: update the Firefly III copy
-                p = payload_for(t, maps[t["account_id"]]["ff_id"], c, cur)
+            if k and k["state"] == "ok" and k["ff_id"]:             # changed at the bank, or its middleman row just arrived: update the Firefly III copy
+                p = payload_for(t, maps[t["account_id"]]["ff_id"], c, cur, en)
                 ff.update_tx(k["ff_id"], {"apply_rules": False, "fire_webhooks": True, "transactions": p["transactions"]})
                 with db.tx() as c2:
                     c2.execute("UPDATE ff_tx SET sig=?, pushed=? WHERE tx_id=?", (sig, date.today().isoformat(), t["id"]))
@@ -377,7 +581,7 @@ def push(db, ff: Firefly, limit: int | None = None) -> dict:
                 leg.pop("destination_name", None); leg.pop("source_name", None)
                 p = {"error_if_duplicate_hash": True, "apply_rules": c["apply_rules"], "fire_webhooks": True, "group_title": None, "transactions": [leg]}
             else:
-                p = payload_for(t, maps[t["account_id"]]["ff_id"], c, cur)
+                p = payload_for(t, maps[t["account_id"]]["ff_id"], c, cur, en)
             try:
                 ff_id = ff.create_tx(p)
             except FireflyError as e:
@@ -394,10 +598,17 @@ def push(db, ff: Firefly, limit: int | None = None) -> dict:
                     c2.execute("INSERT INTO ff_tx(tx_id,ff_id,sig,state,pushed) VALUES(?,?,?, 'ok', ?) ON CONFLICT(tx_id) DO UPDATE SET ff_id=excluded.ff_id, state='ok'", (pairs[t["id"]], ff_id, _sig(byid[pairs[t["id"]]], c["send_categories"]), date.today().isoformat()))
             res["created"] += 1
             done += 1
-        except FireflyError as e:
-            fail(t["id"], e)
-            if e.status in (401, 403):
+        except FireflyError as err:
+            fail(t["id"], err)
+            if err.status in (401, 403):
                 break
+    try:
+        _retire_wallet_accounts(db, ff)
+    except FireflyError as err:
+        if err.status in (401, 403):
+            raise
+        res["errors"] += 1
+        res["error_samples"].append(f"emptying a monitored account: {str(err)[:150]}")
     return res
 
 

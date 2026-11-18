@@ -466,8 +466,17 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         except firefly.FireflyError as e:
             raise HTTPException(502, str(e))
 
+    @app.get("/api/firefly/accounts/{account_id}/monitor-preview")
+    def ff_monitor_preview(request: Request, account_id: str):
+        """What making this account a middleman (monitor only, e.g. PayPal) would do, changing nothing."""
+        auth(request)
+        try:
+            return firefly.monitor_preview(store, account_id)
+        except KeyError:
+            raise HTTPException(404, "account not found")
+
     class FFMap(BaseModel):
-        mode: str                             # pending | create | link | skip
+        mode: str                             # pending | create | link | skip | monitor
         ff_id: int | None = None
 
     @app.put("/api/firefly/accounts/{account_id}")

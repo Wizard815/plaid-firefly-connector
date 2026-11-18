@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS shared_in(peer TEXT NOT NULL, kind TEXT NOT NULL, ref
 CREATE TABLE IF NOT EXISTS ff_accounts(account_id TEXT PRIMARY KEY, mode TEXT NOT NULL DEFAULT 'create', ff_id INTEGER, created INTEGER DEFAULT 0, adopted INTEGER DEFAULT 0);   -- how each bank account maps to Firefly III: create | link | skip
 CREATE TABLE IF NOT EXISTS ff_tx(tx_id TEXT PRIMARY KEY, ff_id INTEGER, sig TEXT, state TEXT NOT NULL DEFAULT 'ok', error TEXT, attempts INTEGER DEFAULT 0, pushed TEXT);   -- each Plaid transaction and the Firefly III one it became
 CREATE TABLE IF NOT EXISTS ff_state(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS wallet_match(bank_tx TEXT PRIMARY KEY, wallet_tx TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, made TEXT);   -- a bank charge and the middleman (PayPal...) row it paid for: kept once made, so later rows never reshuffle them
 CREATE TABLE IF NOT EXISTS allocations(id INTEGER PRIMARY KEY AUTOINCREMENT, goal_id INTEGER NOT NULL, place TEXT NOT NULL DEFAULT '', amount REAL NOT NULL, UNIQUE(goal_id, place));
 CREATE TABLE IF NOT EXISTS incomes(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, amount REAL NOT NULL, every INTEGER DEFAULT 1, unit TEXT DEFAULT 'month', next_date TEXT NOT NULL, account_id TEXT, active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS chat_links(chat_id INTEGER NOT NULL, kind TEXT NOT NULL, ref_id INTEGER NOT NULL, PRIMARY KEY(chat_id, kind, ref_id));
@@ -75,7 +76,8 @@ COLUMNS = {  # added after the first release: (table, column) -> DDL fragment
 }
 DEFAULT_CATEGORIES = [("Income", "income"), ("Food", "expense"), ("Groceries", "expense"), ("Clothes", "expense"), ("Fun", "expense"), ("Games", "expense"),
                       ("Gas", "expense"), ("Transport", "expense"), ("Bills", "expense"), ("Housing", "expense"), ("Health", "expense"), ("Shopping", "expense"),
-                      ("Subscriptions", "expense"), ("Travel", "expense"), ("Savings", "transfer"), ("Investing", "transfer"), ("Transfer", "transfer"), ("Misc", "expense")]
+                      ("Subscriptions", "expense"), ("Travel", "expense"), ("Car", "expense"), ("Tech", "expense"), ("Education", "expense"), ("Fees", "expense"),
+                      ("Savings", "transfer"), ("Investing", "transfer"), ("Transfer", "transfer"), ("Misc", "expense")]
 
 
 class DB:
