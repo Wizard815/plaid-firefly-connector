@@ -40,16 +40,38 @@ from plaidproxy import plaidplan
 clock = time.time          # tests replace this
 
 
-def upsert_accounts(db, item_id: str, inst: str, accounts: list[dict]) -> None:
+def pick_balance(db, account_id: str, kind: str, balances: dict) -> float | None:
+    """The balance to keep for one account, from what Plaid already sent (no extra call).
+
+    Cards, loans and investments: Plaid's `current`, as always (their `available` is the credit left, or 0 for an IRA).
+    Cash accounts: `current` can lag. First take away the pending transactions we already hold for the account
+    (stored signed, money in positive, so adding them does it). Then, only if `available` is present, not exactly 0
+    (some banks send 0 for "not available"), and below that by more than a cent, trust `available`: `current` is stale
+    in a way our pending transactions don't explain. An `available` above it (overdraft protection counted in) is ignored."""
+    cur = balances.get("current")
+    if kind != "cash" or cur is None:
+        return cur
+    pend = db.one("SELECT COALESCE(SUM(amount), 0) s FROM transactions WHERE account_id=? AND pending=1", (account_id,))["s"] or 0.0
+    adjusted = round(float(cur) + float(pend), 2)
+    avail = balances.get("available")
+    if avail is not None and float(avail) != 0 and float(avail) < adjusted - 0.01:
+        return round(float(avail), 2)
+    return adjusted
+
+
+def upsert_accounts(db, item_id: str, inst: str, accounts: list[dict], record: bool = True) -> None:
+    """Store the accounts and their balances. Called once more after a sync's transactions are all in (record=True), so the
+    pending ones count; the call made while pages are still arriving (record=False) only makes sure each account exists."""
     for a in accounts:
         kind = KIND.get(a["type"], "cash")
-        bal = a["balances"].get("current")
+        bal = pick_balance(db, a["account_id"], kind, a["balances"])
         with db.tx() as c:
             c.execute("""INSERT INTO accounts(id,item_id,source,institution,name,kind,balance,currency,updated,subtype,mask) VALUES(?,?,?,?,?,?,?,?,?,?,?)
                          ON CONFLICT(id) DO UPDATE SET balance=excluded.balance,name=excluded.name,updated=excluded.updated,subtype=excluded.subtype,mask=excluded.mask""",
                       (a["account_id"], item_id, "plaid", inst, a.get("official_name") or a["name"], KIND.get(a["type"], "cash"), bal,
                        a["balances"].get("iso_currency_code") or "USD", now(), a.get("subtype"), a.get("mask")))
-        record_balance(db, a["account_id"], a["name"], bal, kind)
+        if record:
+            record_balance(db, a["account_id"], a["name"], bal, kind)
 
 
 def sync_item(db, plaid: Plaid, item_id: str, force: bool = False) -> dict:
@@ -77,8 +99,8 @@ def sync_item(db, plaid: Plaid, item_id: str, force: bool = False) -> dict:
     while more:
         r = plaid.sync(token, cursor)
         if r.get("accounts"):                                 # Plaid returns the accounts and their balances with every sync, so a separate accounts call is not needed
-            upsert_accounts(db, item_id, inst, r["accounts"])
-            got_accounts = True
+            upsert_accounts(db, item_id, inst, r["accounts"], record=False)          # the accounts must exist before their transactions; the balance is set again below
+            got_accounts = r["accounts"]
         for t in r.get("added", []) + r.get("modified", []):
             amt = -float(t["amount"])        # Plaid: positive = outflow. We store positive = inflow.
             is_new = db.one("SELECT 1 FROM transactions WHERE id=?", (t["transaction_id"],)) is None
@@ -108,7 +130,9 @@ def sync_item(db, plaid: Plaid, item_id: str, force: bool = False) -> dict:
         cursor, more = r["next_cursor"], r.get("has_more", False)
     with db.tx() as c:
         c.execute("UPDATE plaid_items SET cursor=? WHERE item_id=?", (cursor, item_id))
-    if not got_accounts:                                      # an older or simpler server that does not include them
+    if got_accounts:                                          # every page is in, pending transactions included: now the balance
+        upsert_accounts(db, item_id, inst, got_accounts)
+    else:                                                     # an older or simpler server that does not include them
         upsert_accounts(db, item_id, inst, plaid.accounts(token)["accounts"])
 
     if db.one("SELECT 1 FROM accounts WHERE item_id=? AND kind='investment'", (item_id,)):

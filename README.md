@@ -204,6 +204,12 @@ The gateway remembers which bank belongs to which worker in memory only, so each
 ### Plaid free-plan link limit
 Plaid's free Trial plan limits how many real (Production) banks you can ever link, and per [Plaid's billing docs](https://plaid.com/docs/account/billing/) **removing one does not give the slot back**: every Production Item ever created counts. The docs say 10 for the Trial plan; check what your dashboard shows for your own account. So: use **Relink** (not Unlink then Link) when a bank's login needs repairing, because Relink reuses the same connection; practise in the Sandbox, which has no such limit; and link a bank once you are sure you want it.
 
+**Which balance is kept.** For cards, loans and investments, Plaid's `current` balance, as before. For checking and
+savings, `current` can lag, so the pending transactions already received are taken off it; then, if Plaid's `available` is
+lower than that by more than a cent (and is not exactly 0, which some banks send to mean "not available"), `available` is
+kept instead, because `current` is stale. An `available` that is higher (overdraft protection counted in) is ignored. No extra
+Plaid call is made for this.
+
 **A bank removed and linked again.** Plaid then sends the whole history again under new transaction and account ids. When the new
 account is linked to the Firefly III account that already holds that history, each transaction already there is recognised by what it
 is (same day, amount, direction and description, or the same within 3 days) and nothing is sent twice. As a second guard, a batch that
