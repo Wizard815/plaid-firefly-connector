@@ -217,7 +217,8 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
 
     # The admin's decisions: which bank accounts go to which Firefly III account, joint-account shares, and where a person's data is sent.
     # A person's own login may look at these but not change them (the admin page reaches them through /admin/p/...).
-    ADMIN_ONLY = [("PUT", r"api/firefly/accounts/[^/]+"), ("POST", r"api/firefly/accounts/[^/]+/rebalance"), ("POST", r"api/firefly/accounts/[^/]+/release"), ("PUT", r"api/shares/[^/]+")]
+    ADMIN_ONLY = [("PUT", r"api/firefly/accounts/[^/]+"), ("POST", r"api/firefly/accounts/[^/]+/release"),      # matching a balance is the person's own call (their Coinpile asks them first)
+                  ("PUT", r"api/shares/[^/]+")]
 
     def clean_path(path: str) -> str:
         """The one spelling of a path that is both checked and forwarded. httpx would drop "." and ".." segments when it builds the URL,
