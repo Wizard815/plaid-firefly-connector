@@ -204,6 +204,20 @@ The gateway remembers which bank belongs to which worker in memory only, so each
 ### Plaid free-plan link limit
 Plaid's free Trial plan limits how many real (Production) banks you can ever link, and per [Plaid's billing docs](https://plaid.com/docs/account/billing/) **removing one does not give the slot back**: every Production Item ever created counts. The docs say 10 for the Trial plan; check what your dashboard shows for your own account. So: use **Relink** (not Unlink then Link) when a bank's login needs repairing, because Relink reuses the same connection; practise in the Sandbox, which has no such limit; and link a bank once you are sure you want it.
 
+**A bank removed and linked again.** Plaid then sends the whole history again under new transaction and account ids. When the new
+account is linked to the Firefly III account that already holds that history, each transaction already there is recognised by what it
+is (same day, amount, direction and description, or the same within 3 days) and nothing is sent twice. As a second guard, a batch that
+would roughly double an account that already has history in Firefly III is **held**: nothing goes to that account until the admin
+presses **Send anyway** on the admin page. And two Plaid accounts that look like one real account (same bank, last digits and name, as
+Plaid has sent after a bank's re-sign-in) are flagged, and approving both needs a confirmation.
+
+On the admin page, each bank under **Manage** shows when it was last pulled and how that went, and has two buttons:
+**Quick update** asks Plaid for what is new since the last pull; **Full update** first asks the bank for fresh data
+(Plaid's `/transactions/refresh`, billed per call) and then reads the whole history Plaid holds again, updating what is
+already stored rather than doubling it. A Relink pulls that bank straight away. The **Pull and send log** below the banks
+lists each pull and each Firefly III send with its result: counts and error codes such as `ITEM_LOGIN_REQUIRED`, never
+amounts, payees or balances.
+
 ### Keeping the Plaid bill small
 Plaid bills per linked bank login per month, not per call: about $0.45 each at list price (Transactions $0.30 + Recurring $0.15), plus $0.18 if it has an investment account. The calls themselves are free, but the app still keeps them low:
 * **Every bank has its own schedule** (Settings, Connect & import, under each linked bank): every 15 minutes, 3 hours, daily, weekly, every 2 weeks, monthly, or only when you press Sync. **Automatic** picks by what the bank holds: daily for a checking account or card, weekly for a savings-only bank, monthly for an investment-only one. Pressing **Sync now**, a Plaid webhook and a first link always pull straight away. A Plaid webhook (see "Plaid webhooks" above) tells the app the moment new data exists, so it never has to poll.

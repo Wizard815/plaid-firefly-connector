@@ -163,19 +163,41 @@ def mark_item(db, item_id: str, status: str | None, detail: str = "") -> None:
         c.execute("UPDATE plaid_items SET status=?, status_detail=? WHERE item_id=?", (status, detail[:200] or None, item_id))
 
 
+def note(db, item_id: str | None, what: str, ok: bool, detail: str) -> None:
+    """One line in the pull log (the last 300 are kept). Counts and error codes only: no amounts, payees or balances."""
+    with db.tx() as c:
+        bank = (c.execute("SELECT institution FROM plaid_items WHERE item_id=?", (item_id,)).fetchone() or [None])[0] if item_id else None      # kept: the bank may be removed later
+        c.execute("INSERT INTO pull_log(at, item_id, what, ok, detail, bank) VALUES(?,?,?,?,?,?)", (time.time(), item_id, what, int(ok), detail[:200], bank))
+        c.execute("DELETE FROM pull_log WHERE id <= (SELECT MAX(id) FROM pull_log) - 300")
+
+
+def counts(stats: dict) -> str:
+    return f"{stats.get('added', 0)} new, {stats.get('modified', 0)} changed, {stats.get('removed', 0)} removed"
+
+
 def sync_all(db, plaid: Plaid, force: bool = False) -> list[dict]:
     """Every bank that is due. One bank failing (e.g. its login needs repair) is recorded on it and never stops the others."""
     out = []
     for r in db.all("SELECT item_id FROM plaid_items"):
-        try:
-            out.append(sync_item(db, plaid, r["item_id"], force))
-        except PlaidLimit:
-            raise                                                  # our own cap or budget: stop the whole round, the banks are fine
-        except PlaidError as e:
-            if str(e).startswith("ITEM_"):                         # the bank's login needs repair: say so on that bank only
-                mark_item(db, r["item_id"], "error", str(e))
-            out.append({"item": r["item_id"], "error": str(e)[:160]})
+        out.append(pull_one(db, plaid, r["item_id"], force, "pull"))
     return out
+
+
+def pull_one(db, plaid: Plaid, item_id: str, force: bool, what: str) -> dict:
+    """sync_item, with the outcome written to the pull log. A bank error is recorded on that bank and returned, not raised."""
+    try:
+        res = sync_item(db, plaid, item_id, force)
+    except PlaidLimit as e:
+        note(db, item_id, what, False, f"stopped by your Plaid limit: {e}")
+        raise                                                      # our own cap or budget: stop the whole round, the banks are fine
+    except PlaidError as e:
+        if str(e).startswith("ITEM_"):                             # the bank's login needs repair: say so on that bank only
+            mark_item(db, item_id, "error", str(e))
+        note(db, item_id, what, False, str(e))
+        return {"item": item_id, "error": str(e)[:160]}
+    if "skipped" not in res:
+        note(db, item_id, what, "error" not in res, res.get("error") or counts(res))
+    return res
 
 
 def handle_webhook(db, plaid: Plaid, body: dict) -> dict:

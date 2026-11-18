@@ -6,6 +6,7 @@ Idempotent: every Plaid transaction id is remembered together with the Firefly I
 """
 import hashlib
 import json
+import math
 import re
 import time
 from datetime import date, timedelta
@@ -64,13 +65,13 @@ class Firefly:
         return {"id": int(a["id"]), **a["attributes"]}
 
     def account_transactions(self, ff_id: int):
-        """Every transaction in one Firefly III account, a page at a time: (group id, external id)."""
+        """Every transaction in one Firefly III account, a page at a time: (group id, external id, the split itself)."""
         page = 1
         while True:
             j = self.call("GET", f"/accounts/{ff_id}/transactions", params={"page": page, "limit": 50, "type": "all"})
             for g in j.get("data", []):
                 for t in g["attributes"].get("transactions", []):
-                    yield int(g["id"]), t.get("external_id")
+                    yield int(g["id"]), t.get("external_id"), t
             if page >= int((j.get("meta", {}).get("pagination", {}) or {}).get("total_pages", 1)):
                 return
             page += 1
@@ -129,7 +130,11 @@ def ensure_mappings(db) -> None:
                 c.execute("INSERT INTO ff_accounts(account_id, mode) VALUES(?,?)", (a["id"], DEFAULT_MODE))
 
 
-def set_mapping(db, account_id: str, mode: str, ff_id: int | None = None) -> None:
+class LooksDuplicate(ValueError):
+    """Approving an account that looks like another one already known (same bank, last digits, name and kind)."""
+
+
+def set_mapping(db, account_id: str, mode: str, ff_id: int | None = None, confirm_duplicate: bool = False) -> None:
     """The admin's decision for one bank account. create: make it in Firefly III (once). link: use this Firefly III account that already exists (one Firefly III account
     receives one bank account, never several). skip: send nothing. pending: back to waiting for a decision. monitor: a middleman such as PayPal: its own rows
     leave Firefly III (they counted every purchase twice) and name the bank or card charges that paid instead."""
@@ -141,6 +146,10 @@ def set_mapping(db, account_id: str, mode: str, ff_id: int | None = None) -> Non
         raise KeyError(account_id)
     ensure_mappings(db)
     cur = db.one("SELECT * FROM ff_accounts WHERE account_id=?", (account_id,))
+    twins = duplicates(db).get(account_id)
+    if twins and mode in ("create", "link") and not confirm_duplicate:
+        names = ", ".join(account_label(db.one("SELECT * FROM accounts WHERE id=?", (t,))) for t in twins)
+        raise LooksDuplicate(f"this looks like the same bank account as {names} (same bank, last digits and name). Approving both would send every transaction twice: skip one, or confirm it really is a different account")
     if mode == "link":
         other = db.one("SELECT a.institution, a.name FROM ff_accounts m JOIN accounts a ON a.id=m.account_id WHERE m.ff_id=? AND m.account_id!=? AND m.mode IN ('create','link')", (int(ff_id), account_id))
         if other:
@@ -168,6 +177,17 @@ def set_mapping(db, account_id: str, mode: str, ff_id: int | None = None) -> Non
                 c.execute("UPDATE ff_accounts SET mode='create', ff_id=NULL, created=0 WHERE account_id=?", (account_id,))
         else:
             c.execute("UPDATE ff_accounts SET mode='skip' WHERE account_id=?", (account_id,))
+
+
+def duplicates(db) -> dict[str, list[str]]:
+    """Bank accounts that look like the same real account twice: same bank, same last digits, same name and kind (Plaid has sent one real account under
+    two ids after a bank's re-sign-in, and a bank linked twice does the same). account id -> the other ids that look the same."""
+    groups: dict = {}
+    for a in db.all("SELECT id, institution, name, nickname, mask, kind FROM accounts WHERE source='plaid'"):
+        if not a.get("mask"):
+            continue                                              # without last digits there is too little to go on
+        groups.setdefault((str(a["institution"] or "").lower(), a["mask"], _norm(a.get("nickname") or a["name"]), a["kind"]), []).append(a["id"])
+    return {i: [j for j in ids if j != i] for ids in groups.values() if len(ids) > 1 for i in ids}
 
 
 def account_label(a: dict) -> str:
@@ -218,19 +238,74 @@ def ensure_account(db, ff: Firefly, a: dict, m: dict, c: dict) -> int:
     return ff_id
 
 
+def _norm(s) -> str:
+    """A description for matching: lower case, letters and digits only ("SQ *Coffee-Shop #12" and "sq coffee shop 12" match)."""
+    return re.sub(r"[^a-z0-9]+", "", str(s or "").lower())
+
+
+def _ff_split(ff_id: int, t: dict) -> tuple[str, float, str] | None:
+    """One Firefly III split as seen from account ff_id: (day, signed amount, description). Money out of the account is negative, as in the transactions table."""
+    try:
+        amt = abs(float(t.get("amount") or 0))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(amt):
+        return None
+    out = str(t.get("source_id")) == str(ff_id) if t.get("type") == "transfer" else t.get("type") == "withdrawal"
+    return str(t.get("date") or "")[:10], -amt if out else amt, str(t.get("description") or "")
+
+
 def adopt_existing(db, ff: Firefly, account_id: str, ff_id: int) -> int:
-    """An account that already holds transactions in Firefly III (linked to an existing one, or restored from a backup): find the ones that came from Plaid Firefly Connector by their
-    Plaid id and take them over, so nothing is sent twice. Done once per account."""
+    """An account that already holds transactions in Firefly III (linked to an existing one, restored from a backup, or the same bank account again after
+    a bank was removed and linked again): take over what is already there so nothing is sent twice. Done once per account.
+
+    First by Plaid id (external_id). After a remove-and-relink Plaid sends the whole history again under NEW transaction ids, so the ids never match;
+    then a transaction is matched by what it is: same Firefly III account, same day, same amount and direction, same description (letters and digits
+    only), and failing that the same amount and description within 3 days (a pending charge that posted a day later). Each Firefly III transaction
+    is taken once and each local one once, so two identical coffees on one day match two, not one."""
     send_cat = conf(db)["send_categories"]
     mine = {r["id"]: r for r in db.all("SELECT * FROM transactions WHERE account_id=?", (account_id,))}
-    n = 0
-    for gid, ext in ff.account_transactions(ff_id):
-        if ext in mine and not db.one("SELECT 1 FROM ff_tx WHERE tx_id=?", (ext,)):
-            with db.tx() as c:          # taken over as it is (not rewritten): it only changes later if the bank changes it
-                c.execute("INSERT INTO ff_tx(tx_id,ff_id,state,sig,pushed) VALUES(?,?, 'ok', ?, ?)", (ext, gid, _sig(mine[ext], send_cat), date.today().isoformat()))
+    taken_tx = {r["tx_id"] for r in db.all("SELECT tx_id FROM ff_tx")}
+    # Firefly III transactions already claimed by a transaction that is still here (a bank removed here leaves its old claims behind; those don't count)
+    taken_ff = {r["ff_id"] for r in db.all("SELECT f.ff_id FROM ff_tx f JOIN transactions t ON t.id=f.tx_id WHERE f.ff_id IS NOT NULL")}
+    n, seen, theirs = 0, 0, []
+
+    def take(tx_id: str, gid: int):
+        with db.tx() as c:              # taken over as it is (not rewritten): it only changes later if the bank changes it
+            c.execute("INSERT INTO ff_tx(tx_id,ff_id,state,sig,pushed) VALUES(?,?, 'ok', ?, ?) ON CONFLICT(tx_id) DO NOTHING", (tx_id, gid, _sig(mine[tx_id], send_cat), date.today().isoformat()))
+        taken_tx.add(tx_id)
+        taken_ff.add(gid)
+
+    for gid, ext, t in ff.account_transactions(ff_id):
+        seen += 1
+        if ext in mine and ext not in taken_tx:
+            take(ext, gid)
             n += 1
+        elif gid not in taken_ff and not (ext and ext in mine):
+            theirs.append((gid, t))
+    free = [r for r in mine.values() if r["id"] not in taken_tx]
+    for near in (0, 3):                                  # exact day first, then a few days either side
+        by: dict = {}
+        for r in free:
+            by.setdefault((round(r["amount"], 2), _norm(r["name"])), []).append(r)
+        for gid, t in theirs:
+            if gid in taken_ff:
+                continue
+            s = _ff_split(ff_id, t)
+            if not s or not s[0]:
+                continue
+            cands = [r for r in by.get((round(s[1], 2), _norm(s[2])), []) if r["id"] not in taken_tx]
+            try:
+                d = date.fromisoformat(s[0])
+                hit = next((r for r in sorted(cands, key=lambda r: abs((date.fromisoformat(r["date"]) - d).days)) if abs((date.fromisoformat(r["date"]) - d).days) <= near), None)
+            except ValueError:
+                hit = None
+            if hit:
+                take(hit["id"], gid)
+                n += 1
+        free = [r for r in free if r["id"] not in taken_tx]
     with db.tx() as c:
-        c.execute("UPDATE ff_accounts SET adopted=1 WHERE account_id=?", (account_id,))
+        c.execute("UPDATE ff_accounts SET adopted=1, ff_seen=? WHERE account_id=?", (seen, account_id))
     return n
 
 
@@ -476,11 +551,29 @@ def _pairs(rows: list[dict]) -> dict[str, str]:
     return pairs
 
 
+# Data safety, like the Plaid budget cap is for cost: an account that already has history in Firefly III is not sent a batch big enough to
+# roughly double it (what a relink that slipped past matching looks like). The account is held until the admin says send anyway.
+HOLD_MIN_EXISTING, HOLD_MIN_NEW, HOLD_SHARE = 10, 20, 0.5
+
+
+def held(db) -> list[dict]:
+    """Accounts whose new transactions are held back, with how many would go and how many are already there."""
+    return [{"account_id": r["account_id"], "label": account_label(r), "waiting": r["held"], "existing": r["ff_seen"]}
+            for r in db.all("SELECT m.account_id, m.held, m.ff_seen, a.institution, a.name, a.nickname, a.mask FROM ff_accounts m JOIN accounts a ON a.id=m.account_id WHERE m.held > 0")]
+
+
+def release(db, account_id: str) -> None:
+    """The admin looked and wants the held batch sent: the next push sends it (once)."""
+    with db.tx() as c:
+        if not c.execute("UPDATE ff_accounts SET release=1 WHERE account_id=? AND held > 0", (account_id,)).rowcount:
+            raise KeyError(account_id)
+
+
 def push(db, ff: Firefly, limit: int | None = None) -> dict:
     """Send what is new, changed or removed to Firefly III. Safe to run any time and as often as you like."""
     limit = limit or RUN_LIMIT
     c = conf(db)
-    res = {"accounts_created": 0, "created": 0, "updated": 0, "deleted": 0, "errors": 0, "remaining": 0, "error_samples": []}
+    res = {"accounts_created": 0, "created": 0, "updated": 0, "deleted": 0, "errors": 0, "remaining": 0, "error_samples": [], "held": []}
     ensure_mappings(db)
     maps = {r["account_id"]: r for r in db.all("SELECT * FROM ff_accounts WHERE mode IN ('create','link')")}
     accts = {a["id"]: a for a in db.all("SELECT * FROM accounts")}
@@ -552,6 +645,23 @@ def push(db, ff: Firefly, limit: int | None = None) -> dict:
         if r["ff_id"] and r["state"] in ("ok", "paired"):
             shared.setdefault(r["ff_id"], []).append(r["tx_id"])
     shared = {f: ids for f, ids in shared.items() if len(ids) > 1}
+    # the data-safety hold: per account, how many would be created against how many are already there
+    holding = set()
+    for aid, m in maps.items():
+        new = sum(1 for r in rows if r["account_id"] == aid and r["id"] not in known and r["id"] not in paired_in)
+        m = db.one("SELECT * FROM ff_accounts WHERE account_id=?", (aid,)) or m          # adoption above has just counted what Firefly III holds
+        have = max(m.get("ff_seen") or 0, db.one("SELECT COUNT(*) n FROM ff_tx f JOIN transactions t ON t.id=f.tx_id WHERE t.account_id=? AND f.state IN ('ok','paired')", (aid,))["n"])
+        big = aid not in created_now and have >= HOLD_MIN_EXISTING and new >= max(HOLD_MIN_NEW, have * HOLD_SHARE)
+        with db.tx() as c2:
+            if big and not m.get("release"):
+                holding.add(aid)
+                c2.execute("UPDATE ff_accounts SET held=? WHERE account_id=?", (new, aid))
+            elif big:                                               # released by the admin: send, and keep the release until the batch is through
+                c2.execute("UPDATE ff_accounts SET held=0 WHERE account_id=?", (aid,))
+            else:
+                c2.execute("UPDATE ff_accounts SET held=0, release=0 WHERE account_id=?", (aid,))
+        if aid in holding:
+            res["held"].append({"account_id": aid, "label": account_label(accts[aid]), "waiting": new, "existing": have})
     for t in rows:
         if done >= limit:
             res["remaining"] += 1
@@ -561,6 +671,8 @@ def push(db, ff: Firefly, limit: int | None = None) -> dict:
             continue
         if k and k["state"] == "error" and (k["attempts"] or 0) >= MAX_ATTEMPTS:
             continue
+        if t["account_id"] in holding and not (k and k["state"] == "ok"):
+            continue                                                # held: nothing new goes to this account until the admin says so
         en = enrich.get(t["id"])
         sig = _sig(t, c["send_categories"], en)
         cur = (accts[t["account_id"]].get("currency") or "USD")
@@ -661,7 +773,7 @@ def run(db, transport=None, budget_seconds: float = 40.0) -> dict:
 def status(db) -> dict:
     c = conf(db)
     ensure_mappings(db)
-    counts = {r["state"]: r["n"] for r in db.all("SELECT state, COUNT(*) n FROM ff_tx GROUP BY state")}
+    counts = {r["state"]: r["n"] for r in db.all("SELECT f.state, COUNT(*) n FROM ff_tx f JOIN transactions t ON t.id=f.tx_id GROUP BY f.state")}     # a removed bank's old rows don't count
     pending = db.one("SELECT COUNT(*) n FROM transactions t JOIN ff_accounts m ON m.account_id=t.account_id AND m.mode IN ('create','link') AND m.ff_id IS NOT NULL LEFT JOIN ff_tx f ON f.tx_id=t.id WHERE f.tx_id IS NULL" + ("" if c["include_pending"] else " AND t.pending=0"))["n"]
     s = _state(db)
     host = c["url"].split("//", 1)[-1].split("/")[0] if c["url"] else ""

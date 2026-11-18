@@ -311,7 +311,9 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         auth(request)
         apply_policy(force=True)                          # pick up what the admin just saved
         with sync_lock:
-            return firefly.run(store, firefly_transport)
+            res = firefly.run(store, firefly_transport)
+        note_firefly(res)
+        return res
 
     @app.post("/api/firefly/retry")
     def ff_retry(request: Request):
@@ -439,7 +441,8 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         auth(request)
         apply_policy(force=True)                          # pick up what the admin just saved
         firefly.ensure_mappings(store)
-        mine = store.all("SELECT a.id, a.institution, a.name, a.nickname, a.mask, a.kind, a.balance, a.category, m.mode, m.ff_id, m.created FROM accounts a JOIN ff_accounts m ON m.account_id=a.id ORDER BY a.institution, a.name")
+        mine = store.all("SELECT a.id, a.institution, a.name, a.nickname, a.mask, a.kind, a.balance, a.category, m.mode, m.ff_id, m.created, m.held, m.ff_seen FROM accounts a JOIN ff_accounts m ON m.account_id=a.id ORDER BY a.institution, a.name")
+        twins = firefly.duplicates(store)
         theirs, error = [], None
         c = firefly.conf(store)
         if c["url"] and c["token"]:
@@ -449,7 +452,17 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                 error = str(e)
         by = {x["id"]: x for x in theirs}
         sh = jointshare.shared_with(store)
-        return {"accounts": [{**a, "shared_with": sh.get(a["id"]), "label": firefly.account_label(a), "ff_name": (by.get(a["ff_id"]) or {}).get("name"), "ff_balance": (by.get(a["ff_id"]) or {}).get("balance")} for a in mine], "firefly_accounts": theirs, "error": error}
+        return {"accounts": [{**a, "shared_with": sh.get(a["id"]), "label": firefly.account_label(a), "looks_like": twins.get(a["id"], []), "ff_name": (by.get(a["ff_id"]) or {}).get("name"), "ff_balance": (by.get(a["ff_id"]) or {}).get("balance")} for a in mine], "firefly_accounts": theirs, "error": error}
+
+    @app.post("/api/firefly/accounts/{account_id}/release")
+    def ff_release(request: Request, account_id: str):
+        """Send a held batch after all: the admin looked at it and it is not a duplicate of what is already in Firefly III."""
+        auth(request)
+        try:
+            firefly.release(store, account_id)
+        except KeyError:
+            raise HTTPException(404, "nothing is held for that account")
+        return {"ok": True, "firefly": note_firefly(firefly.run(store, firefly_transport)) or True}
 
     @app.post("/api/firefly/accounts/{account_id}/rebalance")
     def ff_rebalance(request: Request, account_id: str):
@@ -478,12 +491,15 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     class FFMap(BaseModel):
         mode: str                             # pending | create | link | skip | monitor
         ff_id: int | None = None
+        confirm_duplicate: bool = False       # it looks like another account, and the admin says it is not
 
     @app.put("/api/firefly/accounts/{account_id}")
     def ff_map(request: Request, account_id: str, b: FFMap):
         auth(request)
         try:
-            firefly.set_mapping(store, account_id, b.mode, b.ff_id)
+            firefly.set_mapping(store, account_id, b.mode, b.ff_id, b.confirm_duplicate)
+        except firefly.LooksDuplicate as e:
+            raise HTTPException(409, str(e))
         except ValueError as e:
             raise HTTPException(422, str(e))
         except KeyError:
@@ -593,6 +609,19 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
             return "gone"                                   # that person was removed from this server
         return r.status_code == 200 and bool(r.json().get("delivered"))
 
+    def note_firefly(res: dict) -> None:
+        """The Firefly III send, in the pull log: counts, or the reason it failed. Quiet when nothing needed sending."""
+        if not isinstance(res, dict) or res.get("skipped"):
+            return
+        if res.get("error"):
+            return sync.note(store, None, "firefly", False, str(res["error"]))
+        for h in res.get("held") or []:
+            sync.note(store, None, "firefly", False, f"held: {h['waiting']} new transactions for an account that already has {h['existing']} in Firefly III (a relink?). Nothing sent to it; check on the admin page")
+        n = {k: res.get(k, 0) for k in ("accounts_created", "created", "updated", "deleted", "errors")}
+        if any(n.values()):
+            sync.note(store, None, "firefly", not n["errors"], f"{n['created']} sent, {n['updated']} updated, {n['deleted']} deleted, {n['accounts_created']} accounts made"
+                      + (f", {n['errors']} failed" if n["errors"] else "") + (f", {res.get('remaining')} still to send" if res.get("remaining") else ""))
+
     def do_sync(force: bool = False) -> dict:
         """One pull of everything: Plaid, Robinhood snapshots, drop-folder CSVs. One at a time, whoever asks."""
         apply_policy()
@@ -609,6 +638,7 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         except Exception:
             out["share"] = {"error": True}
         out["firefly"] = firefly.run(store, firefly_transport)                 # also picks up CSV imports; with nothing new it makes no calls to Firefly III
+        note_firefly(out["firefly"])
         out["notify"] = notify.run(store, (today or date.today)(), name, notify_transport)
         banks = out["plaid"]
         pulled, skipped = sum(1 for b in banks if "skipped" not in b and "error" not in b), sum(1 for b in banks if "skipped" in b)
@@ -901,6 +931,44 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
                 if b.apply_to_accounts:
                     c.execute("UPDATE accounts SET category=? WHERE item_id=?", (cat or None, item_id))
         return item_view(store.one("SELECT * FROM plaid_items WHERE item_id=?", (item_id,)))
+
+    @app.post("/api/plaid/items/{item_id}/pull")
+    def plaid_item_pull(request: Request, item_id: str, full: bool = False):
+        """Pull one bank now. Quick: what is new since the last pull (one /transactions/sync). Full: ask the bank for fresh data first
+        (/transactions/refresh, billed by Plaid per call) and read the whole history Plaid holds again; already-stored transactions are updated,
+        not doubled. Either way Firefly III gets what changed."""
+        auth(request)
+        row = store.one("SELECT token_enc FROM plaid_items WHERE item_id=?", (item_id,))
+        if not row:
+            raise HTTPException(404, "not found")
+        apply_policy()
+        with sync_lock:
+            try:
+                if full:
+                    try:
+                        plaid.post("/transactions/refresh", {"access_token": crypto.decrypt(row["token_enc"])})
+                    except PlaidLimit:
+                        raise
+                    except PlaidError as e:                        # not every bank or plan has refresh: the full read still runs
+                        sync.note(store, item_id, "refresh", False, str(e))
+                    with store.tx() as c:
+                        c.execute("UPDATE plaid_items SET cursor=NULL WHERE item_id=?", (item_id,))
+                res = sync.pull_one(store, plaid, item_id, True, "full update" if full else "quick update")
+            except PlaidLimit as e:
+                raise HTTPException(429, str(e))
+        ff = firefly.run(store, firefly_transport)
+        note_firefly(ff)
+        ok = "error" not in res
+        return {"ok": ok, "error": res.get("error"), "added": res.get("added", 0), "modified": res.get("modified", 0), "removed": res.get("removed", 0),
+                "firefly": {"ok": not (isinstance(ff, dict) and (ff.get("error") or ff.get("errors"))), "sent": (ff or {}).get("created", 0), "skipped": (ff or {}).get("skipped")}}
+
+    @app.get("/api/plaid/log")
+    def plaid_log(request: Request, item_id: str | None = None, limit: int = 40):
+        """The last pulls and Firefly III sends: when, which bank, how it went (counts or the error code)."""
+        auth(request)
+        rows = store.all("SELECT p.at, p.item_id, COALESCE(i.institution, p.bank) institution, p.what, p.ok, p.detail FROM pull_log p LEFT JOIN plaid_items i ON i.item_id=p.item_id"
+                         + (" WHERE p.item_id=?" if item_id else "") + " ORDER BY p.id DESC LIMIT ?", ((item_id,) if item_id else ()) + (max(1, min(200, limit)),))
+        return {"log": [{**r, "ok": bool(r["ok"])} for r in rows]}
 
     @app.delete("/api/plaid/items/{item_id}")
     def plaid_remove(request: Request, item_id: str):

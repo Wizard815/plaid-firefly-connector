@@ -217,7 +217,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
 
     # The admin's decisions: which bank accounts go to which Firefly III account, joint-account shares, and where a person's data is sent.
     # A person's own login may look at these but not change them (the admin page reaches them through /admin/p/...).
-    ADMIN_ONLY = [("PUT", r"api/firefly/accounts/[^/]+"), ("POST", r"api/firefly/accounts/[^/]+/rebalance"), ("PUT", r"api/shares/[^/]+")]
+    ADMIN_ONLY = [("PUT", r"api/firefly/accounts/[^/]+"), ("POST", r"api/firefly/accounts/[^/]+/rebalance"), ("POST", r"api/firefly/accounts/[^/]+/release"), ("PUT", r"api/shares/[^/]+")]
 
     def clean_path(path: str) -> str:
         """The one spelling of a path that is both checked and forwarded. httpx would drop "." and ".." segments when it builds the URL,
@@ -577,9 +577,13 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     ADMIN_CALLS = [("GET", r"api/status"), ("GET", r"api/plaid/usage"), ("POST", r"plaid/link-token"), ("POST", r"plaid/exchange"), ("PUT", r"api/plaid/items/[^/]+"), ("DELETE", r"api/plaid/items/[^/]+"),
                    ("POST", r"plaid/test"), ("POST", r"plaid/test-webhook"), ("POST", r"sync"), ("GET", r"api/firefly/status"), ("POST", r"api/firefly/(test|sync|retry)"), ("GET", r"api/firefly/accounts"),
                    ("PUT", r"api/firefly/accounts/[^/]+"), ("PUT", r"api/shares/[^/]+"), ("POST", r"api/firefly/accounts/[^/]+/rebalance"),
-                   ("GET", r"api/firefly/accounts/[^/]+/monitor-preview")]
+                   ("GET", r"api/firefly/accounts/[^/]+/monitor-preview"),
+                   ("POST", r"api/plaid/items/[^/]+/pull"), ("GET", r"api/plaid/log"), ("POST", r"api/firefly/accounts/[^/]+/release")]
 
     def scrub(path: str, data):
+        if path == "sync" and isinstance(data, dict):                 # counts per bank only: the answer also holds Robinhood values
+            return {"plaid": [{k: b.get(k) for k in ("item", "added", "modified", "removed", "skipped", "error") if k in b} for b in data.get("plaid", []) if isinstance(b, dict)],
+                    "plaid_error": data.get("plaid_error"), "firefly": {k: (data.get("firefly") or {}).get(k) for k in ("created", "updated", "deleted", "errors", "skipped") if isinstance(data.get("firefly"), dict)}}
         if path == "api/status" and isinstance(data, dict):
             plaid = data.get("plaid", {})
             for it in plaid.get("items", []):
