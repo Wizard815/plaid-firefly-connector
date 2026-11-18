@@ -205,3 +205,30 @@ def test_pay_monthly_installments_name_the_purchase_and_same_day_ties_follow_the
     sync(c)
     assert [by_ext(ff, f"bm{k}")["description"] for k in range(3)] == [f"Samsung Electronics America - Pay Monthly ({k} of 6)" for k in (1, 2, 3)]
     assert by_ext(ff, "bp")["description"] == "Valve Corporation" and by_ext(ff, "bi")["description"].startswith("eBay - Pay in 4")
+
+
+def test_re_sending_a_transfer_keeps_it_a_transfer_and_both_balances_right():
+    """The bug that flattened 32 transfers: when every row is sent again (categories switched on, or the bank edits a row), a transfer between two of
+    your own accounts must stay ONE transfer, not become a withdrawal on one side with the other side gone."""
+    c, db, ff = rig()
+    db.conn.execute("INSERT INTO accounts(id,source,institution,name,kind,subtype,balance,currency) VALUES('plaid-sav','plaid','Huntington','Savings','cash','savings',500.0,'USD')")
+    db.conn.commit()
+    c.put("/api/settings", headers=H, json={"firefly_send_categories": "off"})
+    tx(db, "o", "chk", 5, "INTERNET TFR TO SAVINGS", -500.0, "Transfer")
+    tx(db, "i", "sav", 5, "INTERNET TFR FROM CHECKING", 500.0, "Transfer")
+    tx(db, "k", "chk", 4, "KROGER", -20.0, "Groceries")
+    mode(c, "chk", "create"); mode(c, "sav", "create")
+    sync(c)
+    m = {r["account_id"]: r["ff_id"] for r in db.all("SELECT account_id, ff_id FROM ff_accounts")}
+    want = {m["plaid-chk"]: ff.balance(m["plaid-chk"]), m["plaid-sav"]: ff.balance(m["plaid-sav"])}
+    assert [t["type"] for t in legs(ff)].count("transfer") == 1
+    c.put("/api/settings", headers=H, json={"firefly_send_categories": "on"})          # every row is sent again
+    r = sync(c)
+    assert r["errors"] == 0 and r["updated"] >= 2
+    tr = [t for t in legs(ff) if t["type"] == "transfer"]
+    assert len(tr) == 1 and tr[0]["source_id"] == m["plaid-chk"] and tr[0]["destination_id"] == m["plaid-sav"] and tr[0]["amount"] == "500.00"
+    assert {a: ff.balance(a) for a in want} == want                                    # nothing moved on paper
+    db.conn.execute("UPDATE transactions SET name='INTERNET TFR TO SAVINGS 1113' WHERE id='o'"); db.conn.commit()    # the bank edits one half later
+    sync(c)
+    tr = [t for t in legs(ff) if t["type"] == "transfer"]
+    assert len(tr) == 1 and {a: ff.balance(a) for a in want} == want and sync(c)["updated"] == 0
