@@ -547,6 +547,11 @@ def push(db, ff: Firefly, limit: int | None = None) -> dict:
     pairs = _pairs([r for r in rows if r["id"] not in known and r["id"] not in enrich])
     paired_in = set(pairs.values())
     byid = {r["id"]: r for r in rows}
+    shared: dict[int, list[str]] = {}                              # a Firefly III transaction that two rows went into is a transfer between your accounts
+    for r in known.values():
+        if r["ff_id"] and r["state"] in ("ok", "paired"):
+            shared.setdefault(r["ff_id"], []).append(r["tx_id"])
+    shared = {f: ids for f, ids in shared.items() if len(ids) > 1}
     for t in rows:
         if done >= limit:
             res["remaining"] += 1
@@ -568,7 +573,20 @@ def push(db, ff: Firefly, limit: int | None = None) -> dict:
             if k and k["state"] == "ok" and k["sig"] == sig:
                 continue
             if k and k["state"] == "ok" and k["ff_id"]:             # changed at the bank, or its middleman row just arrived: update the Firefly III copy
-                p = payload_for(t, maps[t["account_id"]]["ff_id"], c, cur, en)
+                mate = next((x for x in shared.get(k["ff_id"], ()) if x != t["id"]), None)
+                if mate is not None:                                # one half of a transfer between two of your accounts: it stays ONE transfer
+                    m_row = byid.get(mate)
+                    o, i = (t, m_row) if t["amount"] < 0 else (m_row, t)
+                    if m_row is None or t is i or o["account_id"] not in maps or i["account_id"] not in maps:
+                        with db.tx() as c2:                         # the outflow half updates it (or, its partner not sent here, it is left exactly as it is)
+                            c2.execute("UPDATE ff_tx SET sig=? WHERE tx_id=?", (sig, t["id"]))
+                        continue
+                    leg = payload_for(o, maps[o["account_id"]]["ff_id"], c, cur)["transactions"][0]
+                    leg.update({"type": "transfer", "source_id": maps[o["account_id"]]["ff_id"], "destination_id": maps[i["account_id"]]["ff_id"]})
+                    leg.pop("destination_name", None); leg.pop("source_name", None)
+                    p = {"transactions": [leg]}
+                else:
+                    p = payload_for(t, maps[t["account_id"]]["ff_id"], c, cur, en)
                 ff.update_tx(k["ff_id"], {"apply_rules": False, "fire_webhooks": True, "transactions": p["transactions"]})
                 with db.tx() as c2:
                     c2.execute("UPDATE ff_tx SET sig=?, pushed=? WHERE tx_id=?", (sig, date.today().isoformat(), t["id"]))
