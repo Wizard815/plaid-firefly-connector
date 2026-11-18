@@ -9,3 +9,5 @@ docker-compose.generated.yml
 .env
 gateway-state/
 backups/
+src/plaidproxy.egg-info/
+.migrated-from
