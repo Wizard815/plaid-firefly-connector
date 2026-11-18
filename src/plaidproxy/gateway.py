@@ -576,9 +576,13 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     # is scrubbed: bank and account labels and counts, never a balance or a transaction.
     ADMIN_CALLS = [("GET", r"api/status"), ("GET", r"api/plaid/usage"), ("POST", r"plaid/link-token"), ("POST", r"plaid/exchange"), ("PUT", r"api/plaid/items/[^/]+"), ("DELETE", r"api/plaid/items/[^/]+"),
                    ("POST", r"plaid/test"), ("POST", r"plaid/test-webhook"), ("POST", r"sync"), ("GET", r"api/firefly/status"), ("POST", r"api/firefly/(test|sync|retry)"), ("GET", r"api/firefly/accounts"),
-                   ("PUT", r"api/firefly/accounts/[^/]+"), ("PUT", r"api/shares/[^/]+"), ("POST", r"api/firefly/accounts/[^/]+/rebalance")]
+                   ("PUT", r"api/firefly/accounts/[^/]+"), ("PUT", r"api/shares/[^/]+"), ("POST", r"api/firefly/accounts/[^/]+/rebalance"),
+                   ("POST", r"api/plaid/items/[^/]+/pull"), ("GET", r"api/plaid/log")]
 
     def scrub(path: str, data):
+        if path == "sync" and isinstance(data, dict):                 # counts per bank only: the answer also holds Robinhood values
+            return {"plaid": [{k: b.get(k) for k in ("item", "added", "modified", "removed", "skipped", "error") if k in b} for b in data.get("plaid", []) if isinstance(b, dict)],
+                    "plaid_error": data.get("plaid_error"), "firefly": {k: (data.get("firefly") or {}).get(k) for k in ("created", "updated", "deleted", "errors", "skipped") if isinstance(data.get("firefly"), dict)}}
         if path == "api/status" and isinstance(data, dict):
             plaid = data.get("plaid", {})
             for it in plaid.get("items", []):
