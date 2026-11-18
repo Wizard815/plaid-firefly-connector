@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS shares(account_id TEXT PRIMARY KEY, peer TEXT NOT NUL
 CREATE TABLE IF NOT EXISTS share_sent(account_id TEXT NOT NULL, peer TEXT NOT NULL, tx_id TEXT NOT NULL, sig TEXT, PRIMARY KEY(account_id, peer, tx_id));
 CREATE TABLE IF NOT EXISTS share_in(sender TEXT NOT NULL, account_id TEXT NOT NULL, name TEXT, institution TEXT, mask TEXT, kind TEXT, state TEXT NOT NULL DEFAULT 'asked', mode TEXT, ff_id INTEGER, received TEXT, PRIMARY KEY(sender, account_id));   -- joint accounts others asked to share with me
 CREATE TABLE IF NOT EXISTS share_answer(peer TEXT NOT NULL, account_id TEXT NOT NULL, kind TEXT NOT NULL, PRIMARY KEY(peer, account_id));   -- my latest answer per shared account, until delivered
+CREATE TABLE IF NOT EXISTS pull_log(id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, item_id TEXT, what TEXT NOT NULL, ok INTEGER NOT NULL, detail TEXT);   -- how each bank pull and Firefly III send went: counts and error codes, never amounts
 CREATE TABLE IF NOT EXISTS share_revoke(account_id TEXT NOT NULL, peer TEXT NOT NULL, PRIMARY KEY(account_id, peer));
 CREATE INDEX IF NOT EXISTS tx_date ON transactions(date DESC);
 CREATE TABLE IF NOT EXISTS subscriptions(

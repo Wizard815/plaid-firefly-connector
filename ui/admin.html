@@ -5,11 +5,12 @@
 :root{--bg:#edf1f2;--panel:#f8fafa;--line:#d5dde0;--fg:#14232b;--muted:#5a6b73;--teal:#17766b;--teal-soft:#d6ece8;--red:#b3372f;--red-soft:#f5dcd9;--brass:#a8741a}
 @media (prefers-color-scheme:dark){:root{--bg:#0d1a1f;--panel:#13242b;--line:#24383f;--fg:#e4eeef;--muted:#8ea4ab;--teal:#4cc2b0;--teal-soft:#16393a;--red:#f07f73;--red-soft:#40201e;--brass:#e0b052;color-scheme:dark}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,"Segoe UI",sans-serif;padding:16px max(16px,env(safe-area-inset-left))}
-main{max-width:860px;margin:0 auto;display:grid;gap:16px}h1{font-size:1.5rem;margin:0}.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;overflow-x:auto}
+main{max-width:1240px;margin:0 auto;display:grid;gap:16px}h1{font-size:1.5rem;margin:0}.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;overflow-x:auto}
 .muted{color:var(--muted)}.small{font-size:.86rem}table{width:100%;border-collapse:collapse}th{text-align:left;font-size:.75rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:6px 10px;border-bottom:1px solid var(--line)}
 td{padding:9px 10px;border-bottom:1px solid var(--line)}td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}tr:last-child td{border-bottom:0}
 .pill{display:inline-block;border-radius:999px;padding:1px 10px;font-size:.78rem;font-weight:600}.up{background:var(--teal-soft);color:var(--teal)}.down{background:var(--red-soft);color:var(--red)}
 input,button{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 12px}button{cursor:pointer}button.primary{background:var(--teal);border-color:var(--teal);color:#fff}
+.status{position:sticky;top:0;z-index:2;background:var(--panel);padding:8px 0;min-height:1.6em;border-bottom:1px solid var(--line);margin:8px 0}.ok{color:var(--teal)}.when{white-space:nowrap;color:var(--muted)}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.err{color:var(--red)}
 </style>
 <main>
@@ -24,7 +25,7 @@ input,button{font:inherit;color:inherit;background:var(--bg);border:1px solid va
 </main>
 <script>
 const $ = (s) => document.querySelector(s), out = $("#out"), msg = $("#msg");
-const el = (t, a = {}, ...k) => { const e = document.createElement(t); for (const [x, v] of Object.entries(a)) e.setAttribute(x, v); k.flat().forEach((c) => e.append(c?.nodeType ? c : document.createTextNode(String(c)))); return e; };
+const el = (t, a = {}, ...k) => { const e = document.createElement(t); for (const [x, v] of Object.entries(a)) e.setAttribute(x, v); k.flat().forEach((c) => { if (c === null || c === undefined || c === false) return; e.append(c?.nodeType ? c : document.createTextNode(String(c))); }); return e; };
 const get = (o, k, f) => (o && o[k] ? o[k][f] : 0);
 async function call(path, method = "GET", body) {
   const r = await fetch(path, { method, headers: { Authorization: "Bearer " + $("#tok").value.trim(), ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
@@ -139,6 +140,9 @@ async function renderOrb() {
 
 /* ---------- one person: their bank links and their Firefly III connection, run from here ---------- */
 let who = null, everyone = [];
+const pmsg = el("div", { class: "status small", role: "status" });     // what the last button did, kept next to the buttons
+const ago = (t) => { if (!t) return "never"; const m = Math.round((Date.now() / 1000 - t) / 60); return m < 1 ? "just now" : m < 60 ? m + " min ago" : m < 1440 ? Math.round(m / 60) + " h ago" : Math.round(m / 1440) + " days ago"; };
+const pullMsg = (r) => (r.ok ? `Pulled: ${r.added} new, ${r.modified} changed, ${r.removed} removed. ` : `The bank pull failed: ${r.error}. `) + (r.firefly.skipped ? "Firefly III is not set up." : r.firefly.ok ? `Firefly III: ${r.firefly.sent} sent.` : "Sending to Firefly III failed; see the log below.");
 const P = (path, method = "GET", body) => call(`/admin/p/${encodeURIComponent(who)}/${path}`, method, body);
 const loadPlaid = () => new Promise((ok, no) => { if (window.Plaid) return ok(); const sc = document.createElement("script"); sc.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js"; sc.onload = ok; sc.onerror = no; document.head.append(sc); });
 async function openLink(itemId, resume) {
@@ -147,10 +151,12 @@ async function openLink(itemId, resume) {
   if (resume) { const s = JSON.parse(localStorage.getItem("gb_link") || "{}"); token = s.token; who = s.who; itemId = s.item || null; }
   else { token = (await P("plaid/link-token" + (itemId ? "?item_id=" + encodeURIComponent(itemId) : ""), "POST", {})).link_token; localStorage.setItem("gb_link", JSON.stringify({ token, who, item: itemId || "" })); }
   if (!token) throw new Error("This sign-in expired. Press Link a bank again.");
-  const cfg = { token, onExit: (err) => { if (err) { msg.textContent = err.display_message || err.error_message || "Linking stopped"; msg.className = "small err"; } },
+  const tell = (t, bad) => { pmsg.textContent = t; pmsg.className = "status small " + (bad ? "err" : "ok"); };
+  const cfg = { token, onExit: (err) => { if (err) tell(err.display_message || err.error_message || "Linking stopped", true); },
     onSuccess: async (pt, meta) => { localStorage.removeItem("gb_link");
-      try { if (itemId) msg.textContent = "Relinked."; else { const r = await P("plaid/exchange", "POST", { public_token: pt, institution: (meta.institution || {}).name || "" }); msg.textContent = `Linked ${(meta.institution || {}).name || "the bank"}. ${(r.sync || {}).added || 0} transactions pulled and sent on to Firefly III.`; }
-        msg.className = "small"; renderPerson(); } catch (e) { msg.textContent = e.message; msg.className = "small err"; } } };
+      try { if (itemId) { tell("Relinked. Pulling the bank now…"); const r = await P("api/plaid/items/" + encodeURIComponent(itemId) + "/pull", "POST", {}); tell("Relinked. " + pullMsg(r), !r.ok); }
+        else { const r = await P("plaid/exchange", "POST", { public_token: pt, institution: (meta.institution || {}).name || "" }); tell(`Linked ${(meta.institution || {}).name || "the bank"}. ${(r.sync || {}).added || 0} transactions pulled and sent on to Firefly III.`); }
+        renderPerson(); } catch (e) { tell(e.message, true); renderPerson(); } } };
   if (resume) cfg.receivedRedirectUri = location.href;
   window.Plaid.create(cfg).open();
 }
@@ -158,22 +164,28 @@ async function renderPerson() {
   const box = $("#person");
   if (!who) { box.hidden = true; return; }
   const note = el("p", { class: "small muted" });
-  const say = (t, bad) => { msg.textContent = t; msg.className = "small" + (bad ? " err" : ""); window.scrollTo({ top: 0, behavior: "smooth" }); };
-  let st, ff, fa, pol0 = {};
-  try { [st, ff, fa, pol0] = await Promise.all([P("api/status"), P("api/firefly/status"), P("api/firefly/accounts"), call("/admin/policy")]); }
+  const say = (t, bad) => { pmsg.textContent = t; pmsg.className = "status small " + (bad ? "err" : "ok"); };
+  let st, ff, fa, pol0 = {}, plog = { log: [] };
+  try { [st, ff, fa, pol0, plog] = await Promise.all([P("api/status"), P("api/firefly/status"), P("api/firefly/accounts"), call("/admin/policy"), P("api/plaid/log?limit=40").catch(() => ({ log: [] }))]); }
   catch (e) { box.replaceChildren(el("h2", { style: "margin:0 0 6px;font-size:1.1rem" }, who), el("p", { class: "small err" }, e.message)); box.hidden = false; return; }
-  const plaid = st.plaid || {}, run = async (fn, ok) => { try { const r = await fn(); say(typeof ok === "function" ? ok(r) : ok); await renderPerson(); } catch (e) { say(e.message, true); } };
+  const plaid = st.plaid || {}, run = async (fn, ok, busy) => { if (busy) say(busy); try { const r = await fn(); const t = typeof ok === "function" ? ok(r) : ok; say(t, r && r.ok === false); await renderPerson(); } catch (e) { say(e.message, true); } };
+  const lastOf = (id) => (plog.log || []).find((l) => l.item_id === id && l.what !== "refresh");
   const sel = (opts, cur, onchange) => { const s = el("select", {}, opts.map(([v, t]) => el("option", { value: v }, t))); s.value = cur; s.addEventListener("change", () => onchange(s.value)); return s; };
   const SCH = [["auto", "Automatic"], ["15m", "Every 15 minutes"], ["3h", "Every 3 hours"], ["daily", "Daily"], ["weekly", "Weekly"], ["biweekly", "Every 2 weeks"], ["monthly", "Monthly"], ["manual", "Only when pulled by hand"]];
   const link = el("button", { class: "primary", type: "button" }, "Link a bank"); link.addEventListener("click", () => run(() => openLink(null), "Plaid Link opened."));
-  const pull = el("button", { type: "button" }, "Pull banks now"); pull.addEventListener("click", () => run(() => P("sync", "POST", {}), "Banks pulled and Firefly III updated."));
+  const pull = el("button", { type: "button" }, "Pull all banks now"); pull.addEventListener("click", () => run(() => P("sync", "POST", {}), (r) => { const b = r.plaid || [], bad = b.filter((x) => x.error); return `${b.length - bad.length} of ${b.length} banks pulled` + (bad.length ? `; failed: ${bad.length} (see each bank)` : "") + (r.plaid_error ? `. Plaid: ${r.plaid_error}` : "") + (r.firefly && r.firefly.errors ? `. Firefly III: ${r.firefly.errors} failed` : r.firefly && r.firefly.created != null ? `. Firefly III: ${r.firefly.created} sent.` : "."); }, "Pulling every bank…"));
   const banks = (plaid.items || []).length ? el("table", {}, el("tbody", {}, plaid.items.map((it) => {
     const upd = (patch) => run(() => P("api/plaid/items/" + encodeURIComponent(it.item_id), "PUT", patch), "Saved.");
-    const rel = el("button", { type: "button" }, "Relink"); rel.addEventListener("click", () => run(() => openLink(it.item_id), "Plaid Link opened."));
+    const rel = el("button", { type: "button", title: "Sign in to the bank again (keeps its history and its Firefly III accounts)" }, "Relink"); rel.addEventListener("click", () => openLink(it.item_id).then(() => say("Plaid Link opened.")).catch((e) => say(e.message, true)));
+    const q = el("button", { type: "button", title: "Ask Plaid for what is new since the last pull" }, "Quick update"); q.addEventListener("click", () => run(() => P("api/plaid/items/" + encodeURIComponent(it.item_id) + "/pull", "POST", {}), (r) => `${it.institution}: ` + pullMsg(r), `Pulling ${it.institution}…`));
+    const f = el("button", { type: "button", title: "Ask the bank for fresh data (Plaid bills this per call) and read the whole history again. Nothing is doubled." }, "Full update"); f.addEventListener("click", () => { if (!confirm(`Full update of ${it.institution}? Plaid bills a refresh per call. The bank's newest data can take a few minutes to arrive after it.`)) return; run(() => P("api/plaid/items/" + encodeURIComponent(it.item_id) + "/pull?full=true", "POST", {}), (r) => `${it.institution} (full): ` + pullMsg(r), `Full update of ${it.institution}…`); });
+    const last = lastOf(it.item_id);
     const un = el("button", { type: "button" }, "Unlink"); un.addEventListener("click", () => { if (!confirm(`Unlink ${it.institution}? On a Plaid free plan the link slot is NOT given back. To repair a login use Relink.`)) return; run(() => P("api/plaid/items/" + encodeURIComponent(it.item_id), "DELETE"), "Unlinked. What is already in Firefly III stays there."); });
-    return el("tr", {}, el("td", {}, el("b", {}, it.institution || "Bank"), it.status ? el("span", { class: "pill down", style: "margin-left:8px" }, it.status === "error" ? "sign in again" : it.status) : null, it.webhook_live ? el("span", { class: "pill up", style: "margin-left:8px" }, "live updates") : null,
-        el("div", { class: "small muted" }, (it.accounts || []).map((a) => `${a.nickname || a.name}${a.mask ? " ••" + a.mask : ""}`).join(", "))),
-      el("td", {}, sel(SCH, it.schedule || "auto", (v) => upd({ schedule: v }))), el("td", {}, sel([["auto", "Recurring: automatic"], ["on", "Recurring: on"], ["off", "Recurring: off"]], it.recurring || "auto", (v) => upd({ recurring: v }))), el("td", { class: "n", style: "white-space:nowrap" }, rel, " ", un)); })))
+    return el("tr", {}, el("td", {}, el("b", {}, it.institution || "Bank"), it.status ? el("span", { class: "pill down", style: "margin-left:8px", title: it.status_detail || "" }, it.status === "error" ? "sign in again" : it.status) : null, it.webhook_live ? el("span", { class: "pill up", style: "margin-left:8px" }, "live updates") : null,
+        el("div", { class: "small muted" }, (it.accounts || []).map((a) => `${a.nickname || a.name}${a.mask ? " ••" + a.mask : ""}`).join(", ")),
+        el("div", { class: "small" }, "Last pull: ", ago(it.last_sync), last ? [" · ", el("span", { class: last.ok ? "ok" : "err" }, `${last.what}: ${last.ok ? "OK" : "failed"}, ${last.detail}`)] : null),
+        it.status_detail && !(last && last.detail === it.status_detail) ? el("div", { class: "small err" }, it.status_detail) : null),
+      el("td", {}, sel(SCH, it.schedule || "auto", (v) => upd({ schedule: v }))), el("td", {}, sel([["auto", "Recurring: automatic"], ["on", "Recurring: on"], ["off", "Recurring: off"]], it.recurring || "auto", (v) => upd({ recurring: v }))), el("td", { class: "n" }, el("div", { class: "row", style: "justify-content:flex-end" }, q, f, rel, un))); })))
     : el("p", { class: "small muted" }, plaid.configured ? "No bank linked yet. Press Link a bank and sign in to the bank in the window that opens." : "Enter the Plaid keys below first.");
   const fmap = (fa.accounts || []).length ? el("table", {}, el("thead", {}, el("tr", {}, ["Bank account", "In Firefly III", "Joint with", ""].map((h) => el("th", {}, h)))), el("tbody", {}, fa.accounts.map((a) => {
     const set = (mode, id) => run(() => P("api/firefly/accounts/" + encodeURIComponent(a.id), "PUT", { mode, ff_id: id }), "Saved.");
@@ -193,9 +205,14 @@ async function renderPerson() {
   fsave.addEventListener("click", () => run(() => call(`/admin/people/${encodeURIComponent(who)}/firefly`, "PUT", { url: fu.value.trim(), token: ft.value.trim() }), "Saved. It reaches the person's container within a few minutes; then press Test the connection."));
   const ffbtn = (label, path, ok, primary) => { const b = el("button", primary ? { class: "primary", type: "button" } : { type: "button" }, label); b.addEventListener("click", () => run(() => P(path, "POST", {}), ok)); return b; };
   box.replaceChildren(el("div", { class: "row", style: "justify-content:space-between" }, el("h2", { style: "margin:0;font-size:1.1rem" }, "Managing " + who), (() => { const x = el("button", { type: "button" }, "Close"); x.addEventListener("click", () => { who = null; renderPerson(); }); return x; })()),
+    pmsg,
     el("h3", { style: "margin:12px 0 4px;font-size:1rem" }, "Bank links (Plaid)"),
     el("p", { class: "small muted" }, `Plaid ${plaid.configured ? "is set up (" + plaid.env + ")" : "is NOT set up: enter the keys below"}. Linking opens Plaid's window; the bank login goes straight to Plaid and Plaid Firefly Connector never sees it. Each linked bank's accounts are sent into ${who}'s Firefly III automatically.`),
     el("div", { class: "row" }, link, pull), banks,
+    el("details", { open: "" }, el("summary", { class: "small" }, "Pull and send log (newest first; counts and error codes, no amounts)"),
+      (plog.log || []).length ? el("table", { class: "small" }, el("thead", {}, el("tr", {}, ["When", "Bank", "What", "Result"].map((x) => el("th", {}, x)))),
+        el("tbody", {}, plog.log.map((l) => el("tr", {}, el("td", { class: "when" }, new Date(l.at * 1000).toLocaleString()), el("td", {}, l.what === "firefly" ? "Firefly III" : l.institution || "—"), el("td", {}, l.what),
+          el("td", {}, el("span", { class: l.ok ? "ok" : "err" }, l.ok ? "OK" : "Failed"), " ", l.detail || ""))))) : el("p", { class: "small muted" }, "Nothing yet. Pulls and Firefly III sends show here from now on.")),
     el("div", { class: "row" }, mins, mk), inv, lst,
     el("h3", { style: "margin:14px 0 4px;font-size:1rem" }, "Firefly III"),
     el("p", { class: "small muted" }, `Where ${who}'s approved bank accounts go. In Firefly III: Options, Profile, OAuth, Personal Access Tokens, create one (valid up to a year). The token is kept encrypted and never shown again.`),
