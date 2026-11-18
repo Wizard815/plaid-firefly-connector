@@ -55,6 +55,8 @@ class FakeFirefly:
             return httpx.Response(200, json={"data": data, "meta": {"pagination": {"total_pages": 1}}})
         if req.method == "PUT" and p.startswith("/accounts/"):
             i = int(p.split("/")[2])
+            if body.get("opening_balance") == "0":
+                body = {k: v for k, v in body.items() if k not in ("opening_balance", "opening_balance_date")}     # like Firefly III: "0" leaves the opening balance as it was
             self.accounts[i].update({k: v for k, v in body.items() if k in ("opening_balance", "opening_balance_date", "include_net_worth", "notes")})
             return httpx.Response(200, json={"data": {"id": str(i)}})
         if req.method == "POST" and p == "/accounts":
