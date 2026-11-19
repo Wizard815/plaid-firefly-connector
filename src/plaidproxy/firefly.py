@@ -223,8 +223,16 @@ def ensure_account(db, ff: Firefly, a: dict, m: dict, c: dict) -> int:
         return m["ff_id"]
     name = account_label(a)
     opening, odate = opening_for(db, a, c["include_pending"])
-    payload = {"name": name, "type": "asset", "currency_code": a.get("currency") or "USD", "opening_balance": f"{opening:.2f}", "opening_balance_date": odate,
-               "notes": f"Created by Plaid Firefly Connector from a linked bank account ({a['institution']}).", "include_net_worth": True, **_role(a)}
+    notes = f"Created by Plaid Firefly Connector from a linked bank account ({a['institution']})."
+    if a["kind"] == "loan":
+        # A real liability account, not an asset with a negative balance: Coinpile only reads a loan as a loan (and skips the
+        # false "overdrawn" alert) when Firefly III itself says liabilities. direction "debit": the bank account owes this debt.
+        payload = {"name": name, "type": "liabilities", "liability_type": "loan", "liability_direction": "debit", "currency_code": a.get("currency") or "USD",
+                   "opening_balance": f"{opening:.2f}", "opening_balance_date": odate, "notes": notes, "include_net_worth": True,
+                   "interest": "0", "interest_period": "monthly"}
+    else:
+        payload = {"name": name, "type": "asset", "currency_code": a.get("currency") or "USD", "opening_balance": f"{opening:.2f}", "opening_balance_date": odate,
+                   "notes": notes, "include_net_worth": True, **_role(a)}
     try:
         ff_id = ff.create_account(payload)
     except FireflyError as e:

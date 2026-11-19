@@ -85,6 +85,20 @@ def test_accounts_are_created_with_the_right_roles_and_balances_and_transactions
     assert st["sent"] == 3 and st["failed"] == 0 and st["waiting"] == 0 and st["last_ok"] and st["host"] == "firefly.example.com"
 
 
+def test_a_loan_is_created_as_a_real_firefly_liability_not_an_asset_with_a_negative_balance():
+    """Coinpile (and Firefly III itself) only read an account as a loan, and skip the 'overdrawn' alert, when it is type liabilities."""
+    c, db, ff = rig()
+    db.conn.execute("INSERT INTO accounts(id,source,institution,name,kind,subtype,balance,mask,currency) VALUES('plaid-auto','plaid','Lake Michigan Credit Union','2017 CHEVROLET COLORADO','loan','auto',13637.35,'01','USD')")
+    db.conn.commit()
+    approve(c, {"plaid-auto": "create"})
+    r = c.post("/api/firefly/sync", headers=H).json()
+    assert r["accounts_created"] == 1 and r["errors"] == 0
+    a = next(iter(ff.accounts.values()))
+    assert a["type"] == "liabilities" and a["liability_type"] == "loan" and a["liability_direction"] == "debit"
+    assert float(a["opening_balance"]) == -13637.35                                     # Firefly III: debt you owe is a negative balance there too
+    assert ff.balance(next(iter(ff.accounts))) == -13637.35
+
+
 def test_changes_at_the_bank_update_and_removals_delete_and_a_posted_pending_one_arrives():
     c, db, ff = rig()
     bank(db)

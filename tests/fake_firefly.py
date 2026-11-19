@@ -66,8 +66,11 @@ class FakeFirefly:
                 return httpx.Response(422, json={"message": "The given data was invalid.", "errors": {"account_role": ["required"]}})
             if body.get("account_role") == "ccAsset" and not (body.get("credit_card_type") and body.get("monthly_payment_date")):
                 return httpx.Response(422, json={"message": "The given data was invalid.", "errors": {"credit_card_type": ["required"]}})
+            if body.get("type") == "liabilities" and not body.get("liability_type"):
+                return httpx.Response(422, json={"message": "The given data was invalid.", "errors": {"liability_type": ["required"]}})
             aid = self.next_acct; self.next_acct += 1
-            self.accounts[aid] = {k: body.get(k) for k in ("name", "type", "account_role", "opening_balance", "opening_balance_date", "currency_code", "include_net_worth")}
+            self.accounts[aid] = {k: body.get(k) for k in ("name", "type", "account_role", "opening_balance", "opening_balance_date", "currency_code", "include_net_worth",
+                                                            "liability_type", "liability_direction", "interest", "interest_period")}
             return httpx.Response(200, json={"data": {"id": str(aid), "attributes": self.accounts[aid]}})
         if req.method == "POST" and p == "/transactions":
             t = body["transactions"][0]
