@@ -448,19 +448,49 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
         auth(request)
         apply_policy(force=True)                          # pick up what the admin just saved
         firefly.ensure_mappings(store)
-        mine = store.all("SELECT a.id, a.institution, a.name, a.nickname, a.mask, a.kind, a.balance, a.category, m.mode, m.ff_id, m.created, m.held, m.ff_seen FROM accounts a JOIN ff_accounts m ON m.account_id=a.id ORDER BY a.institution, a.name")
+        mine = store.all("SELECT a.id, a.institution, a.name, a.nickname, a.mask, a.kind, a.balance, a.category, m.mode, m.ff_id, m.created, m.held, m.ff_seen, m.ff_type FROM accounts a JOIN ff_accounts m ON m.account_id=a.id ORDER BY a.institution, a.name")
         twins = firefly.duplicates(store)
         theirs, error = [], None
         c = firefly.conf(store)
         if c["url"] and c["token"]:
             try:
-                theirs = [{"id": x["id"], "name": x["name"], "balance": x.get("current_balance"), "role": x.get("account_role")} for x in firefly.Firefly(c["url"], c["token"], firefly_transport).accounts("asset")]
+                ff = firefly.Firefly(c["url"], c["token"], firefly_transport)
+                theirs = [{"id": x["id"], "name": x["name"], "balance": x.get("current_balance"), "role": x.get("account_role"), "type": "asset"} for x in ff.accounts("asset")]
+                theirs += [{"id": x["id"], "name": x["name"], "balance": x.get("current_balance"), "role": None, "type": "liability", "liability_type": x.get("liability_type"),
+                            "direction": x.get("liability_direction")} for x in ff.accounts("liabilities")]
             except firefly.FireflyError as e:
                 error = str(e)
         by = {x["id"]: x for x in theirs}
         sh = jointshare.shared_with(store)
         return {"accounts": [{**a, "shared_with": sh.get(a["id"]), "label": firefly.account_label(a), "looks_like": twins.get(a["id"], []), "ff_name": (by.get(a["ff_id"]) or {}).get("name"), "ff_balance": (by.get(a["ff_id"]) or {}).get("balance"),
-                              "drift": drift(a, (by.get(a["ff_id"]) or {}).get("balance"))} for a in mine], "firefly_accounts": theirs, "error": error}
+                              "drift": drift(a, (by.get(a["ff_id"]) or {}).get("balance")),
+                              # a bank loan that still goes to an asset account: the admin page offers to move it to a liability
+                              "should_be_liability": a["kind"] == "loan" and a["mode"] in ("create", "link") and (by.get(a["ff_id"]) or {}).get("type") == "asset"}
+                             for a in mine], "firefly_accounts": theirs, "error": error}
+
+    @app.post("/api/firefly/accounts/{account_id}/to-liability")
+    def ff_to_liability(request: Request, account_id: str):
+        """Move a bank loan that was sent to an asset account over to a new Firefly III liability (the admin confirms first)."""
+        auth(request)
+        apply_policy(force=True)
+        c = firefly.conf(store)
+        if not (c["url"] and c["token"]):
+            raise HTTPException(409, "set up Firefly III first")
+        with sync_lock:                                   # never alongside a push
+            try:
+                out = firefly.to_liability(store, firefly.Firefly(c["url"], c["token"], firefly_transport), account_id)
+            except KeyError:
+                raise HTTPException(404, "that account is not in Firefly III")
+            except ValueError as e:
+                raise HTTPException(409, str(e))
+            except firefly.FireflyError as e:
+                sync.note(store, None, "firefly", False, f"moving a loan to a liability stopped: {str(e)[:200]} (run it again to carry on)")
+                raise HTTPException(502, str(e))
+            res = firefly.run(store, firefly_transport)
+        sync.note(store, None, "firefly", True, f"loan moved to a Firefly III liability: {out['deleted']} old transactions removed and sent again"
+                  + (f"; {out['kept']} you entered yourself stay in the old account (now off)" if out["kept"] else ""))
+        note_firefly(res)
+        return {**out, "firefly": res}
 
     @app.post("/api/firefly/accounts/{account_id}/release")
     def ff_release(request: Request, account_id: str):
@@ -495,6 +525,21 @@ def create_app(transport=None, plaid_transport=None, caldav_transport=None, db: 
     @app.put("/api/firefly/accounts/{account_id}")
     def ff_map(request: Request, account_id: str, b: FFMap):
         auth(request)
+        if b.mode == "link" and b.ff_id:                  # the account chosen must fit: a loan to a debt you owe, anything else to an asset account
+            a = store.one("SELECT kind FROM accounts WHERE id=?", (account_id,))
+            c = firefly.conf(store)
+            if a and c["url"] and c["token"]:
+                try:
+                    x = firefly.Firefly(c["url"], c["token"], firefly_transport).account(int(b.ff_id))
+                except firefly.FireflyError as e:
+                    raise HTTPException(422 if e.status == 404 else 502, "that Firefly III account was not found" if e.status == 404 else str(e))
+                t = firefly.ff_type_of(x)
+                if t == "liability" and a["kind"] != "loan":
+                    raise HTTPException(422, "only a bank loan can go to a Firefly III liability")
+                if t == "liability" and (x.get("liability_direction") or "debit") != "debit":
+                    raise HTTPException(422, "that liability is set as \"I am owed this debt\"; a bank loan is a debt you owe: set it to \"I owe this debt\" in Firefly III first")
+                if t != "liability" and str(x.get("type") or "asset") != "asset":
+                    raise HTTPException(422, "link to an asset account (or, for a loan, a liability)")
         try:
             firefly.set_mapping(store, account_id, b.mode, b.ff_id, b.confirm_duplicate)
         except firefly.LooksDuplicate as e:

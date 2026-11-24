@@ -20,6 +20,14 @@ per-person app lives on the `full-ui` branch.
 4. plaid-firefly-connector pushes transactions to Firefly III after each sync, safely
    repeatable (no duplicates, edits and deletions follow the bank).
 
+**Loans** (auto, student, mortgage, personal) go to Firefly III as a **liability** you owe ("I owe this debt"), not as an asset
+account, so the debt shows as a negative balance there and in Coinpile instead of an "overdrawn" account. A payment from checking
+into the loan is sent as a withdrawal from checking into the liability (Firefly III does not allow a transfer to a liability), and
+interest the bank charges raises the debt. A loan can also be **linked** to a liability you already have, if it is set to "I owe
+this debt". A loan that was sent to an asset account by an older version shows **Make it a Firefly III liability** on the admin
+page: it renames that account "(old asset)" and switches it off (nothing you typed in yourself is deleted), makes the liability, and
+sends that loan's transactions again. Back up Firefly III before you press it.
+
 ## Joint accounts
 
 People share a bank account between themselves; the admin is not needed. The person who linked the account **asks**, the other

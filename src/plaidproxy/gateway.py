@@ -217,7 +217,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
 
     # The admin's decisions: which bank accounts go to which Firefly III account, joint-account shares, and where a person's data is sent.
     # A person's own login may look at these but not change them (the admin page reaches them through /admin/p/...).
-    ADMIN_ONLY = [("PUT", r"api/firefly/accounts/[^/]+"), ("POST", r"api/firefly/accounts/[^/]+/release"),      # matching a balance is the person's own call (their Coinpile asks them first)
+    ADMIN_ONLY = [("PUT", r"api/firefly/accounts/[^/]+"), ("POST", r"api/firefly/accounts/[^/]+/release"), ("POST", r"api/firefly/accounts/[^/]+/to-liability"),      # matching a balance is the person's own call (their Coinpile asks them first)
                   ("PUT", r"api/shares/[^/]+")]
 
     def clean_path(path: str) -> str:
@@ -578,7 +578,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
     ADMIN_CALLS = [("GET", r"api/status"), ("GET", r"api/plaid/usage"), ("POST", r"plaid/link-token"), ("POST", r"plaid/exchange"), ("PUT", r"api/plaid/items/[^/]+"), ("DELETE", r"api/plaid/items/[^/]+"),
                    ("POST", r"plaid/test"), ("POST", r"plaid/test-webhook"), ("POST", r"sync"), ("GET", r"api/firefly/status"), ("POST", r"api/firefly/(test|sync|retry)"), ("GET", r"api/firefly/accounts"),
                    ("PUT", r"api/firefly/accounts/[^/]+"), ("PUT", r"api/shares/[^/]+"), ("POST", r"api/firefly/accounts/[^/]+/rebalance"),
-                   ("POST", r"api/plaid/items/[^/]+/pull"), ("GET", r"api/plaid/log"), ("POST", r"api/firefly/accounts/[^/]+/release")]
+                   ("POST", r"api/plaid/items/[^/]+/pull"), ("GET", r"api/plaid/log"), ("POST", r"api/firefly/accounts/[^/]+/release"), ("POST", r"api/firefly/accounts/[^/]+/to-liability")]
 
     def scrub(path: str, data):
         if path == "sync" and isinstance(data, dict):                 # counts per bank only: the answer also holds Robinhood values

@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from plaidproxy import crypto, ledger, recur, settings
 from plaidproxy.plaid import Plaid, PlaidError, PlaidLimit
 
+MUTATION_RESTARTS = 3          # how often one pull starts again when the bank's data changes while its pages are coming in (Plaid's advice for that error)
+
 KIND = {"depository": "cash", "credit": "credit", "investment": "investment", "loan": "loan", "brokerage": "investment"}
 CYCLE = {"WEEKLY": (1, "week"), "BIWEEKLY": (2, "week"), "SEMI_MONTHLY": (1, "month"), "MONTHLY": (1, "month"), "ANNUALLY": (1, "year")}
 
@@ -95,14 +97,24 @@ def sync_item(db, plaid: Plaid, item_id: str, force: bool = False) -> dict:
 
     got_accounts = False
 
-    cursor, more = row["cursor"], True
+    start = row["cursor"]
+    cursor, more, restarts = start, True, 0
     while more:
-        r = plaid.sync(token, cursor)
+        try:
+            r = plaid.sync(token, cursor)
+        except PlaidError as e:
+            # the bank's data changed while the pages were coming in: Plaid says start this pull again from where it began. What the earlier
+            # pages wrote is kept (the same rows come again and are updated in place, never added twice); the cursor was not saved yet.
+            if "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION" in str(e) and restarts < MUTATION_RESTARTS:
+                restarts += 1
+                cursor, more = start, True
+                continue
+            raise
         if r.get("accounts"):                                 # Plaid returns the accounts and their balances with every sync, so a separate accounts call is not needed
             upsert_accounts(db, item_id, inst, r["accounts"], record=False)          # the accounts must exist before their transactions; the balance is set again below
             got_accounts = r["accounts"]
         for t in r.get("added", []) + r.get("modified", []):
-            amt = -float(t["amount"])        # Plaid: positive = outflow. We store positive = inflow.
+            amt = round(-float(t["amount"]), 2)        # Plaid: positive = outflow. We store positive = inflow. In whole cents, as Firefly III keeps it (Plaid's sandbox sends -52.34218)
             is_new = db.one("SELECT 1 FROM transactions WHERE id=?", (t["transaction_id"],)) is None
             pfc = t.get("personal_finance_category") or {}
             pcat = pfc.get("detailed") or pfc.get("primary") or ""

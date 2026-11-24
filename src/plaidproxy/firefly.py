@@ -76,8 +76,14 @@ class Firefly:
                 return
             page += 1
 
-    def set_opening(self, ff_id: int, amount: float, on: str) -> None:
-        self.call("PUT", f"/accounts/{ff_id}", {"opening_balance": f"{amount:.2f}", "opening_balance_date": on})
+    def set_opening(self, ff_id: int, amount: float, on: str, direction: str | None = None) -> None:
+        """A liability's opening is only accepted with its direction (Firefly III 6.7.9 fails with "Undefined array key liability_direction" without it)."""
+        self.call("PUT", f"/accounts/{ff_id}", {"opening_balance": f"{amount:.2f}", "opening_balance_date": on, **({"liability_direction": direction} if direction else {})})
+
+    def update_account(self, ff_id: int, fields: dict) -> None:
+        if not fields:
+            raise FireflyError("nothing to change")
+        self.call("PUT", f"/accounts/{ff_id}", fields)
 
     def create_account(self, payload: dict) -> int:
         return int(self.call("POST", "/accounts", payload)["data"]["id"])
@@ -157,12 +163,12 @@ def set_mapping(db, account_id: str, mode: str, ff_id: int | None = None, confir
         if mode == "pending":
             c.execute("UPDATE ff_accounts SET mode='pending' WHERE account_id=?", (account_id,))
         elif mode == "link":
-            c.execute("UPDATE ff_accounts SET mode='link', ff_id=?, created=0, adopted=0 WHERE account_id=?", (int(ff_id), account_id))
+            c.execute("UPDATE ff_accounts SET mode='link', ff_id=?, created=0, adopted=0, ff_type=NULL WHERE account_id=?", (int(ff_id), account_id))
         elif mode == "create":
             if cur.get("created") and cur.get("ff_id"):                  # already created by us: keep using it
                 c.execute("UPDATE ff_accounts SET mode='create' WHERE account_id=?", (account_id,))
             else:
-                c.execute("UPDATE ff_accounts SET mode='create', ff_id=NULL, created=0 WHERE account_id=?", (account_id,))
+                c.execute("UPDATE ff_accounts SET mode='create', ff_id=NULL, created=0, ff_type=NULL WHERE account_id=?", (account_id,))
         else:
             c.execute("UPDATE ff_accounts SET mode='skip' WHERE account_id=?", (account_id,))
 
@@ -193,6 +199,16 @@ def _role(a: dict) -> dict:
     return {"account_role": "defaultAsset"}
 
 
+def is_liability(a: dict) -> bool:
+    """A bank loan (auto, student, mortgage, personal) goes to Firefly III as a liability you owe, not as an asset account."""
+    return a.get("kind") == "loan"
+
+
+def ff_type_of(x: dict) -> str:
+    """A Firefly III account's attributes -> 'liability' or 'asset'."""
+    return "liability" if str(x.get("type") or "").startswith("liabilit") else "asset"
+
+
 def _signed(a: dict) -> float:
     """What the account's balance is, as an asset: what is owed on a card or a loan is a negative balance."""
     return -(a["balance"] or 0.0) if a["kind"] in ("credit", "loan") else (a["balance"] or 0.0)
@@ -201,7 +217,7 @@ def _signed(a: dict) -> float:
 def opening_for(db, a: dict, include_pending: bool) -> tuple[float, str]:
     """Opening balance so that Firefly III's balance equals the bank's current one once the pushed transactions are in."""
     rows = db.all("SELECT date, amount FROM transactions WHERE account_id=?" + ("" if include_pending else " AND pending=0"), (a["id"],))
-    net = sum(r["amount"] for r in rows)
+    net = sum(round(r["amount"], 2) for r in rows)                  # each one as Firefly III gets it: whole cents
     first = min((r["date"] for r in rows), default=date.today().isoformat())
     return round(_signed(a) - net, 2), (date.fromisoformat(first) - timedelta(days=1)).isoformat()
 
@@ -209,21 +225,33 @@ def opening_for(db, a: dict, include_pending: bool) -> tuple[float, str]:
 def ensure_account(db, ff: Firefly, a: dict, m: dict, c: dict) -> int:
     if m.get("ff_id"):
         return m["ff_id"]
-    name = account_label(a)
+    ff_id = create_for(db, ff, a, c, account_label(a))
+    with db.tx() as c2:
+        c2.execute("UPDATE ff_accounts SET ff_id=?, created=1, adopted=1, ff_type=? WHERE account_id=?", (ff_id, "liability" if is_liability(a) else "asset", a["id"]))
+    return ff_id
+
+
+def create_for(db, ff: Firefly, a: dict, c: dict, name: str) -> int:
+    """Make the Firefly III account for one bank account: an asset account, or for a loan a liability you owe ("debit": "I owe this debt to
+    somebody else"). Its opening balance is set so Firefly III's balance equals the bank's once the transactions are in; a debt's balance is
+    negative in Firefly III, as here."""
     opening, odate = opening_for(db, a, c["include_pending"])
-    payload = {"name": name, "type": "asset", "currency_code": a.get("currency") or "USD", "opening_balance": f"{opening:.2f}", "opening_balance_date": odate,
-               "notes": f"Created by Plaid Firefly Connector from a linked bank account ({a['institution']}).", "include_net_worth": True, **_role(a)}
+    common = {"name": name, "currency_code": a.get("currency") or "USD", "opening_balance": f"{opening:.2f}", "opening_balance_date": odate,
+              "notes": f"Created by Plaid Firefly Connector from a linked bank account ({a['institution']}).", "include_net_worth": True}
+    if is_liability(a):
+        if opening > 0:          # the history says the debt was below zero before it starts (an overpaid loan, or figures that do not add up):
+            common["opening_balance"] = "0.00"           # a debt you owe cannot start there, and Firefly III would flip the sign. 0, and the balance shows as different
+        payload = {**common, "type": "liability", "liability_type": "mortgage" if "mortgage" in (a.get("subtype") or "").lower() else "loan",
+                   "liability_direction": "debit", "interest": "0", "interest_period": "monthly"}
+    else:
+        payload = {**common, "type": "asset", **_role(a)}
     try:
-        ff_id = ff.create_account(payload)
+        return ff.create_account(payload)
     except FireflyError as e:
         if e.status == 422 and "name" in json.dumps(e.body).lower():          # the name is taken: add the account's own id to make it unique
             payload["name"] = f"{name} [{a['id'][-4:]}]"
-            ff_id = ff.create_account(payload)
-        else:
-            raise
-    with db.tx() as c2:
-        c2.execute("UPDATE ff_accounts SET ff_id=?, created=1, adopted=1 WHERE account_id=?", (ff_id, a["id"]))
-    return ff_id
+            return ff.create_account(payload)
+        raise
 
 
 def _norm(s) -> str:
@@ -239,7 +267,10 @@ def _ff_split(ff_id: int, t: dict) -> tuple[str, float, str] | None:
         return None
     if not math.isfinite(amt):
         return None
-    out = str(t.get("source_id")) == str(ff_id) if t.get("type") == "transfer" else t.get("type") == "withdrawal"
+    if t.get("source_id") is not None or t.get("destination_id") is not None:        # which side this account is on: a payment into a loan is a withdrawal elsewhere, money in here
+        out = str(t.get("source_id")) == str(ff_id)
+    else:
+        out = t.get("type") == "withdrawal"
     return str(t.get("date") or "")[:10], -amt if out else amt, str(t.get("description") or "")
 
 
@@ -310,8 +341,64 @@ def rebalance(db, ff: Firefly, account_id: str) -> dict:
         return {"changed": False, "difference": 0.0}
     opening = float(cur.get("opening_balance") or 0) + diff
     on = (cur.get("opening_balance_date") or date.today().isoformat())[:10]
-    ff.set_opening(m["ff_id"], opening, on)
+    liab = ff_type_of(cur) == "liability"
+    if liab and (cur.get("liability_direction") or "debit") != "debit":
+        raise FireflyError("that Firefly III liability is set as \"I am owed this debt\"; a bank loan is a debt you owe (\"I owe this debt\"): change it in Firefly III first")
+    if liab and opening > 0:
+        raise FireflyError("the bank says less is owed than the transactions in Firefly III add up to; check that loan's transactions in Firefly III")
+    ff.set_opening(m["ff_id"], opening, on, (cur.get("liability_direction") or "debit") if liab else None)
     return {"changed": True, "difference": diff}
+
+
+def to_liability(db, ff: Firefly, account_id: str) -> dict:
+    """A bank loan that was sent to an ASSET account (before loans went as liabilities): make the Firefly III liability and move it there.
+
+    1. the old account is renamed "... (old asset)" so the new one can have its name, and the liability is made (opening from the bank's balance);
+    2. every transaction THIS connector put in the old account (its tag) is deleted, both halves of a transfer included, and forgotten here, so
+       the next push sends them again: to the liability, and a payment from checking as a withdrawal into it;
+    3. the old account is switched off (not deleted): anything you entered there yourself stays where it is.
+    Safe to run again if it stops half way: it carries on from where it was."""
+    a = db.one("SELECT * FROM accounts WHERE id=?", (account_id,))
+    m = db.one("SELECT * FROM ff_accounts WHERE account_id=?", (account_id,))
+    if not a or not m or not m.get("ff_id") or m["mode"] not in ("create", "link"):
+        raise KeyError(account_id)
+    if not is_liability(a):
+        raise ValueError("only a bank loan becomes a liability")
+    c = conf(db)
+    st = _state(db)
+    old = int(st.get(f"old_ff:{account_id}") or 0)
+    cur = ff.account(m["ff_id"])
+    if ff_type_of(cur) == "liability" and not old:
+        raise ValueError("it already goes to a Firefly III liability")
+    out = {"deleted": 0, "kept": 0}
+    if not old:                                                  # step 1, once
+        old = m["ff_id"]
+        _state_set(db, f"old_ff:{account_id}", str(old))
+        name = cur.get("name") or account_label(a)
+        ff.update_account(old, {"name": (name + " (old asset)")[:255]})
+        new = create_for(db, ff, a, c, account_label(a))
+        with db.tx() as c2:
+            c2.execute("UPDATE ff_accounts SET ff_id=?, ff_type='liability', created=1, adopted=1, ff_seen=0, held=0, release=0 WHERE account_id=?", (new, account_id))
+        out["liability"] = new
+    gone = set()
+    for gid, _ext, t in list(ff.account_transactions(old)):      # step 2: only what this connector made (its tag); what you entered stays
+        if gid in gone or t.get("type") == "opening balance":       # Firefly III's own opening entry goes with the account, it is nobody's
+            continue
+        if t.get("internal_reference") == MARK or MARK in (t.get("tags") or []):
+            ff.delete_tx(gid)
+            gone.add(gid)
+            with db.tx() as c2:
+                c2.execute("DELETE FROM ff_tx WHERE ff_id=?", (gid,))
+            out["deleted"] += 1
+        else:
+            out["kept"] += 1
+    with db.tx() as c2:                                           # this loan's own rows are sent again to the liability
+        c2.execute("DELETE FROM ff_tx WHERE tx_id IN (SELECT id FROM transactions WHERE account_id=?)", (account_id,))
+    ff.update_account(old, {"active": False})                     # step 3
+    with db.tx() as c2:
+        c2.execute("DELETE FROM ff_state WHERE key=?", (f"old_ff:{account_id}",))
+    out["old_account"] = old
+    return out
 
 
 # ---------------------------------------------------------------- transactions
@@ -411,6 +498,16 @@ def push(db, ff: Firefly, limit: int | None = None) -> dict:
                 res["errors"] += 1
                 res["error_samples"].append(f"account {account_label(accts[aid])}: {str(e)[:150]}")
     maps = {r["account_id"]: r for r in db.all("SELECT * FROM ff_accounts WHERE mode IN ('create','link') AND ff_id IS NOT NULL")}
+    for aid, m in maps.items():                                  # an account linked to one already in Firefly III: is it an asset or a liability (looked up once)
+        if not m.get("ff_type"):
+            try:
+                m["ff_type"] = ff_type_of(ff.account(m["ff_id"]))
+            except FireflyError as e:
+                if e.status in (401, 403):
+                    raise
+                continue
+            with db.tx() as c2:
+                c2.execute("UPDATE ff_accounts SET ff_type=? WHERE account_id=?", (m["ff_type"], aid))
     for aid, m in maps.items():
         known_rows = db.one("SELECT COUNT(*) n FROM ff_tx f JOIN transactions t ON t.id=f.tx_id WHERE t.account_id=?", (aid,))["n"]
         has_tx = db.one("SELECT COUNT(*) n FROM transactions WHERE account_id=?", (aid,))["n"]
@@ -434,16 +531,21 @@ def push(db, ff: Firefly, limit: int | None = None) -> dict:
             with db.tx() as c2:
                 c2.execute("INSERT INTO ff_tx(tx_id,ff_id,sig,state) VALUES(?,?,NULL,'paired') ON CONFLICT(tx_id) DO NOTHING", (i_id, known[o_id]["ff_id"]))
             known[i_id] = {"tx_id": i_id, "ff_id": known[o_id]["ff_id"], "state": "paired", "sig": None, "attempts": 0}
-    pairs = _pairs([r for r in rows if r["id"] not in known])
-    paired_in = set(pairs.values())
     byid = {r["id"]: r for r in rows}
+    liab = {aid for aid, m in maps.items() if m.get("ff_type") == "liability"}
+    pairs = {o: i for o, i in _pairs([r for r in rows if r["id"] not in known]).items()
+             if not (byid[o]["account_id"] in liab and byid[i]["account_id"] in liab)}        # Firefly III has nothing for money from one debt to another: each half goes alone
+    paired_in = set(pairs.values())
     # the data-safety hold: per account, how many would be created against how many are already there
     holding = set()
     for aid, m in maps.items():
         new = sum(1 for r in rows if r["account_id"] == aid and r["id"] not in known and r["id"] not in paired_in)
         m = db.one("SELECT * FROM ff_accounts WHERE account_id=?", (aid,)) or m          # adoption above has just counted what Firefly III holds
         have = max(m.get("ff_seen") or 0, db.one("SELECT COUNT(*) n FROM ff_tx f JOIN transactions t ON t.id=f.tx_id WHERE t.account_id=? AND f.state IN ('ok','paired')", (aid,))["n"])
-        big = aid not in created_now and have >= HOLD_MIN_EXISTING and new >= max(HOLD_MIN_NEW, have * HOLD_SHARE)
+        # an account this connector made itself, empty when it looked (ff_seen 0), only ever holds what it sent: nothing there to send twice.
+        # (A big first history goes over several rounds; without this the second round looked like a relink and was held.)
+        ours = bool(m.get("created")) and not (m.get("ff_seen") or 0)
+        big = aid not in created_now and not ours and have >= HOLD_MIN_EXISTING and new >= max(HOLD_MIN_NEW, have * HOLD_SHARE)
         with db.tx() as c2:
             if big and not m.get("release"):
                 holding.add(aid)
@@ -486,7 +588,10 @@ def push(db, ff: Firefly, limit: int | None = None) -> dict:
             if t["id"] in pairs and pairs[t["id"]] in byid:         # outflow of a transfer between two of your accounts: one transfer
                 i = byid[pairs[t["id"]]]
                 leg = payload_for(t, maps[t["account_id"]]["ff_id"], c, cur)["transactions"][0]
-                leg.update({"type": "transfer", "source_id": maps[t["account_id"]]["ff_id"], "destination_id": maps[i["account_id"]]["ff_id"]})
+                # Firefly III refuses a transfer that touches a liability: a payment into a loan is a withdrawal from the bank account into it,
+                # money lent out of a loan into a bank account a deposit from it (both move both balances, as a transfer would)
+                kind = "withdrawal" if i["account_id"] in liab else "deposit" if t["account_id"] in liab else "transfer"
+                leg.update({"type": kind, "source_id": maps[t["account_id"]]["ff_id"], "destination_id": maps[i["account_id"]]["ff_id"]})
                 leg.pop("destination_name", None); leg.pop("source_name", None)
                 p = {"error_if_duplicate_hash": True, "apply_rules": c["apply_rules"], "fire_webhooks": True, "group_title": None, "transactions": [leg]}
             else:
