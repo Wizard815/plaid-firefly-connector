@@ -236,3 +236,21 @@ def test_the_admin_floor_stops_banks_being_asked_more_often_than_it_allows(monke
     ids = [x["item_id"] for x in c.get("/api/plaid/items", headers=H).json()]
     c.put(f"/api/plaid/items/{ids[0]}", headers=H, json={"schedule": "15m"})
     assert c.get("/api/plaid/items", headers=H).json()[0]["interval_minutes"] == 2880
+
+
+def test_the_worker_takes_the_firefly_sending_options_from_the_gateway(tmp_path, monkeypatch):
+    monkeypatch.setenv("GATEWAY_URL", "http://gateway")
+    holder = {}
+
+    def to_gateway(req: httpx.Request):
+        r = holder["gw"].request(req.method, req.url.raw_path.decode(), content=req.content, headers=dict(req.headers))
+        return httpx.Response(r.status_code, content=r.content, headers={"content-type": r.headers["content-type"]})
+    t, n = plaid()
+    g = worker.create_app(db=DB(":memory:"), plaid_transport=t, transport=httpx.MockTransport(to_gateway))
+    gw, gtc = gateway_with_policy(tmp_path, monkeypatch, g)
+    holder["gw"] = gw
+    A = {"Authorization": "Bearer adm"}
+    assert gw.put("/admin/people/alice/firefly-options", headers=A, json={"apply_rules": False, "include_pending": True, "send_categories": True}).status_code == 200
+    s = gtc.get("/api/settings", headers=H).json()
+    assert (s["firefly_apply_rules"], s["firefly_include_pending"], s["firefly_send_categories"]) == ("off", "on", "on")
+    assert {"firefly_apply_rules", "firefly_include_pending", "firefly_send_categories"} <= set(s["managed"])

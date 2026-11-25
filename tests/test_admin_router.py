@@ -477,7 +477,36 @@ def test_the_send_plaids_categories_switch_is_set_per_person(tmp_path, monkeypat
     assert gw.put("/admin/people/nobody/firefly-options", headers=A, json={"send_categories": True}).status_code == 404
     assert gw.put("/admin/people/alice/firefly-options", headers=A, json={"send_categories": "yes"}).status_code == 422
     assert gw.put("/admin/people/alice/firefly-options", headers=A, json={"firefly_token": "x"}).status_code == 422     # nothing else goes through here
-    assert gw.put("/admin/people/alice/firefly-options", headers=A, json={"send_categories": True}).json() == {"ok": True, "send_categories": True}
+    assert gw.put("/admin/people/alice/firefly-options", headers=A, json={"send_categories": True}).json() == {"ok": True, "send_categories": True, "include_pending": False, "apply_rules": True}
+    r = gw.put("/admin/people/alice/firefly-options", headers=A, json={"include_pending": True, "apply_rules": False}).json()
+    assert r == {"ok": True, "send_categories": True, "include_pending": True, "apply_rules": False}
+    p = gw.get("/admin/policy", headers=A).json()["people"]["alice"]
+    assert (p["firefly_include_pending"], p["firefly_apply_rules"]) == ("on", "off")
     assert gw.get("/admin/policy", headers=A).json()["people"]["alice"]["firefly_send_categories"] == "on"
     assert gw.put("/admin/people/alice/firefly-options", headers=A, json={"send_categories": False}).json()["send_categories"] is False
     assert gw.get("/admin/policy", headers=A).json()["people"]["alice"]["firefly_send_categories"] == "off"
+
+
+def test_sending_options_edge_cases(tmp_path, monkeypatch):
+    gw, *_ = world(tmp_path, monkeypatch)
+    opt = lambda body: gw.put("/admin/people/alice/firefly-options", headers=A, json=body)          # noqa: E731
+    pol = lambda: gw.get("/admin/policy", headers=A).json()["people"].get("alice", {})              # noqa: E731
+    assert opt({}).status_code == 422                                                                  # nothing to set
+    assert opt({"apply_rules": None}).status_code == 422 and opt({"apply_rules": 1}).status_code == 422
+    assert opt({"include_pending": True, "bogus": True}).status_code == 422 and "firefly_include_pending" not in pol()   # all or nothing
+    assert opt({"apply_rules": False}).json()["apply_rules"] is False                                  # works before any Firefly III address is set
+    gw.put("/admin/people/alice/firefly", headers=A, json={"url": "https://ff.example.com", "token": "eyJ" + "a" * 60})
+    gw.put("/admin/people/alice/firefly", headers=A, json={"url": "", "token": ""})                   # disconnected...
+    assert pol() == {"firefly_apply_rules": "off"}                                                     # ...the options stay, the address and token go
+    assert opt({"apply_rules": True}).json()["apply_rules"] is True and pol()["firefly_apply_rules"] == "on"
+
+
+def test_removing_a_person_drops_their_firefly_token_and_options(tmp_path, monkeypatch):
+    gw, *_ = world(tmp_path, monkeypatch)
+    assert gw.post("/admin/people", headers=A, json={"name": "bob"}).status_code == 200
+    gw.put("/admin/people/bob/firefly", headers=A, json={"url": "https://ff.example.com", "token": "eyJ" + "b" * 60})
+    gw.put("/admin/people/bob/firefly-options", headers=A, json={"include_pending": True})
+    assert "bob" in gw.get("/admin/policy", headers=A).json()["people"]
+    assert gw.delete("/admin/people/bob", headers=A).status_code == 200
+    assert "bob" not in gw.get("/admin/policy", headers=A).json()["people"]
+    assert "eyJ" + "b" * 60 not in (tmp_path / "s.json").read_text()

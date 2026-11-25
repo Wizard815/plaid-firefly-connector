@@ -274,3 +274,41 @@ def test_plaids_categories_go_only_with_new_transactions_and_never_rewrite_firef
     c.post("/api/firefly/sync", headers=H)
     assert cat("t7") == "Gas" and cat("t8") is None                              # new ones carry a real category; a bare Misc stays blank
     assert cat("t5") is None and cat("t6") is None                               # Income on money Plaid did not call income is not a category
+
+
+def test_a_pending_charge_is_sent_when_asked_and_replaced_when_it_posts():
+    c, db, ff = rig()
+    bank(db)
+    approve(c)
+    exts = lambda: sorted(t["external_id"] for g in ff.groups.values() for t in g["transactions"])   # noqa: E731
+    c.post("/api/firefly/sync", headers=H)
+    assert "t3" not in exts()                                                    # off: the pending coffee waits
+    c.put("/api/settings", headers=H, json={"firefly_include_pending": "on", "firefly_apply_rules": "off"})
+    c.post("/api/firefly/sync", headers=H)
+    assert "t3" in exts()
+    assert next(g for g in ff.groups.values() if g["transactions"][0]["external_id"] == "t3")["apply_rules"] is False
+    with db.tx() as cur:                                                         # it posts: Plaid removes the pending one and adds the posted one (sync.py)
+        cur.execute("UPDATE ff_tx SET state='deleted' WHERE tx_id='t3' AND ff_id IS NOT NULL")
+        cur.execute("DELETE FROM transactions WHERE id='t3'")
+        cur.execute("INSERT INTO transactions(id,account_id,date,name,amount,category,pending,source) VALUES('t3p','plaid-chk',?,?,-5.25,'Food',0,'plaid')", (d(1), "PENDING COFFEE"))
+    c.post("/api/firefly/sync", headers=H)
+    assert "t3" not in exts() and "t3p" in exts()                                # one coffee in Firefly III, at the posted amount (tip included)
+
+
+def test_switching_pending_off_leaves_one_already_sent_until_it_posts():
+    c, db, ff = rig()
+    bank(db)
+    approve(c)
+    c.put("/api/settings", headers=H, json={"firefly_include_pending": "on"})
+    c.post("/api/firefly/sync", headers=H)
+    exts = lambda: sorted(t["external_id"] for g in ff.groups.values() for t in g["transactions"])   # noqa: E731
+    assert "t3" in exts()
+    c.put("/api/settings", headers=H, json={"firefly_include_pending": "off"})
+    r = c.post("/api/firefly/sync", headers=H).json()
+    assert r["errors"] == 0 and "t3" in exts()                                   # not deleted just because the switch went off
+    with db.tx() as cur:
+        cur.execute("UPDATE ff_tx SET state='deleted' WHERE tx_id='t3' AND ff_id IS NOT NULL")
+        cur.execute("DELETE FROM transactions WHERE id='t3'")
+        cur.execute("INSERT INTO transactions(id,account_id,date,name,amount,category,pending,source) VALUES('t3p','plaid-chk',?,?,-4.5,'Food',0,'plaid')", (d(1), "PENDING COFFEE"))
+    c.post("/api/firefly/sync", headers=H)
+    assert "t3" not in exts() and exts().count("t3p") == 1                       # it posts: replaced, never twice

@@ -11,7 +11,9 @@ td{padding:9px 10px;border-bottom:1px solid var(--line)}td.n,th.n{text-align:rig
 .pill{display:inline-block;border-radius:999px;padding:1px 10px;font-size:.78rem;font-weight:600}.up{background:var(--teal-soft);color:var(--teal)}.down{background:var(--red-soft);color:var(--red)}
 input,button{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 12px}button{cursor:pointer}button.primary{background:var(--teal);border-color:var(--teal);color:#fff}
 .status{position:sticky;top:0;z-index:2;background:var(--panel);padding:8px 0;min-height:1.6em;border-bottom:1px solid var(--line);margin:8px 0}.ok{color:var(--teal)}.when{white-space:nowrap;color:var(--muted)}
-.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.err{color:var(--red)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.opts{display:grid;gap:10px;margin:10px 0;padding:10px 12px;border:1px solid var(--line);border-radius:10px;max-width:760px}.opts legend{font-size:.8rem;color:var(--muted);padding:0 4px}
+.opt{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start;cursor:pointer}.opt input{margin:2px 0 0;padding:0;width:18px;height:18px;accent-color:var(--teal);cursor:pointer}.opt b{display:block;font-weight:600}.err{color:var(--red)}
 </style>
 <main>
   <h1>Plaid Firefly Connector admin</h1>
@@ -212,9 +214,16 @@ async function renderPerson() {
   const fu = el("input", { type: "url", placeholder: "https://firefly.example.com", value: ((pol0.people || {})[who] || {}).firefly_url || "", style: "min-width:240px" });
   const ft = el("input", { type: "password", placeholder: (pol0.firefly_token_set || {})[who] ? "token saved, leave blank to keep" : "Personal Access Token", autocomplete: "new-password", style: "min-width:240px" });
   const fsave = el("button", { type: "button" }, "Save Firefly III connection");
-  const scat = el("input", { type: "checkbox" }); scat.checked = ((pol0.people || {})[who] || {}).firefly_send_categories === "on";
-  scat.addEventListener("change", () => run(() => call(`/admin/people/${encodeURIComponent(who)}/firefly-options`, "PUT", { send_categories: scat.checked }),
-    scat.checked ? "Plaid's categories go with new transactions from now on (within a few minutes)." : "New transactions go without a category from now on."));
+  const myPol = (pol0.people || {})[who] || {};
+  const optBox = (key, on, said) => { const x = el("input", { type: "checkbox" }); x.checked = on;
+    x.addEventListener("change", () => { const want = x.checked; x.disabled = true;
+      run(async () => { try { return await call(`/admin/people/${encodeURIComponent(who)}/firefly-options`, "PUT", { [key]: want }); }
+        catch (e) { x.checked = !want; throw e; } finally { x.disabled = false; } },                 // not saved: the box shows what is really set
+        said[want ? 0 : 1] + " It reaches the person's container within a few minutes."); }); return x; };
+  const scat = optBox("send_categories", myPol.firefly_send_categories === "on", ["Plaid's categories go with new transactions from now on.", "New transactions go without a category from now on."]);
+  const spend = optBox("include_pending", myPol.firefly_include_pending === "on", ["Pending charges are sent from now on.", "Only posted transactions are sent from now on; pending ones already sent go when they post."]);
+  const srule = optBox("apply_rules", myPol.firefly_apply_rules !== "off", ["Firefly III runs its rules on new transactions.", "New transactions arrive without Firefly III's rules running."]);
+  const optRow = (box, title, text) => el("label", { class: "opt small" }, box, el("span", {}, el("b", {}, title), el("span", { class: "muted" }, text)));
   fsave.addEventListener("click", () => run(() => call(`/admin/people/${encodeURIComponent(who)}/firefly`, "PUT", { url: fu.value.trim(), token: ft.value.trim() }), "Saved. It reaches the person's container within a few minutes; then press Test the connection."));
   const ffbtn = (label, path, ok, primary) => { const b = el("button", primary ? { class: "primary", type: "button" } : { type: "button" }, label); b.addEventListener("click", () => run(() => P(path, "POST", {}), ok)); return b; };
   box.replaceChildren(el("div", { class: "row", style: "justify-content:space-between" }, el("h2", { style: "margin:0;font-size:1.1rem" }, "Managing " + who), (() => { const x = el("button", { type: "button" }, "Close"); x.addEventListener("click", () => { who = null; renderPerson(); }); return x; })()),
@@ -230,9 +239,10 @@ async function renderPerson() {
     el("h3", { style: "margin:14px 0 4px;font-size:1rem" }, "Firefly III"),
     el("p", { class: "small muted" }, `Where ${who}'s approved bank accounts go. In Firefly III: Options, Profile, OAuth, Personal Access Tokens, create one (valid up to a year). The token is kept encrypted and never shown again.`),
     el("div", { class: "row" }, fu, ft, fsave),
-    el("label", { class: "row small", style: "gap:6px;align-items:flex-start" }, scat, el("span", {}, el("b", {}, "Send Plaid's categories"),
-      " with each new transaction (Groceries, Gas, Food, Travel...). Only when Plaid's guess is a real category; the rest arrive blank for Firefly III's rules or Coinpile. ",
-      "Firefly III's rules run afterwards and win. Transactions already in Firefly III are never changed, on or off.")),
+    el("fieldset", { class: "opts" }, el("legend", {}, "How new transactions are sent (saved as you tick)"),
+      optRow(srule, "Apply Firefly III's rules", "Your rules run on each new transaction as it arrives. Off: rules run only when you start them in Firefly III."),
+      optRow(scat, "Send Plaid's categories", "Groceries, Gas, Food, Travel... when Plaid is sure; the rest arrive blank. Your rules still win, and nothing already in Firefly III is changed."),
+      optRow(spend, "Include pending", "Charges that have not posted yet. When one posts, the pending copy is replaced by the posted one (a tip can change the amount).")),
     el("p", { class: "small muted" }, (ff.awaiting_approval ? `${ff.awaiting_approval} bank account(s) await your approval below; nothing is sent for them. ` : "") + (ff.configured ? `Connected to ${ff.host}. ${ff.sent} transactions sent, ${ff.waiting} waiting, ${ff.failed} failed. Last good push: ${ff.last_ok ? ff.last_ok.slice(0, 16).replace("T", " ") : "never"}.${ff.last_error ? " Last problem: " + ff.last_error : ""}` : "Not connected. Enter the address and token above and save.")),
     el("div", { class: "row" }, ffbtn("Test the connection", "api/firefly/test", (r) => "Connected to Firefly III " + r.version), ffbtn("Send now", "api/firefly/sync", (r) => `Sent ${r.created || 0} new, ${r.updated || 0} changed, ${r.deleted || 0} removed.`, true), ffbtn("Retry failed", "api/firefly/retry", "Retried.")),
     fmap, note);

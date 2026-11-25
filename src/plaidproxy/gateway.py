@@ -491,14 +491,15 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
 
     @app.put("/admin/people/{name}/firefly-options")
     async def admin_person_firefly_options(request: Request, name: str):
-        """One person's Firefly III sending options: send_categories (Plaid's category with each NEW transaction). Each is on or off."""
+        """One person's Firefly III sending options, each true or false: send_categories (Plaid's category with each NEW transaction),
+        include_pending (send charges that have not posted yet), apply_rules (Firefly III runs its rules on each new transaction; on by default)."""
         admin(request)
         if name not in workers:
             raise HTTPException(404, "no such person")
         b = await obj(request)
-        known = {"send_categories": "firefly_send_categories"}
+        known = {"send_categories": "firefly_send_categories", "include_pending": "firefly_include_pending", "apply_rules": "firefly_apply_rules"}
         if not b or any(k not in known or not isinstance(v, bool) for k, v in b.items()):
-            raise HTTPException(422, "send send_categories: true or false")
+            raise HTTPException(422, "send any of send_categories, include_pending, apply_rules: true or false")
         old = dict(policy["people"])
         entry = dict(policy["people"].get(name, {}))
         entry.update({known[k]: "on" if v else "off" for k, v in b.items()})
@@ -508,7 +509,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
         except HTTPException:
             policy["people"] = old
             raise
-        return {"ok": True, **{k: entry.get(v) == "on" for k, v in known.items()}}
+        return {"ok": True, **{k: (entry.get(v) != "off" if k == "apply_rules" else entry.get(v) == "on") for k, v in known.items()}}
 
     @app.put("/admin/people/{name}/firefly")
     async def admin_person_firefly(request: Request, name: str):
@@ -763,6 +764,7 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             raise HTTPException(404, "only people added on this page can be removed here")
         del workers[name], added[name]
         removed.add(name)                          # never handed to someone new: what was shared with the old one must not reach them
+        policy["people"].pop(name, None)           # their Firefly III address, token and sending options go with them
         save_state()
         return {"removed": name}
 

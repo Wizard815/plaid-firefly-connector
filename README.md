@@ -28,7 +28,14 @@ this debt". A loan that was sent to an asset account by an older version shows *
 page: it renames that account "(old asset)" and switches it off (nothing you typed in yourself is deleted), makes the liability, and
 sends that loan's transactions again. Back up Firefly III before you press it.
 
-**Send Plaid's categories** (admin page, a person's Firefly III section; off by default): each new transaction goes to Firefly III with
+**How new transactions are sent** (admin page, a person's Firefly III section; saved as you tick, reaches their container within a
+few minutes, and stays if the Firefly III connection is changed or removed):
+
+- **Apply Firefly III's rules** (on by default): your rules run on each new transaction as it arrives. Never on an update from the bank.
+- **Include pending** (off by default): charges that have not posted yet are sent too. When one posts, Plaid replaces it: the pending
+  copy is removed from Firefly III and the posted one sent, once (a tip can change the amount). Switching it off later removes nothing;
+  a pending one already sent goes when it posts.
+- **Send Plaid's categories** (off by default): each new transaction goes to Firefly III with
 Plaid's category (Groceries, Gas, Food, Travel...). Only a real one: Plaid's "nothing better" (Misc, or Income on money Plaid did not call
 income) arrives blank, so Firefly III's rules or Coinpile's Categorize tab can place it. Firefly III's rules run after and win. It is sent
 once, when the transaction is made: later changes from the bank never send a category, and switching it on or off never rewrites
