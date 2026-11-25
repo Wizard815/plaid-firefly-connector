@@ -212,6 +212,9 @@ async function renderPerson() {
   const fu = el("input", { type: "url", placeholder: "https://firefly.example.com", value: ((pol0.people || {})[who] || {}).firefly_url || "", style: "min-width:240px" });
   const ft = el("input", { type: "password", placeholder: (pol0.firefly_token_set || {})[who] ? "token saved, leave blank to keep" : "Personal Access Token", autocomplete: "new-password", style: "min-width:240px" });
   const fsave = el("button", { type: "button" }, "Save Firefly III connection");
+  const scat = el("input", { type: "checkbox" }); scat.checked = ((pol0.people || {})[who] || {}).firefly_send_categories === "on";
+  scat.addEventListener("change", () => run(() => call(`/admin/people/${encodeURIComponent(who)}/firefly-options`, "PUT", { send_categories: scat.checked }),
+    scat.checked ? "Plaid's categories go with new transactions from now on (within a few minutes)." : "New transactions go without a category from now on."));
   fsave.addEventListener("click", () => run(() => call(`/admin/people/${encodeURIComponent(who)}/firefly`, "PUT", { url: fu.value.trim(), token: ft.value.trim() }), "Saved. It reaches the person's container within a few minutes; then press Test the connection."));
   const ffbtn = (label, path, ok, primary) => { const b = el("button", primary ? { class: "primary", type: "button" } : { type: "button" }, label); b.addEventListener("click", () => run(() => P(path, "POST", {}), ok)); return b; };
   box.replaceChildren(el("div", { class: "row", style: "justify-content:space-between" }, el("h2", { style: "margin:0;font-size:1.1rem" }, "Managing " + who), (() => { const x = el("button", { type: "button" }, "Close"); x.addEventListener("click", () => { who = null; renderPerson(); }); return x; })()),
@@ -227,6 +230,9 @@ async function renderPerson() {
     el("h3", { style: "margin:14px 0 4px;font-size:1rem" }, "Firefly III"),
     el("p", { class: "small muted" }, `Where ${who}'s approved bank accounts go. In Firefly III: Options, Profile, OAuth, Personal Access Tokens, create one (valid up to a year). The token is kept encrypted and never shown again.`),
     el("div", { class: "row" }, fu, ft, fsave),
+    el("label", { class: "row small", style: "gap:6px;align-items:flex-start" }, scat, el("span", {}, el("b", {}, "Send Plaid's categories"),
+      " with each new transaction (Groceries, Gas, Food, Travel...). Only when Plaid's guess is a real category; the rest arrive blank for Firefly III's rules or Coinpile. ",
+      "Firefly III's rules run afterwards and win. Transactions already in Firefly III are never changed, on or off.")),
     el("p", { class: "small muted" }, (ff.awaiting_approval ? `${ff.awaiting_approval} bank account(s) await your approval below; nothing is sent for them. ` : "") + (ff.configured ? `Connected to ${ff.host}. ${ff.sent} transactions sent, ${ff.waiting} waiting, ${ff.failed} failed. Last good push: ${ff.last_ok ? ff.last_ok.slice(0, 16).replace("T", " ") : "never"}.${ff.last_error ? " Last problem: " + ff.last_error : ""}` : "Not connected. Enter the address and token above and save.")),
     el("div", { class: "row" }, ffbtn("Test the connection", "api/firefly/test", (r) => "Connected to Firefly III " + r.version), ffbtn("Send now", "api/firefly/sync", (r) => `Sent ${r.created || 0} new, ${r.updated || 0} changed, ${r.deleted || 0} removed.`, true), ffbtn("Retry failed", "api/firefly/retry", "Retried.")),
     fmap, note);

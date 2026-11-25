@@ -402,8 +402,21 @@ def to_liability(db, ff: Firefly, account_id: str) -> dict:
 
 
 # ---------------------------------------------------------------- transactions
-def _sig(t: dict, send_cat: bool) -> str:
-    return hashlib.sha256(json.dumps([t["date"], round(t["amount"], 2), t["name"], t["category"] if send_cat else "", t["account_id"], t["pending"]]).encode()).hexdigest()[:16]
+def _sig(t: dict, send_cat: bool = False) -> str:
+    # The category is never part of it: it is sent once, with a new transaction, and from then on it is Firefly III's (yours, its rules,
+    # Coinpile's). So switching "send Plaid's categories" on or off never rewrites what is already in Firefly III.
+    return hashlib.sha256(json.dumps([t["date"], round(t["amount"], 2), t["name"], "", t["account_id"], t["pending"]]).encode()).hexdigest()[:16]
+
+
+def category_to_send(t: dict) -> str | None:
+    """Plaid's category for a new transaction, only when it says something: the bare fallbacks (Misc, or Income on money Plaid did not call
+    income) are left blank, so Firefly III's rules and Coinpile still see the transaction as uncategorized."""
+    cat = (t.get("category") or "").strip()
+    if not cat or cat == "Misc":
+        return None
+    if cat == "Income" and not str(t.get("plaid_category") or "").startswith("INCOME"):
+        return None
+    return cat[:255]
 
 
 def payload_for(t: dict, ff_account: int, c: dict, currency: str) -> dict:
@@ -415,8 +428,8 @@ def payload_for(t: dict, ff_account: int, c: dict, currency: str) -> dict:
         leg.update({"source_id": ff_account, "destination_name": (t["name"] or "Unknown")[:255]})
     else:
         leg.update({"source_name": (t["name"] or "Unknown")[:255], "destination_id": ff_account})
-    if c["send_categories"] and t.get("category"):
-        leg["category_name"] = t["category"]
+    if c["send_categories"] and category_to_send(t):
+        leg["category_name"] = category_to_send(t)
     return {"error_if_duplicate_hash": True, "apply_rules": c["apply_rules"], "fire_webhooks": True, "group_title": None, "transactions": [leg]}
 
 
@@ -578,7 +591,7 @@ def push(db, ff: Firefly, limit: int | None = None) -> dict:
             if k and k["state"] == "ok" and k["sig"] == sig:
                 continue
             if k and k["state"] == "ok" and k["ff_id"]:             # changed at the bank: update the Firefly III copy
-                p = payload_for(t, maps[t["account_id"]]["ff_id"], c, cur)
+                p = payload_for(t, maps[t["account_id"]]["ff_id"], {**c, "send_categories": False}, cur)      # a category set in Firefly III is never overwritten
                 ff.update_tx(k["ff_id"], {"apply_rules": False, "fire_webhooks": True, "transactions": p["transactions"]})
                 with db.tx() as c2:
                     c2.execute("UPDATE ff_tx SET sig=?, pushed=? WHERE tx_id=?", (sig, date.today().isoformat(), t["id"]))

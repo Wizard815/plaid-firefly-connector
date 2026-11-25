@@ -248,3 +248,29 @@ def test_a_long_history_goes_across_in_one_run_in_batches(monkeypatch):
     assert r["remaining"] == 0 and r["created"] == 10 and r["errors"] == 0 and len(ff.groups) == 10
     low = c.post("/api/firefly/sync", headers=H).json()
     assert low["created"] == 0
+
+
+def test_plaids_categories_go_only_with_new_transactions_and_never_rewrite_firefly():
+    c, db, ff = rig()
+    bank(db)
+    db.conn.execute("INSERT INTO transactions(id,account_id,date,name,amount,category,pending,source) VALUES('t5','plaid-chk',?,?,-9.99,'Misc',0,'plaid')", (d(5), "ODD SHOP"))
+    db.conn.execute("INSERT INTO transactions(id,account_id,date,name,amount,category,pending,source,plaid_category) VALUES('t6','plaid-chk',?,?,25,'Income',0,'plaid','TRANSFER_IN_DEPOSIT')", (d(4), "VENMO FROM SAM"))
+    db.conn.commit()
+    approve(c)
+    c.post("/api/firefly/sync", headers=H)                                    # switch off: no categories
+    cat = lambda ext: next(t.get("category_name") for g in ff.groups.values() for t in g["transactions"] if t["external_id"] == ext)   # noqa: E731
+    assert cat("t2") is None
+    gid = next(g for g, v in ff.groups.items() if v["transactions"][0]["external_id"] == "t2")
+    ff.groups[gid]["transactions"][0]["category_name"] = "Food shopping"        # the person (or Coinpile) set it in Firefly III
+    c.put("/api/settings", headers=H, json={"firefly_send_categories": "on"})
+    r = c.post("/api/firefly/sync", headers=H).json()
+    assert r["updated"] == 0 and cat("t2") == "Food shopping"                    # switching on rewrote nothing already there
+    db.conn.execute("UPDATE transactions SET name='KROGER #66 OHIO' WHERE id='t2'"); db.conn.commit()     # the bank changes it later
+    c.post("/api/firefly/sync", headers=H)
+    assert cat("t2") == "Food shopping"                                          # an update never sends a category
+    db.conn.execute("INSERT INTO transactions(id,account_id,date,name,amount,category,pending,source,plaid_category) VALUES('t7','plaid-chk',?,?,-40,'Gas',0,'plaid','TRANSPORTATION_GAS')", (d(1), "SHELL 554"))
+    db.conn.execute("INSERT INTO transactions(id,account_id,date,name,amount,category,pending,source) VALUES('t8','plaid-chk',?,?,-3,'Misc',0,'plaid')", (d(1), "NEW ODD SHOP"))
+    db.conn.commit()
+    c.post("/api/firefly/sync", headers=H)
+    assert cat("t7") == "Gas" and cat("t8") is None                              # new ones carry a real category; a bare Misc stays blank
+    assert cat("t5") is None and cat("t6") is None                               # Income on money Plaid did not call income is not a category

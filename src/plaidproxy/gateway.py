@@ -489,6 +489,27 @@ def create_app(config: dict | None = None, transport: httpx.BaseTransport | None
             raise
         return redacted()
 
+    @app.put("/admin/people/{name}/firefly-options")
+    async def admin_person_firefly_options(request: Request, name: str):
+        """One person's Firefly III sending options: send_categories (Plaid's category with each NEW transaction). Each is on or off."""
+        admin(request)
+        if name not in workers:
+            raise HTTPException(404, "no such person")
+        b = await obj(request)
+        known = {"send_categories": "firefly_send_categories"}
+        if not b or any(k not in known or not isinstance(v, bool) for k, v in b.items()):
+            raise HTTPException(422, "send send_categories: true or false")
+        old = dict(policy["people"])
+        entry = dict(policy["people"].get(name, {}))
+        entry.update({known[k]: "on" if v else "off" for k, v in b.items()})
+        policy["people"][name] = entry
+        try:
+            save_state()
+        except HTTPException:
+            policy["people"] = old
+            raise
+        return {"ok": True, **{k: entry.get(v) == "on" for k, v in known.items()}}
+
     @app.put("/admin/people/{name}/firefly")
     async def admin_person_firefly(request: Request, name: str):
         """Attach one person's Plaid connections to their Firefly III: its address and a Personal Access Token. Only this person's entry changes; a blank token keeps the saved one."""

@@ -28,6 +28,12 @@ this debt". A loan that was sent to an asset account by an older version shows *
 page: it renames that account "(old asset)" and switches it off (nothing you typed in yourself is deleted), makes the liability, and
 sends that loan's transactions again. Back up Firefly III before you press it.
 
+**Send Plaid's categories** (admin page, a person's Firefly III section; off by default): each new transaction goes to Firefly III with
+Plaid's category (Groceries, Gas, Food, Travel...). Only a real one: Plaid's "nothing better" (Misc, or Income on money Plaid did not call
+income) arrives blank, so Firefly III's rules or Coinpile's Categorize tab can place it. Firefly III's rules run after and win. It is sent
+once, when the transaction is made: later changes from the bank never send a category, and switching it on or off never rewrites
+transactions already in Firefly III, so categories you (or Coinpile) set there stay.
+
 ## Joint accounts
 
 People share a bank account between themselves; the admin is not needed. The person who linked the account **asks**, the other

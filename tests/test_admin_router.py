@@ -469,3 +469,15 @@ def test_a_loan_goes_to_firefly_as_money_owed():
     from plaidproxy import firefly
     assert firefly._signed({"kind": "loan", "balance": 12000.0}) == -12000.0
     assert firefly._signed({"kind": "credit", "balance": 300.0}) == -300.0 and firefly._signed({"kind": "cash", "balance": 50.0}) == 50.0
+
+
+def test_the_send_plaids_categories_switch_is_set_per_person(tmp_path, monkeypatch):
+    gw, *_ = world(tmp_path, monkeypatch)
+    assert gw.put("/admin/people/alice/firefly-options", json={"send_categories": True}).status_code == 401
+    assert gw.put("/admin/people/nobody/firefly-options", headers=A, json={"send_categories": True}).status_code == 404
+    assert gw.put("/admin/people/alice/firefly-options", headers=A, json={"send_categories": "yes"}).status_code == 422
+    assert gw.put("/admin/people/alice/firefly-options", headers=A, json={"firefly_token": "x"}).status_code == 422     # nothing else goes through here
+    assert gw.put("/admin/people/alice/firefly-options", headers=A, json={"send_categories": True}).json() == {"ok": True, "send_categories": True}
+    assert gw.get("/admin/policy", headers=A).json()["people"]["alice"]["firefly_send_categories"] == "on"
+    assert gw.put("/admin/people/alice/firefly-options", headers=A, json={"send_categories": False}).json()["send_categories"] is False
+    assert gw.get("/admin/policy", headers=A).json()["people"]["alice"]["firefly_send_categories"] == "off"
