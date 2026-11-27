@@ -371,6 +371,30 @@ already in Firefly III (so nothing old looks new), the IDs of calendar events (`
 `goblins`/`goblin` keys in `/api/v1/summary` (Pondering Orb reads them), and Pondering Orb's own `GOBLIN_ORB_KEY` setting. Your Docker
 network name (`network:` in the yaml) is also kept, since Firefly III may be on it.
 
+## Moving from Wallos
+
+Wallos subscriptions can become Firefly III bills (Firefly's Subscriptions page), so Firefly and Coinpile see them and Wallos can go.
+Wallos is only read. Without `--apply` nothing is written.
+
+```bash
+export WALLOS_API_KEY=...   # Wallos: Settings -> API key
+export FIREFLY_TOKEN=...    # Firefly III: Options -> Profile -> OAuth -> Personal Access Tokens
+python3 scripts/migrate_from_wallos.py --wallos http://<server>:8109 --firefly http://<server>:8182           # what would be added
+python3 scripts/migrate_from_wallos.py --wallos http://<server>:8109 --firefly http://<server>:8182 --apply   # add them
+```
+
+- Each bill gets the next payment date, the repeat (weekly, monthly, quarterly, half-year, yearly, with "every N"), the price
+  give or take 5% (`--slack`), the payment method and Wallos category in its notes, and the group `Subscriptions`.
+- A bill whose name Firefly already has is left alone, so running it twice adds nothing twice.
+- Every amount gets one currency (`--currency`, default USD).
+- Inactive subscriptions stay behind unless you pass `--include-inactive`.
+
+**What goes wrong:**
+- "Wallos refused": the API key is wrong. "Firefly III refused the token": make a new Personal Access Token.
+- "repeats every N days": Firefly can only repeat by weeks, months or years. Add that one by hand.
+
+Then check Firefly III -> Subscriptions, and stop and remove the Wallos container. Keep its database folder until you're sure.
+
 ## Run without the install script
 ```bash
 cp people.example.yaml people.yaml && python3 scripts/gen_compose.py     # needs python3 with pyyaml + cryptography
