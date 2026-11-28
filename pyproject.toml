@@ -2,6 +2,8 @@
 name = "plaidproxy"
 version = "0.1.0"
 description = "plaid-firefly-connector: CoinGateway + per-person Worker containers + read-only connectors"
+license = "LicenseRef-PolyForm-Shield-1.0.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = ["fastapi>=0.110", "httpx>=0.27", "uvicorn>=0.29", "pyyaml>=6", "cryptography>=42"]
 

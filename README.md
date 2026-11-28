@@ -1,5 +1,7 @@
 # plaid-firefly-connector
 
+[![License: PolyForm Shield 1.0.0](https://img.shields.io/badge/license-PolyForm%20Shield%201.0.0-blue)](LICENSE)
+
 plaid-firefly-connector holds your Plaid bank connections and forwards the accounts and
 transactions you approve into Firefly III. Firefly III is where you look at
 your money; plaid-firefly-connector only has an **admin page** (`/admin`). The old
@@ -416,3 +418,12 @@ The synthetic server follows Plaid's documented response shapes. It proves our s
 * CalDAV *reading* (event -> money amount) and investments holdings via Plaid.
 
 `python3 -m pytest` runs the tests.
+
+## License
+
+plaid-firefly-connector is source-available under the
+[PolyForm Shield License 1.0.0](LICENSE). You can read, run, change and share
+it for free, including at work. You can't sell it or offer it as a competing
+product or hosted service without permission: open an issue titled
+"License request" to ask. [docs/LICENSING.md](docs/LICENSING.md) explains it
+in plain English. Versions published before the switch stay under MIT.
